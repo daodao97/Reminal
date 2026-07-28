@@ -166,6 +166,7 @@ func (s *Server) handleSessionConn(sessionID string, role protocol.Role, conn *w
 			protocol.TypeWindowFrame, protocol.TypeWindowInput,
 			protocol.TypeWindowAck,
 			protocol.TypeAppList, protocol.TypeAppOpen,
+			protocol.TypeHostInfo,
 			protocol.TypeWebRTCHello, protocol.TypeWebRTCOffer,
 			protocol.TypeWebRTCAnswer, protocol.TypeWebRTCICE:
 			s.forward(sessionID, role, msg)

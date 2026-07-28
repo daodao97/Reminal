@@ -143,6 +143,13 @@ const (
 	// launch (or foreground) that app so its window shows up in the window list.
 	TypeAppOpen MessageType = "app_open"
 
+	// TypeHostInfo is bidirectional. Viewer→agent: an empty-Data request ("tell
+	// me about the machine you're on"). Agent→viewer: the reply, Data =
+	// encrypted JSON of internal/client HostInfo (hostname, OS, arch, CPU model
+	// + cores, total/used memory, uptime, load average). Rides E2E-encrypted in
+	// Data like the window messages; the relay forwards it opaquely.
+	TypeHostInfo MessageType = "host_info"
+
 	// ---- WebRTC signaling (peer-to-peer frame transport) ----
 	// Window frames are high-volume; when a viewer and agent can open a
 	// WebRTC DataChannel, frames (and their acks) flow directly peer-to-peer

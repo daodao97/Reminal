@@ -1,0 +1,78 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 Harshal Gajjar
+
+package client
+
+import (
+	"encoding/json"
+	"os"
+	"runtime"
+
+	"github.com/gorilla/websocket"
+
+	"github.com/reminal/reminal/internal/protocol"
+)
+
+// handleHostInfo replies to a viewer's TypeHostInfo request with the machine's
+// current stats, E2E-encrypted (same envelope as the window/app messages).
+func (a *Agent) handleHostInfo(conn *websocket.Conn) {
+	if a.box == nil {
+		return
+	}
+	raw, err := json.Marshal(gatherHostInfo())
+	if err != nil {
+		return
+	}
+	enc, err := a.box.Encrypt(raw)
+	if err != nil {
+		return
+	}
+	_ = a.writeMsg(conn, protocol.Message{Type: protocol.TypeHostInfo, Data: enc})
+}
+
+// HostInfo is a small snapshot of the machine the agent runs on, sent to
+// viewers (TypeHostInfo) so the web UI can show the computer's name and a few
+// basic stats. All the size/time fields are best-effort: a platform that can't
+// read one leaves it zero and the viewer just omits it.
+type HostInfo struct {
+	Hostname string  `json:"hostname"`
+	OS       string  `json:"os"`   // friendly: "macOS", "Linux", "Windows"
+	Arch     string  `json:"arch"` // arm64, amd64, …
+	CPUModel string  `json:"cpu_model,omitempty"`
+	CPUs     int     `json:"cpus"`
+	MemTotal uint64  `json:"mem_total,omitempty"` // bytes
+	MemUsed  uint64  `json:"mem_used,omitempty"`  // bytes
+	Uptime   int64   `json:"uptime,omitempty"`    // seconds since boot
+	Load1    float64 `json:"load1,omitempty"`
+	Load5    float64 `json:"load5,omitempty"`
+	Load15   float64 `json:"load15,omitempty"`
+}
+
+// gatherHostInfo collects the cross-platform basics, then lets the per-OS hook
+// fill in memory / uptime / load / CPU model. Never errors — missing fields are
+// simply left zero.
+func gatherHostInfo() HostInfo {
+	h := HostInfo{
+		OS:   friendlyOS(runtime.GOOS),
+		Arch: runtime.GOARCH,
+		CPUs: runtime.NumCPU(),
+	}
+	if name, err := os.Hostname(); err == nil {
+		h.Hostname = name
+	}
+	fillHostInfo(&h) // platform-specific (hostinfo_darwin.go / _linux.go / _other.go)
+	return h
+}
+
+func friendlyOS(goos string) string {
+	switch goos {
+	case "darwin":
+		return "macOS"
+	case "linux":
+		return "Linux"
+	case "windows":
+		return "Windows"
+	default:
+		return goos
+	}
+}

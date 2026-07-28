@@ -438,11 +438,27 @@
       user-select: none;
     }
     /* Icon over the small label in the header dropdown buttons. */
-    #recents > summary svg, #windows > summary svg, #apps > summary svg { width: 16px; height: 16px; opacity: 0.95; flex: none; }
-    #recents > summary .caret, #windows > summary .caret, #apps > summary .caret { display: none; }
+    #recents > summary svg, #windows > summary svg, #apps > summary svg, #host > summary svg { width: 16px; height: 16px; opacity: 0.95; flex: none; }
+    #recents > summary .caret, #windows > summary .caret, #apps > summary .caret, #host > summary .caret { display: none; }
     #recents > summary::-webkit-details-marker { display: none; }
     #recents > summary:hover { background: #21262d; }
     #recents[open] > summary { background: #21262d; }
+
+    /* Host-stats panel: a compact system-monitor block inside the dropdown. */
+    #host .recents-list { min-width: 250px; }
+    .host-wrap { padding: 8px 10px; }
+    .host-name { font-size: 13px; font-weight: 600; color: #e6edf3; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .host-sub { font-size: 10.5px; color: #8b949e; margin: 1px 0 8px; line-height: 1.35; }
+    /* Slim meter: tight label/value line + a 3px coloured animated bar. */
+    .host-m { margin-bottom: 7px; }
+    .host-m .top { display: flex; justify-content: space-between; align-items: baseline; font-size: 11px; margin-bottom: 2px; }
+    .host-m .top .l { color: #8b949e; }
+    .host-m .top .r { color: #e6edf3; font-variant-numeric: tabular-nums; }
+    .host-m .top .r b { font-weight: 600; }
+    .host-m .top .r .dim { color: #8b949e; }
+    .host-m .bar { height: 3px; border-radius: 2px; background: #21262d; overflow: hidden; }
+    .host-m .bar > span { display: block; height: 100%; border-radius: 2px; transition: width .4s ease, background-color .4s ease; }
+    .host-foot { margin-top: 8px; font-size: 10.5px; color: #8b949e; font-variant-numeric: tabular-nums; }
     .recents-list {
       position: absolute;
       top: 100%;
@@ -472,6 +488,15 @@
         max-width: none;
         max-height: 70vh;
         overflow-y: auto;
+      }
+      /* The Host panel is a small fixed-size widget, not a list — keep it
+         compact and right-anchored instead of stretching full-width (which
+         made the meter bars span the whole tablet). */
+      #host .recents-list {
+        left: auto;
+        right: max(8px, env(safe-area-inset-right));
+        width: 270px;
+        max-width: calc(100vw - 16px);
       }
     }
     .recents-empty { padding: 12px; color: #8b949e; font-size: 13px; text-align: center; }
@@ -508,9 +533,9 @@
     /* Windows dropdown reuses the recents panel/row styles; only its summary
        and visibility differ. Hidden until a session is live (nothing to list
        without an agent), then shown next to Recent. */
-    #windows, #apps { position: relative; display: none; }
-    body.connected #windows, body.connected #apps { display: inline-block; }
-    #windows > summary, #apps > summary {
+    #windows, #apps, #host { position: relative; display: none; }
+    body.connected #windows, body.connected #apps, body.connected #host { display: inline-block; }
+    #windows > summary, #apps > summary, #host > summary {
       list-style: none;
       cursor: pointer;
       display: inline-flex; flex-direction: column; align-items: center; justify-content: center;
@@ -522,9 +547,9 @@
       font-size: 9.5px; font-weight: 600; letter-spacing: 0.02em;
       user-select: none;
     }
-    #windows > summary::-webkit-details-marker, #apps > summary::-webkit-details-marker { display: none; }
-    #windows > summary:hover, #apps > summary:hover { background: #21262d; }
-    #windows[open] > summary, #apps[open] > summary { background: #21262d; }
+    #windows > summary::-webkit-details-marker, #apps > summary::-webkit-details-marker, #host > summary::-webkit-details-marker { display: none; }
+    #windows > summary:hover, #apps > summary:hover, #host > summary:hover { background: #21262d; }
+    #windows[open] > summary, #apps[open] > summary, #host[open] > summary { background: #21262d; }
 
     /* Header sits above the floating window panes (which live at z 31–49) but
        below the full-screen modals (#preview/#share at z 100). position:relative
@@ -674,6 +699,10 @@
       <details id="apps" title="Launch an app on the host">
         <summary><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4.5 16.5c-1.5 1.26-2 5-2 5s3.74-.5 5-2c.71-.84.7-2.13-.09-2.91a2.18 2.18 0 0 0-2.91-.09z"/><path d="m12 15-3-3a22 22 0 0 1 2-3.95A12.88 12.88 0 0 1 22 2c0 2.72-.78 7.5-6 11a22.35 22.35 0 0 1-4 2z"/><path d="M9 12H4s.55-3.03 2-4c1.62-1.08 5 0 5 0"/><path d="M12 15v5s3.03-.55 4-2c1.08-1.62 0-5 0-5"/></svg>Apps<span class="caret">▾</span></summary>
         <div class="recents-list" id="apps-list"></div>
+      </details>
+      <details id="host" title="Info about the host computer">
+        <summary><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="4" width="20" height="13" rx="1.5"/><path d="M8 21h8M12 17v4"/></svg>Host<span class="caret">▾</span></summary>
+        <div class="recents-list" id="host-list"><div class="recents-empty">Connect to a session to see host stats.</div></div>
       </details>
       <input id="session-input" placeholder="Session" maxlength="8" autocomplete="off" spellcheck="false">
       <input id="pin-input" placeholder="PIN" maxlength="8" inputmode="numeric" autocomplete="off" spellcheck="false">
@@ -856,6 +885,76 @@
       saveHistory(loadHistory().filter(e => e.id !== id));
       renderRecents();
     }
+    // Stash the computer name against this session in Recent so the dropdown
+    // can show "MacBook-Pro" next to the id even before you reconnect.
+    function rememberHost(id, host) {
+      if (!id || !host) return;
+      const list = loadHistory();
+      const e = list.find(x => x.id === id);
+      if (e && e.host !== host) { e.host = host; saveHistory(list); renderRecents(); }
+    }
+
+    // ---- Host stats (computer name + basics) ----
+    let lastHostInfo = null;
+    function fmtBytes(n) {
+      if (!n) return '—';
+      const u = ['B', 'KB', 'MB', 'GB', 'TB'];
+      let i = 0; let v = n;
+      while (v >= 1024 && i < u.length - 1) { v /= 1024; i++; }
+      return (v >= 10 || i === 0 ? Math.round(v) : v.toFixed(1)) + ' ' + u[i];
+    }
+    function fmtUptime(s) {
+      if (!s) return '—';
+      const d = Math.floor(s / 86400), h = Math.floor((s % 86400) / 3600), m = Math.floor((s % 3600) / 60);
+      if (d) return d + 'd ' + h + 'h';
+      if (h) return h + 'h ' + m + 'm';
+      return m + 'm';
+    }
+    function onHostInfo(info) {
+      lastHostInfo = info;
+      if (info.hostname) rememberHost(sessionId, info.hostname);
+      renderHost();
+    }
+    // Health colour for a 0..100 usage: green → amber → red.
+    function meterColor(p) {
+      if (p >= 85) return '#f85149';
+      if (p >= 65) return '#d29922';
+      return '#3fb950';
+    }
+    function hostMeter(label, valueHTML, pct) {
+      const p = Math.max(0, Math.min(100, Math.round(pct)));
+      return '<div class="host-m">'
+        + '<div class="top"><span class="l">' + label + '</span><span class="r">' + valueHTML + '</span></div>'
+        + '<div class="bar"><span style="width:' + p + '%;background-color:' + meterColor(p) + '"></span></div>'
+        + '</div>';
+    }
+    function renderHost() {
+      const root = document.getElementById('host-list');
+      if (!root) return;
+      const i = lastHostInfo;
+      if (!i) { root.innerHTML = '<div class="recents-empty">Connect to a session to see host stats.</div>'; return; }
+      const name = (i.hostname || 'this computer').replace(/\.local$/, '');
+      const sub = [i.os, i.arch, i.cpu_model, i.cpus ? i.cpus + ' cores' : ''].filter(Boolean).join(' · ');
+      let html = '<div class="host-wrap">'
+        + '<div class="host-name">' + name + '</div>'
+        + '<div class="host-sub">' + sub + '</div>';
+      if (i.mem_total) {
+        const p = i.mem_used ? i.mem_used / i.mem_total * 100 : 0;
+        html += hostMeter('Memory',
+          '<b>' + fmtBytes(i.mem_used) + '</b> / ' + fmtBytes(i.mem_total) + ' <span class="dim">· ' + Math.round(p) + '%</span>', p);
+      }
+      if (i.load1 !== undefined && i.cpus) {
+        const p = i.load1 / i.cpus * 100;
+        html += hostMeter('CPU',
+          '<b>' + i.load1.toFixed(2) + '</b> <span class="dim">· ' + Math.min(100, Math.round(p)) + '%</span>', p);
+      }
+      const foot = [];
+      if (i.load5 !== undefined) foot.push('load ' + i.load1.toFixed(2) + ' ' + i.load5.toFixed(2) + ' ' + i.load15.toFixed(2));
+      if (i.uptime) foot.push('up ' + fmtUptime(i.uptime));
+      if (foot.length) html += '<div class="host-foot">' + foot.join('  ·  ') + '</div>';
+      html += '</div>';
+      root.innerHTML = html;
+    }
     function fmtAgo(ts) {
       const s = Math.floor((Date.now() - ts) / 1000);
       if (s < 60) return s + 's ago';
@@ -884,7 +983,7 @@
         nameEl.textContent = e.name || '(unnamed session)';
         const metaEl = document.createElement('div');
         metaEl.className = 'meta';
-        metaEl.textContent = e.id + ' · ' + fmtAgo(e.lastSeen);
+        metaEl.textContent = (e.host ? e.host + ' · ' : '') + e.id + ' · ' + fmtAgo(e.lastSeen);
         label.appendChild(nameEl);
         label.appendChild(metaEl);
         const renameBtn = document.createElement('button');
@@ -1786,6 +1885,9 @@
       // restore any panes this session had open (Recent → reopens its windows).
       pendingRestore = true;
       if (typeof sendWin === 'function') sendWin('window_list');
+      // Ask the host about itself (name + basic stats) for the Host dropdown
+      // and to label this session in Recent with its computer name.
+      if (typeof sendWin === 'function') sendWin('host_info');
       // Offer the agent a peer-to-peer channel for window frames (no-op if one
       // is already negotiating/up). Frames fall back to WS until it connects.
       ensureWebRTC();
@@ -2238,6 +2340,15 @@
             const bytes = await decrypt(cryptoKey, msg.data);
             const payload = JSON.parse(new TextDecoder().decode(bytes));
             onAppList(payload);
+          } catch (_) {}
+          break;
+        }
+        case 'host_info': {
+          if (!cryptoKey) break;
+          try {
+            const bytes = await decrypt(cryptoKey, msg.data);
+            const payload = JSON.parse(new TextDecoder().decode(bytes));
+            onHostInfo(payload);
           } catch (_) {}
           break;
         }
@@ -3844,6 +3955,23 @@
       const apps = document.getElementById('apps');
       if (apps && apps.open && !apps.contains(e.target)) {
         apps.open = false;
+      }
+      const host = document.getElementById('host');
+      if (host && host.open && !host.contains(e.target)) {
+        host.open = false;
+      }
+    });
+    // While the Host dropdown is open, poll the stats live (mem/load/uptime
+    // drift). Fetch immediately on open, then every few seconds; stop on close.
+    let hostPollTimer = null;
+    const HOST_POLL_MS = 3000;
+    document.getElementById('host').addEventListener('toggle', (e) => {
+      if (hostPollTimer) { clearInterval(hostPollTimer); hostPollTimer = null; }
+      if (e.target.open) {
+        if (typeof sendWin === 'function') sendWin('host_info');
+        hostPollTimer = setInterval(() => {
+          if (document.getElementById('host').open && typeof sendWin === 'function') sendWin('host_info');
+        }, HOST_POLL_MS);
       }
     });
 
