@@ -905,15 +905,15 @@
       if (h) return h + 'h ' + m + 'm';
       return m + 'm';
     }
-    // hostInfoPending tracks whether we're still waiting for the host's first
-    // reply since the panel opened. It lets renderHost tell "loading" apart
-    // from "this host's reminal is too old to answer" (see the toggle handler).
-    let hostInfoPending = false;
-    let hostInfoWaitTimer = null;
+    // hostWaitSince is the wall-clock time we first started waiting for a reply
+    // (0 = not waiting / already have data). renderHost decides "loading" vs
+    // "this host is too old to answer" from ELAPSED time, not a one-shot timer —
+    // so a throttled/dropped setTimeout (mobile background heuristics) can never
+    // strand the panel on "Loading" forever; the poll re-render always catches up.
+    let hostWaitSince = 0;
+    const HOST_WAIT_MS = 4000;
     function onHostInfo(info) {
       lastHostInfo = info;
-      hostInfoPending = false;
-      if (hostInfoWaitTimer) { clearTimeout(hostInfoWaitTimer); hostInfoWaitTimer = null; }
       if (info.hostname) rememberHost(sessionId, info.hostname);
       renderHost();
     }
@@ -940,7 +940,7 @@
         // to report stats" rather than telling the user to connect.
         let msg;
         if (!document.body.classList.contains('connected')) msg = 'Connect to a session to see host stats.';
-        else if (hostInfoPending) msg = 'Loading host stats…';
+        else if (hostWaitSince && (Date.now() - hostWaitSince) < HOST_WAIT_MS) msg = 'Loading host stats…';
         else msg = 'This host is on an older reminal — update it (v1.9.1+) to show stats.';
         root.innerHTML = '<div class="recents-empty">' + msg + '</div>';
         return;
@@ -4023,26 +4023,26 @@
         host.open = false;
       }
     });
-    // While the Host dropdown is open, poll the stats live (mem/load/uptime
-    // drift). Fetch immediately on open, then every few seconds; stop on close.
+    // While the Host dropdown is open, poll the stats live and refresh the
+    // panel; stop polling when it closes.
     let hostPollTimer = null;
-    const HOST_POLL_MS = 3000;
     document.getElementById('host').addEventListener('toggle', (e) => {
       if (hostPollTimer) { clearInterval(hostPollTimer); hostPollTimer = null; }
-      if (hostInfoWaitTimer) { clearTimeout(hostInfoWaitTimer); hostInfoWaitTimer = null; }
       if (e.target.open) {
-        // If we've never heard from this host, show "Loading…" and give it a
-        // few seconds; if nothing comes back it's running an older reminal, so
-        // flip to the "update the host" message instead of spinning forever.
-        if (!lastHostInfo) {
-          hostInfoPending = true;
-          hostInfoWaitTimer = setTimeout(() => { hostInfoPending = false; renderHost(); }, 4000);
-        }
+        // Start the wait clock the first time we open with no data yet.
+        if (!lastHostInfo && !hostWaitSince) hostWaitSince = Date.now();
         renderHost();
         if (typeof sendWin === 'function') sendWin('host_info');
+        // Poll: re-request the stats AND re-render, so the Loading → "update
+        // the host" transition happens off elapsed time even if a timer stalls.
         hostPollTimer = setInterval(() => {
-          if (document.getElementById('host').open && typeof sendWin === 'function') sendWin('host_info');
-        }, HOST_POLL_MS);
+          if (!document.getElementById('host').open) return;
+          if (typeof sendWin === 'function') sendWin('host_info');
+          if (!lastHostInfo) renderHost();
+        }, 1500);
+        // Prompt one-shot so the message flips right at the threshold (the poll
+        // is the backstop if this ever gets throttled away).
+        setTimeout(() => { if (document.getElementById('host').open && !lastHostInfo) renderHost(); }, HOST_WAIT_MS + 50);
       }
     });
 
