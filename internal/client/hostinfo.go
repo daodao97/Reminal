@@ -30,6 +30,44 @@ func (a *Agent) handleHostInfo(conn *websocket.Conn) {
 	_ = a.writeMsg(conn, protocol.Message{Type: protocol.TypeHostInfo, Data: enc})
 }
 
+// handleNewSession spawns a fresh detached headless reminal on this host and
+// replies with its credentials so the viewer can connect. Runs the (blocking)
+// spawn handshake on its own goroutine — see the dispatch in runReader — so it
+// never stalls the shell stream. No privilege escalation: a viewer already has
+// full shell access and could run `reminal new` itself.
+func (a *Agent) handleNewSession(conn *websocket.Conn, data string) {
+	if a.box == nil {
+		return
+	}
+	var req struct {
+		Name string `json:"name"`
+	}
+	if data != "" {
+		if pt, err := a.box.Decrypt(data); err == nil {
+			_ = json.Unmarshal(pt, &req)
+		}
+	}
+	var payload struct {
+		ID    string `json:"id,omitempty"`
+		PIN   string `json:"pin,omitempty"`
+		Error string `json:"error,omitempty"`
+	}
+	if sp, err := Spawn(req.Name); err != nil {
+		payload.Error = err.Error()
+	} else {
+		payload.ID, payload.PIN = sp.ID, sp.PIN
+	}
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		return
+	}
+	enc, err := a.box.Encrypt(raw)
+	if err != nil {
+		return
+	}
+	_ = a.writeMsg(conn, protocol.Message{Type: protocol.TypeNewSession, Data: enc})
+}
+
 // HostInfo is a small snapshot of the machine the agent runs on, sent to
 // viewers (TypeHostInfo) so the web UI can show the computer's name and a few
 // basic stats. All the size/time fields are best-effort: a platform that can't

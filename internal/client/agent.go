@@ -2057,6 +2057,8 @@ func (a *Agent) runReader(conn *websocket.Conn, cursorCh chan uint64) error {
 			a.handleWindowAck(msg.Data)
 		case protocol.TypeHostInfo:
 			a.handleHostInfo(conn)
+		case protocol.TypeNewSession:
+			go a.handleNewSession(conn, msg.Data)
 		case protocol.TypeAppList:
 			a.enqueueWinOp(func() { a.handleAppList(conn) })
 		case protocol.TypeAppOpen:

@@ -150,6 +150,14 @@ const (
 	// Data like the window messages; the relay forwards it opaquely.
 	TypeHostInfo MessageType = "host_info"
 
+	// TypeNewSession is bidirectional. Viewer→agent: a request to spawn a fresh
+	// detached headless reminal on the host (Data = encrypted JSON {"name":"…"},
+	// name optional). Agent→viewer: the reply, Data = encrypted JSON
+	// {"id":"…","pin":"…"} or {"error":"…"} — the viewer then connects to the
+	// new session. No new capability: a viewer with shell access could already
+	// run `reminal new`; this just makes it one tap.
+	TypeNewSession MessageType = "new_session"
+
 	// ---- WebRTC signaling (peer-to-peer frame transport) ----
 	// Window frames are high-volume; when a viewer and agent can open a
 	// WebRTC DataChannel, frames (and their acks) flow directly peer-to-peer

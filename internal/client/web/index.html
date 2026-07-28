@@ -459,6 +459,17 @@
     .host-m .bar { height: 3px; border-radius: 2px; background: #21262d; overflow: hidden; }
     .host-m .bar > span { display: block; height: 100%; border-radius: 2px; transition: width .4s ease, background-color .4s ease; }
     .host-foot { margin-top: 8px; font-size: 10.5px; color: #8b949e; font-variant-numeric: tabular-nums; }
+    /* "+ New session" action button under the host stats. */
+    .host-new {
+      display: block; width: 100%; margin-top: 10px;
+      padding: 8px 10px;
+      background: #21262d; border: 1px solid #30363d; border-radius: 6px;
+      color: #e6edf3; font-size: 12.5px; font-weight: 500; cursor: pointer;
+      text-align: center;
+    }
+    .host-new:hover { background: #2a313a; border-color: #3d444d; }
+    .host-new:active { background: #1f6feb; border-color: #388bfd; }
+    .host-new:disabled { opacity: 0.6; cursor: default; }
     .recents-list {
       position: absolute;
       top: 100%;
@@ -922,6 +933,33 @@
       if (info.hostname) rememberHost(sessionId, info.hostname);
       renderHost();
     }
+
+    // ---- Spawn + connect to a new headless session on the host ----
+    let creatingSession = false;
+    let hostNewError = '';
+    let hostNewTimer = null;
+    // Fill the login inputs with a session's creds and dial it, closing the
+    // current one first when switching. Same path the Recent rows use.
+    function connectToSession(id, pin) {
+      if (!id || !pin) return;
+      sessionInput.value = id;
+      pinInput.value = pin;
+      const rec = document.getElementById('recents'); if (rec) rec.open = false;
+      const h = document.getElementById('host'); if (h) h.open = false;
+      if (sessionId && sessionId !== id) userDisconnect();
+      startConnect();
+    }
+    function onNewSession(p) {
+      creatingSession = false;
+      if (hostNewTimer) { clearTimeout(hostNewTimer); hostNewTimer = null; }
+      if (p && p.error) {
+        hostNewError = 'Couldn’t start';
+        renderHost();
+        setTimeout(() => { hostNewError = ''; renderHost(); }, 4000);
+        return;
+      }
+      if (p && p.id && p.pin) connectToSession(p.id, p.pin);
+    }
     // Health colour for a 0..100 usage: green → amber → red.
     function meterColor(p) {
       if (p >= 85) return '#f85149';
@@ -969,6 +1007,12 @@
       if (i.load5 !== undefined) foot.push('load ' + i.load1.toFixed(2) + ' ' + i.load5.toFixed(2) + ' ' + i.load15.toFixed(2));
       if (i.uptime) foot.push('up ' + fmtUptime(i.uptime));
       if (foot.length) html += '<div class="host-foot">' + foot.join('  ·  ') + '</div>';
+      // Spawn a fresh headless shell on this same host and connect to it. Only
+      // offered once we have host stats (proves the host runs a reminal new
+      // enough to handle the request). Label reflects the in-flight/error state,
+      // which survives the panel's periodic re-render via creatingSession.
+      const label = hostNewError ? hostNewError : (creatingSession ? 'Starting…' : '+ New session on this host');
+      html += '<button class="host-new"' + (creatingSession ? ' disabled' : '') + '>' + label + '</button>';
       html += '</div>';
       root.innerHTML = html;
     }
@@ -2366,6 +2410,15 @@
             const bytes = await decrypt(cryptoKey, msg.data);
             const payload = JSON.parse(new TextDecoder().decode(bytes));
             onHostInfo(payload);
+          } catch (_) {}
+          break;
+        }
+        case 'new_session': {
+          if (!cryptoKey) break;
+          try {
+            const bytes = await decrypt(cryptoKey, msg.data);
+            const payload = JSON.parse(new TextDecoder().decode(bytes));
+            onNewSession(payload);
           } catch (_) {}
           break;
         }
@@ -3999,6 +4052,21 @@
         // is the backstop if this ever gets throttled away).
         setTimeout(() => { if (document.getElementById('host').open && !lastHostInfo) renderHost(); }, HOST_WAIT_MS + 50);
       }
+    });
+    // "+ New session" button lives inside the (re-rendered) host panel, so bind
+    // it by delegation. Asks the host to spawn a headless reminal, then connects.
+    document.getElementById('host-list').addEventListener('click', (e) => {
+      if (!e.target.closest('.host-new')) return;
+      if (creatingSession) return;
+      creatingSession = true; hostNewError = '';
+      renderHost();
+      if (typeof sendWin === 'function') sendWin('new_session', {});
+      hostNewTimer = setTimeout(() => {
+        if (!creatingSession) return;
+        creatingSession = false; hostNewError = 'Timed out';
+        renderHost();
+        setTimeout(() => { hostNewError = ''; renderHost(); }, 3000);
+      }, 15000);
     });
 
     // ---- Window mirroring: list host windows, stream one, control it -------
