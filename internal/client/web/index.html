@@ -135,6 +135,13 @@
        swipe past the top of the scrollback can't escape to the
        page-level URL-bar collapse or pull-to-refresh. */
     .xterm-viewport { overscroll-behavior: contain !important; }
+    /* We own touch selection (long-press + drag grips), so suppress the
+       browser's native text selection + iOS long-press callout on the grid —
+       otherwise both fire at once and fight. xterm renders its own highlight. */
+    .xterm .xterm-screen {
+      -webkit-user-select: none; user-select: none;
+      -webkit-touch-callout: none;
+    }
     #terminal { height: 100%; }
     .xterm { height: 100%; }
     #overlay {
@@ -152,6 +159,68 @@
     }
     #overlay.visible { display: flex; }
     #overlay span { background: #161b22; border: 1px solid #30363d; padding: 8px 16px; border-radius: 6px; }
+
+    /* ---- Mobile text-selection handles + copy bar ----
+       xterm renders the selection highlight itself; these are just the two
+       draggable teardrop grips (like iOS/Android) and a floating Copy bar.
+       Positioned fixed via client coords so they track the cell under them
+       even as the terminal scrolls. Hidden until a long-press starts a
+       selection. touch-action:none so a drag never scrolls the page. */
+    .sel-handle {
+      position: fixed;
+      width: 22px; height: 22px;
+      margin-left: -11px;              /* centre the grip on its column edge */
+      z-index: 60;
+      display: none;
+      touch-action: none;
+      -webkit-tap-highlight-color: transparent;
+    }
+    .sel-handle::after {
+      content: '';
+      position: absolute;
+      left: 4px; top: 4px;
+      width: 14px; height: 14px;
+      background: #58a6ff;
+      border: 1px solid #0d1117;
+      border-radius: 50%;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.5);
+    }
+    .sel-handle.visible { display: block; }
+    /* A thin stem from the grip to the character edge, so the ball sits just
+       above (start) or below (end) the selected text like a native caret. */
+    .sel-handle::before {
+      content: '';
+      position: absolute;
+      left: 10px; width: 2px; height: 8px;
+      background: #58a6ff;
+    }
+    #sel-handle-start::before { top: 14px; }   /* stem points down into the line */
+    #sel-handle-end::before   { top: 0; }      /* stem points up into the line   */
+
+    #sel-toolbar {
+      position: fixed;
+      z-index: 61;
+      display: none;
+      transform: translate(-50%, -100%);
+      background: #161b22;
+      border: 1px solid #30363d;
+      border-radius: 8px;
+      box-shadow: 0 4px 14px rgba(0,0,0,0.5);
+      padding: 4px;
+      gap: 2px;
+    }
+    #sel-toolbar.visible { display: flex; }
+    #sel-toolbar button {
+      background: transparent;
+      border: none;
+      color: #e6edf3;
+      font-size: 14px;
+      padding: 8px 14px;
+      border-radius: 6px;
+      cursor: pointer;
+      white-space: nowrap;
+    }
+    #sel-toolbar button:active { background: #21262d; }
 
     /* Once connected, the session/PIN inputs are dead weight — collapse
        them to reclaim screen real estate (a big deal on phones). The
@@ -648,6 +717,15 @@
       <button id="preview-close">Close</button>
     </div>
   </div>
+  <!-- Mobile text-selection grips + copy bar. Fixed-position, hidden until a
+       long-press on the terminal starts a selection (see initTouchSelection). -->
+  <div class="sel-handle" id="sel-handle-start"></div>
+  <div class="sel-handle" id="sel-handle-end"></div>
+  <div id="sel-toolbar">
+    <button id="sel-copy">Copy</button>
+    <button id="sel-all">Select all</button>
+  </div>
+
   <!-- Host windows open as draggable floating panes appended to <body> at
        runtime (see the pane manager JS). This shared off-screen input captures
        keystrokes for the focused pane and summons the mobile soft keyboard. -->
@@ -3425,8 +3503,306 @@
     document.getElementById('terminal-wrap').addEventListener('click', (e) => {
       // Skip if user clicked on jump-bottom or findbar controls.
       if (e.target.closest('#jump-bottom, #findbar')) return;
+      // Skip the synthetic click that follows a selection gesture (long-press,
+      // handle drag, or tap-to-dismiss) — otherwise dismissing a selection
+      // would pop the keyboard open.
+      if (suppressFocusClick) { suppressFocusClick = false; return; }
       term.focus();
     });
+
+    // ---- Mobile text selection (long-press + draggable handles) ----
+    // xterm's built-in selection is mouse-drag only; on a touchscreen you get
+    // at most a browser word-select with no way to extend across lines. This
+    // adds native-feeling selection: long-press a word to select it and reveal
+    // two teardrop grips, drag either grip to grow the selection (auto-scrolling
+    // through scrollback near the edges), then Copy. We drive xterm's own
+    // selection API so the highlight renders normally and getSelection() (used
+    // by the keybar Copy button) keeps working.
+    let suppressFocusClick = false;
+    (function initTouchSelection() {
+      const hStart = document.getElementById('sel-handle-start');
+      const hEnd = document.getElementById('sel-handle-end');
+      const toolbar = document.getElementById('sel-toolbar');
+      const copyBtn = document.getElementById('sel-copy');
+      const allBtn = document.getElementById('sel-all');
+
+      let active = false;                 // selection mode on
+      let sel = null;                     // ordered {start:{col,row}, end:{col,row}} in ABSOLUTE buffer coords
+
+      const screenEl = () => term.element && term.element.querySelector('.xterm-screen');
+
+      // Cell size in CSS px. Prefer xterm's own measurement; fall back to the
+      // screen element's rect / grid so we never divide by a stale value.
+      function cellDims() {
+        const d = term._core && term._core._renderService && term._core._renderService.dimensions;
+        const c = d && d.css && d.css.cell;
+        if (c && c.width > 0 && c.height > 0) return { w: c.width, h: c.height };
+        const s = screenEl();
+        if (s) {
+          const r = s.getBoundingClientRect();
+          if (r.width > 0) return { w: r.width / term.cols, h: r.height / term.rows };
+        }
+        return { w: 9, h: 17 };
+      }
+
+      // Map a client point to an absolute buffer cell, clamped to the grid.
+      function pointToCell(clientX, clientY) {
+        const s = screenEl();
+        if (!s) return { col: 0, row: term.buffer.active.viewportY };
+        const rect = s.getBoundingClientRect();
+        const { w, h } = cellDims();
+        let col = Math.round((clientX - rect.left) / w);          // round: nearest edge, like a caret
+        let vrow = Math.floor((clientY - rect.top) / h);
+        col = Math.max(0, Math.min(term.cols, col));
+        vrow = Math.max(0, Math.min(term.rows - 1, vrow));
+        return { col, row: term.buffer.active.viewportY + vrow };
+      }
+
+      // Client pixel of a cell's left edge / top, plus its visible viewport row.
+      function cellToPoint(col, row) {
+        const s = screenEl();
+        const rect = s.getBoundingClientRect();
+        const { w, h } = cellDims();
+        const vrow = row - term.buffer.active.viewportY;
+        return { x: rect.left + col * w, y: rect.top + vrow * h, h, vrow };
+      }
+
+      function cellCmp(a, b) { return a.row - b.row || a.col - b.col; }
+
+      // Push sel into xterm so the highlight renders + getSelection() works.
+      function applySelection() {
+        if (!sel) return;
+        if (cellCmp(sel.start, sel.end) > 0) { const t = sel.start; sel.start = sel.end; sel.end = t; }
+        let len = (sel.end.row - sel.start.row) * term.cols + (sel.end.col - sel.start.col);
+        if (len < 1) len = 1;
+        term.select(sel.start.col, sel.start.row, len);
+        layout();
+      }
+
+      // Position the two grips + the copy bar over the current selection.
+      function layout() {
+        if (!active || !sel) return;
+        const rows = term.rows, vy = term.buffer.active.viewportY;
+        const s = cellToPoint(sel.start.col, sel.start.row);
+        const e = cellToPoint(sel.end.col, sel.end.row);
+        // start grip hangs just ABOVE the first cell; end grip just BELOW the last
+        placeHandle(hStart, s, s.vrow >= 0 && s.vrow < rows, -22);
+        placeHandle(hEnd, e, e.vrow >= 0 && e.vrow < rows, e.h);
+        // toolbar centred above the higher grip
+        const topPt = s.vrow <= e.vrow ? s : e;
+        if (topPt.vrow >= 0 && topPt.vrow < rows) {
+          toolbar.style.left = Math.max(60, s.x) + 'px';
+          toolbar.style.top = Math.max(48, topPt.y - 10) + 'px';
+          toolbar.classList.add('visible');
+        } else {
+          toolbar.classList.remove('visible');
+        }
+      }
+      function placeHandle(el, pt, visible, yOff) {
+        if (!visible) { el.classList.remove('visible'); return; }
+        el.style.left = pt.x + 'px';
+        el.style.top = (pt.y + yOff) + 'px';
+        el.classList.add('visible');
+      }
+
+      // Word (run of non-whitespace) around a cell; single cell if on a space.
+      function wordAt(cell) {
+        const line = term.buffer.active.getLine(cell.row);
+        const text = line ? line.translateToString(false) : '';
+        const col = cell.col;
+        if (col >= text.length || /\s/.test(text[col] || ' ')) {
+          return { start: { col, row: cell.row }, end: { col: col + 1, row: cell.row } };
+        }
+        let s = col, e = col + 1;
+        while (s > 0 && /\S/.test(text[s - 1])) s--;
+        while (e < text.length && /\S/.test(text[e])) e++;
+        return { start: { col: s, row: cell.row }, end: { col: e, row: cell.row } };
+      }
+
+      function enterSelection(cell) {
+        active = true;
+        sel = wordAt(cell);
+        applySelection();
+        if (navigator.vibrate) { try { navigator.vibrate(12); } catch (_) {} }
+      }
+      function clearSelection() {
+        active = false; sel = null;
+        term.clearSelection();
+        hStart.classList.remove('visible');
+        hEnd.classList.remove('visible');
+        toolbar.classList.remove('visible');
+        stopAutoScroll();
+      }
+
+      // Keep grips glued to their cells as content scrolls or the layout shifts.
+      term.onScroll(layout);
+      term.onRender(() => { if (active) layout(); });
+      window.addEventListener('resize', () => { if (active) layout(); });
+
+      // --- auto-scroll while dragging a grip near the top/bottom edge ---
+      let autoTimer = null, autoDir = 0, lastDragClient = null, dragWhich = null;
+      function startAutoScroll(dir) {
+        if (autoDir === dir) return;
+        autoDir = dir;
+        stopAutoScroll(true);
+        if (dir === 0) return;
+        autoTimer = setInterval(() => {
+          term.scrollLines(autoDir);
+          if (lastDragClient && dragWhich) updateDragTo(lastDragClient.x, lastDragClient.y);
+        }, 60);
+      }
+      function stopAutoScroll(keepDir) {
+        if (autoTimer) { clearInterval(autoTimer); autoTimer = null; }
+        if (!keepDir) autoDir = 0;
+      }
+      function edgeDir(clientY) {
+        const s = screenEl(); if (!s) return 0;
+        const r = s.getBoundingClientRect();
+        const M = 28;                       // edge band
+        if (clientY < r.top + M) return -1;
+        if (clientY > r.bottom - M) return 1;
+        return 0;
+      }
+
+      // Move whichever grip is being dragged to the given client point.
+      function updateDragTo(clientX, clientY) {
+        if (!sel || !dragWhich) return;
+        const cell = pointToCell(clientX, clientY);
+        if (dragWhich === 'start') sel.start = cell; else sel.end = cell;
+        // Allow the grips to cross: if they swap order, hand the drag to the
+        // other grip so it keeps following the finger (native behaviour).
+        if (cellCmp(sel.start, sel.end) > 0) {
+          const t = sel.start; sel.start = sel.end; sel.end = t;
+          dragWhich = dragWhich === 'start' ? 'end' : 'start';
+        }
+        applySelection();
+      }
+
+      function beginHandleDrag(which, e) {
+        e.preventDefault();
+        dragWhich = which;
+        toolbar.classList.remove('visible');       // out of the way while dragging
+        const el = which === 'start' ? hStart : hEnd;
+        try { el.setPointerCapture(e.pointerId); } catch (_) {}
+      }
+      function moveHandleDrag(e) {
+        if (!dragWhich) return;
+        e.preventDefault();
+        // Aim at the character row the grip points into, not the fingertip
+        // itself (the ball sits above/below the line), so the mapping feels right.
+        const aimY = e.clientY + (dragWhich === 'start' ? 14 : -6);
+        lastDragClient = { x: e.clientX, y: aimY };
+        startAutoScroll(edgeDir(e.clientY));
+        updateDragTo(e.clientX, aimY);
+      }
+      function endHandleDrag(e) {
+        if (!dragWhich) return;
+        dragWhich = null; lastDragClient = null;
+        stopAutoScroll();
+        suppressFocusClick = true;
+        layout();                                   // brings the toolbar back
+      }
+      for (const [el, which] of [[hStart, 'start'], [hEnd, 'end']]) {
+        el.addEventListener('pointerdown', (e) => beginHandleDrag(which, e));
+        el.addEventListener('pointermove', moveHandleDrag);
+        el.addEventListener('pointerup', endHandleDrag);
+        el.addEventListener('pointercancel', endHandleDrag);
+      }
+
+      // --- long-press on the terminal to start a selection ---
+      const LP_MS = 380, MOVE_CANCEL = 10;
+      let lpTimer = null, lpStart = null, extending = false, downAt = 0;
+
+      function cancelLP() { if (lpTimer) { clearTimeout(lpTimer); lpTimer = null; } }
+
+      function onTouchStart(e) {
+        if (e.touches.length !== 1) { cancelLP(); return; }
+        const t = e.touches[0];
+        downAt = Date.now();
+        lpStart = { x: t.clientX, y: t.clientY, cell: pointToCell(t.clientX, t.clientY), wasActive: active };
+        cancelLP();
+        lpTimer = setTimeout(() => {
+          lpTimer = null; extending = true;
+          enterSelection(lpStart.cell);
+          dragWhich = 'end';                        // let the same finger extend the end
+          suppressFocusClick = true;
+        }, LP_MS);
+      }
+      function onTouchMove(e) {
+        const t = e.touches[0];
+        if (!t) return;
+        if (lpTimer) {                              // still deciding: movement => it's a scroll
+          if (Math.abs(t.clientX - lpStart.x) > MOVE_CANCEL || Math.abs(t.clientY - lpStart.y) > MOVE_CANCEL) cancelLP();
+          return;
+        }
+        if (extending) {                            // we own the gesture now — extend, don't scroll
+          e.preventDefault();
+          const aimY = t.clientY - 6;
+          lastDragClient = { x: t.clientX, y: aimY };
+          startAutoScroll(edgeDir(t.clientY));
+          updateDragTo(t.clientX, aimY);
+        }
+      }
+      function onTouchEnd(e) {
+        cancelLP();
+        if (extending) {
+          extending = false; dragWhich = null;
+          stopAutoScroll();
+          suppressFocusClick = true;
+          layout();
+          return;
+        }
+        // A quick tap (no long-press) while a selection is showing dismisses it.
+        if (active && lpStart) {
+          const quick = Date.now() - downAt < LP_MS;
+          const still = e.changedTouches[0] &&
+            Math.abs(e.changedTouches[0].clientX - lpStart.x) < MOVE_CANCEL &&
+            Math.abs(e.changedTouches[0].clientY - lpStart.y) < MOVE_CANCEL;
+          if (quick && still && lpStart.wasActive) { clearSelection(); suppressFocusClick = true; }
+        }
+      }
+
+      // Bind to the wrapper so we catch touches over the whole terminal area.
+      // Passive start/end; move is non-passive so we can preventDefault a scroll
+      // once we've decided the gesture is a selection-extend.
+      const wrap = document.getElementById('terminal-wrap');
+      wrap.addEventListener('touchstart', onTouchStart, { passive: true });
+      wrap.addEventListener('touchmove', onTouchMove, { passive: false });
+      wrap.addEventListener('touchend', onTouchEnd, { passive: true });
+      wrap.addEventListener('touchcancel', () => { cancelLP(); if (extending) { extending = false; dragWhich = null; stopAutoScroll(); } }, { passive: true });
+
+      // --- toolbar actions ---
+      copyBtn.addEventListener('click', async (e) => {
+        e.preventDefault();
+        const txt = term.getSelection();
+        if (!txt) { clearSelection(); return; }
+        try {
+          await navigator.clipboard.writeText(txt);
+          copyBtn.textContent = 'Copied!';
+          setTimeout(() => { copyBtn.textContent = 'Copy'; }, 1000);
+        } catch (_) {
+          copyBtn.textContent = 'Copy failed';
+          setTimeout(() => { copyBtn.textContent = 'Copy'; }, 1200);
+        }
+        setTimeout(clearSelection, 300);
+      });
+      allBtn.addEventListener('click', (e) => {
+        e.preventDefault();
+        term.selectAll();
+        const p = term.getSelectionPosition();
+        if (p) {
+          // xterm 5.x returns {start:{x,y},end:{x,y}}; older shapes use
+          // {startColumn,startRow,...}. Handle both defensively.
+          const sx = p.start ? p.start.x : p.startColumn;
+          const sy = p.start ? p.start.y : p.startRow;
+          const ex = p.end ? p.end.x : p.endColumn;
+          const ey = p.end ? p.end.y : p.endRow;
+          sel = { start: { col: sx, row: sy }, end: { col: ex, row: ey } };
+          active = true;
+          layout();
+        }
+      });
+    })();
     connectBtn.addEventListener('click', () => {
       // Three button modes:
       //   - "Connect" (idle/disconnected): start a new connection
