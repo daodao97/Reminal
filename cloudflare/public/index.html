@@ -905,8 +905,15 @@
       if (h) return h + 'h ' + m + 'm';
       return m + 'm';
     }
+    // hostInfoPending tracks whether we're still waiting for the host's first
+    // reply since the panel opened. It lets renderHost tell "loading" apart
+    // from "this host's reminal is too old to answer" (see the toggle handler).
+    let hostInfoPending = false;
+    let hostInfoWaitTimer = null;
     function onHostInfo(info) {
       lastHostInfo = info;
+      hostInfoPending = false;
+      if (hostInfoWaitTimer) { clearTimeout(hostInfoWaitTimer); hostInfoWaitTimer = null; }
       if (info.hostname) rememberHost(sessionId, info.hostname);
       renderHost();
     }
@@ -927,7 +934,17 @@
       const root = document.getElementById('host-list');
       if (!root) return;
       const i = lastHostInfo;
-      if (!i) { root.innerHTML = '<div class="recents-empty">Connect to a session to see host stats.</div>'; return; }
+      if (!i) {
+        // We only reach the Host panel while connected (the button is hidden
+        // otherwise), so distinguish "still loading" from "the host is too old
+        // to report stats" rather than telling the user to connect.
+        let msg;
+        if (!document.body.classList.contains('connected')) msg = 'Connect to a session to see host stats.';
+        else if (hostInfoPending) msg = 'Loading host stats…';
+        else msg = 'This host is on an older reminal — update it (v1.9.1+) to show stats.';
+        root.innerHTML = '<div class="recents-empty">' + msg + '</div>';
+        return;
+      }
       const name = (i.hostname || 'this computer').replace(/\.local$/, '');
       const sub = [i.os, i.arch, i.cpu_model, i.cpus ? i.cpus + ' cores' : ''].filter(Boolean).join(' · ');
       let html = '<div class="host-wrap">'
@@ -4012,7 +4029,16 @@
     const HOST_POLL_MS = 3000;
     document.getElementById('host').addEventListener('toggle', (e) => {
       if (hostPollTimer) { clearInterval(hostPollTimer); hostPollTimer = null; }
+      if (hostInfoWaitTimer) { clearTimeout(hostInfoWaitTimer); hostInfoWaitTimer = null; }
       if (e.target.open) {
+        // If we've never heard from this host, show "Loading…" and give it a
+        // few seconds; if nothing comes back it's running an older reminal, so
+        // flip to the "update the host" message instead of spinning forever.
+        if (!lastHostInfo) {
+          hostInfoPending = true;
+          hostInfoWaitTimer = setTimeout(() => { hostInfoPending = false; renderHost(); }, 4000);
+        }
+        renderHost();
         if (typeof sendWin === 'function') sendWin('host_info');
         hostPollTimer = setInterval(() => {
           if (document.getElementById('host').open && typeof sendWin === 'function') sendWin('host_info');
