@@ -184,6 +184,12 @@ type Agent struct {
 	// this fd and closes it once startup is complete, then the parent
 	// process exits and the child detaches.
 	handshakeFD int
+	// handshakeOnce guards writeHandshake so it fires exactly once — on the
+	// first successful relay registration, not before. Writing it earlier
+	// let `reminal new` / the web "new session" button return credentials
+	// for a session the relay didn't yet know about, so an immediate viewer
+	// connect raced the child's registration and hit "session not found".
+	handshakeOnce sync.Once
 	// resumed marks this Agent as taking over an already-running PTY
 	// from a previous binary image via syscall.Exec hot-restart. When
 	// true, Run() skips spawning a fresh shell and uses a.term as-is.
@@ -543,12 +549,11 @@ func (a *Agent) Run() error {
 		}
 	}
 
-	// Headless startup handshake: write the spawned session's credentials
-	// to the inherited fd 3 and close it, signalling the parent
-	// (`reminal new`) that we're ready and it can print + exit.
-	if a.headless && a.handshakeFD != 0 {
-		a.writeHandshake()
-	}
+	// Note: the headless startup handshake (writing the spawned session's
+	// credentials to the inherited fd 3) is deliberately NOT done here.
+	// It fires from runConnection after the first successful relay
+	// registration — see signalRegistered — so the parent only reports the
+	// session ready once a viewer can actually join it.
 
 	sessionStart := time.Now()
 	// Deferred so it runs on every clean exit path — shell exit, agent
@@ -847,6 +852,17 @@ func (a *Agent) broadcastSize(cols, rows uint16) {
 		return
 	}
 	_ = a.writeMsg(conn, protocol.Message{Type: protocol.TypeResize, Data: enc})
+}
+
+// signalRegistered releases the parent handshake the first time the agent
+// has registered with the relay (and is therefore joinable). Called on every
+// successful connection; the sync.Once makes all but the first a no-op, so
+// reconnects don't re-signal. No-op for non-spawned agents (handshakeFD 0).
+func (a *Agent) signalRegistered() {
+	if a.handshakeFD == 0 {
+		return
+	}
+	a.handshakeOnce.Do(a.writeHandshake)
 }
 
 // writeHandshake emits the agent's credentials to the parent process's
@@ -1893,6 +1909,13 @@ func (a *Agent) runConnection(shellExit <-chan struct{}) error {
 	if err := a.authenticate(conn); err != nil {
 		return err
 	}
+
+	// Registered and joinable now. For a spawned headless agent this is the
+	// moment to release the parent's handshake — doing it here (not at Run
+	// start) closes the race where the web "new session" button connected
+	// before the child had registered and got "session not found". Fires
+	// once; later reconnects are no-ops.
+	a.signalRegistered()
 
 	cursorCh := make(chan uint64, 4)
 	stop := make(chan struct{})
