@@ -2079,7 +2079,11 @@ func (a *Agent) runReader(conn *websocket.Conn, cursorCh chan uint64) error {
 			// capture/input op can't delay the ack that unblocks the next frame.
 			a.handleWindowAck(msg.Data)
 		case protocol.TypeHostInfo:
-			a.handleHostInfo(conn)
+			// On its own goroutine: gathering stats can sample CPU (a ~200ms
+			// `top` on macOS), which must not stall the reader that also carries
+			// viewer keystrokes. writeMsg is mutex-guarded, so concurrent replies
+			// are safe.
+			go a.handleHostInfo(conn)
 		case protocol.TypeNewSession:
 			go a.handleNewSession(conn, msg.Data)
 		case protocol.TypeAppList:

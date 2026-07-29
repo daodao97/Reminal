@@ -998,10 +998,16 @@
         html += hostMeter('Memory',
           '<b>' + fmtBytes(i.mem_used) + '</b> / ' + fmtBytes(i.mem_total) + ' <span class="dim">· ' + Math.round(p) + '%</span>', p);
       }
-      if (i.load1 !== undefined && i.cpus) {
+      if (i.cpu_pct !== undefined && i.cpu_pct !== null) {
+        // Real CPU utilization (the "% busy" Activity Monitor / top show).
+        const p = Math.max(0, Math.min(100, i.cpu_pct));
+        html += hostMeter('CPU', '<b>' + Math.round(p) + '%</b>', p);
+      } else if (i.load1 !== undefined && i.cpus) {
+        // Older host (or a platform without a sampler): no utilization to show,
+        // so present load honestly as a saturation bar — load ≠ CPU %.
         const p = i.load1 / i.cpus * 100;
-        html += hostMeter('CPU',
-          '<b>' + i.load1.toFixed(2) + '</b> <span class="dim">· ' + Math.min(100, Math.round(p)) + '%</span>', p);
+        html += hostMeter('Load',
+          '<b>' + i.load1.toFixed(2) + '</b> <span class="dim">· ' + i.cpus + ' cores</span>', p);
       }
       const foot = [];
       if (i.load5 !== undefined) foot.push('load ' + i.load1.toFixed(2) + ' ' + i.load5.toFixed(2) + ' ' + i.load15.toFixed(2));

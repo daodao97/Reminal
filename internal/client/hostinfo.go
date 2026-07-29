@@ -7,6 +7,8 @@ import (
 	"encoding/json"
 	"os"
 	"runtime"
+	"sync"
+	"time"
 
 	"github.com/gorilla/websocket"
 
@@ -84,6 +86,11 @@ type HostInfo struct {
 	Load1    float64 `json:"load1,omitempty"`
 	Load5    float64 `json:"load5,omitempty"`
 	Load15   float64 `json:"load15,omitempty"`
+	// CPUPercent is real CPU utilization (0..100), the "% busy" Activity
+	// Monitor / top show — NOT load/cores. A pointer so the viewer can tell
+	// "unknown/unsupported" (nil, e.g. a platform without a sampler, or the
+	// very first Linux sample that has no delta yet) from a genuine 0%.
+	CPUPercent *float64 `json:"cpu_pct,omitempty"`
 }
 
 // gatherHostInfo collects the cross-platform basics, then lets the per-OS hook
@@ -99,7 +106,42 @@ func gatherHostInfo() HostInfo {
 		h.Hostname = name
 	}
 	fillHostInfo(&h) // platform-specific (hostinfo_darwin.go / _linux.go / _other.go)
+	if pct, ok := cachedCPUPercent(); ok {
+		h.CPUPercent = &pct
+	}
 	return h
+}
+
+// CPU utilization is sampled by a platform-specific cpuPercent() (cpustat_*.go).
+// On macOS that shells out to `top` (~200ms); on Linux it diffs /proc/stat
+// between calls. cachedCPUPercent memoises the result briefly so a burst of
+// host_info polls (one per viewer, ~every 1.5s) doesn't spawn a `top` each —
+// and so gatherHostInfo stays cheap. handleHostInfo runs on its own goroutine
+// (see the dispatch in runReader) so the occasional refresh never stalls the
+// shell stream.
+var (
+	cpuCacheMu  sync.Mutex
+	cpuCachePct float64
+	cpuCacheOK  bool
+	cpuCacheAt  time.Time
+)
+
+const cpuCacheTTL = 1200 * time.Millisecond
+
+func cachedCPUPercent() (float64, bool) {
+	cpuCacheMu.Lock()
+	defer cpuCacheMu.Unlock()
+	if cpuCacheOK && time.Since(cpuCacheAt) < cpuCacheTTL {
+		return cpuCachePct, true
+	}
+	if pct, ok := cpuPercent(); ok {
+		cpuCachePct, cpuCacheOK, cpuCacheAt = pct, true, time.Now()
+		return pct, true
+	}
+	// No fresh reading (sampler unsupported, or Linux's first no-delta sample).
+	// Fall back to the last good value if we have one, so a single hiccup
+	// doesn't blank the meter.
+	return cpuCachePct, cpuCacheOK
 }
 
 func friendlyOS(goos string) string {
