@@ -715,6 +715,7 @@ func (a *Agent) streamWindow(w winInfo, stop <-chan struct{}, ack <-chan uint64)
 	var lastSent time.Time      // when we last sent a frame OR heartbeat (paces both)
 	var lastAck time.Time       // when the viewer last genuinely acked a frame
 	var gotAnyAck bool          // has this viewer ever acked (arms the idle stop)?
+	var sentSinceAck int        // real frames sent with no ack consumed since — see the demote check
 	var lastWSFrame time.Time   // rate-limits the billed WS path independently of P2P
 	lastLiveCheck := time.Now() // last time we verified a static window still exists
 
@@ -743,6 +744,23 @@ func (a *Agent) streamWindow(w winInfo, stop <-chan struct{}, ack <-chan uint64)
 		if conn == nil {
 			return
 		}
+		// Drain any acks that arrived since last iteration BEFORE the in-flight
+		// gate. Acks used to be consumed only inside the gate (which is entered
+		// only when 2+ frames are outstanding), so lastAck could go stale while
+		// the viewer was acking perfectly — and the demote check below then
+		// misread the stale timestamp as a dead channel.
+		for {
+			select {
+			case s := <-ack:
+				if s > acked {
+					acked = s
+				}
+				lastAck, gotAnyAck, sentSinceAck = time.Now(), true, 0
+				continue
+			default:
+			}
+			break
+		}
 		// Hold once maxFramesInFlight frames are outstanding (bounded by the
 		// timeout), so we never outrun the viewer by more than that — latency
 		// stays bounded instead of accumulating on a slow link.
@@ -752,7 +770,7 @@ func (a *Agent) streamWindow(w winInfo, stop <-chan struct{}, ack <-chan uint64)
 				if s > acked {
 					acked = s
 				}
-				lastAck, gotAnyAck = time.Now(), true
+				lastAck, gotAnyAck, sentSinceAck = time.Now(), true, 0
 			case <-time.After(ackWaitTimeout):
 				// A viewer that was acking has gone silent — it vanished without
 				// a clean close and the relay hasn't reported count==0 yet. Stop
@@ -893,10 +911,18 @@ func (a *Agent) streamWindow(w winInfo, stop <-chan struct{}, ack <-chan uint64)
 				// confirmed to deliver them (the viewer acked one over it). Until
 				// then WS carries frames and any open channel is probed in parallel,
 				// so a channel that connects but can't carry frames (cellular MTU)
-				// never causes a stall. The demotion below only runs while we're
-				// actively sending, so an idle window (no acks expected) can't be
-				// mistaken for a broken channel; if acks dry up mid-stream, demote.
-				if gotAnyAck && time.Since(lastAck) > streamAckIdleTimeout/2 {
+				// never causes a stall.
+				//
+				// Demote only when the viewer HAD frames to ack and didn't:
+				// several real frames sent since the last consumed ack, and 6+
+				// seconds of silence. Gating on elapsed time alone flickered the
+				// transport on every idle window: no frames sent → no acks → a
+				// stale lastAck — and the first frame after the pause falsely
+				// demoted a perfectly healthy channel, dropping the stream to the
+				// capped WS rate until the 1/s probe re-confirmed it, over and
+				// over (visible as a WS↔P2P rate oscillation on idle-prone
+				// windows like terminals, with no actual network change).
+				if gotAnyAck && sentSinceAck >= 3 && time.Since(lastAck) > streamAckIdleTimeout/2 {
 					a.unconfirmRTC()
 					confirmed, probing = a.rtcSinks()
 					// A demoted viewer now needs WS — re-check the WS gate.
@@ -937,6 +963,7 @@ func (a *Agent) streamWindow(w winInfo, stop <-chan struct{}, ack <-chan uint64)
 				if !usingHelper {
 					lastSig, haveSig = sig, sigOK
 				}
+				sentSinceAck++
 				lastSent = time.Now()
 			} else if time.Since(lastSent) >= winHeartbeat {
 				// Idle: no frame, just a few-byte liveness ping over the current
