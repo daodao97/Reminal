@@ -46,8 +46,13 @@ func fillHostInfo(h *HostInfo) {
 	}
 }
 
-// darwinMemUsed approximates used memory as total minus free+inactive pages,
-// read from vm.stats. Best-effort; returns 0 on any failure.
+// darwinMemUsed reports used memory the way Activity Monitor's "Memory Used"
+// does: physical total minus what's instantly reclaimable — free pages plus
+// file-backed (external) pages, i.e. the "Cached Files" the OS keeps around but
+// can evict on demand. The previous formula subtracted only free+inactive
+// pages, which left the (often huge) file cache counted as used — so a machine
+// with 32 GB of cached files read as ~85% used when Activity Monitor showed
+// ~37%. Best-effort; returns 0 on any failure.
 func darwinMemUsed(total uint64) uint64 {
 	pageSize, err := unix.SysctlUint32("vm.pagesize")
 	if err != nil || pageSize == 0 {
@@ -59,12 +64,17 @@ func darwinMemUsed(total uint64) uint64 {
 		return 0
 	}
 	free, e1 := unix.SysctlUint32("vm.page_free_count")
-	inactive, e2 := unix.SysctlUint32("vm.page_inactive_count")
 	if e1 != nil {
 		return 0
 	}
 	avail := uint64(free)
-	if e2 == nil {
+	// File-backed pages are clean, evictable cache (Activity Monitor's "Cached
+	// Files") — treat them as available, not used.
+	if ext, e := unix.SysctlUint32("vm.page_pageable_external_count"); e == nil {
+		avail += uint64(ext)
+	} else if inactive, e := unix.SysctlUint32("vm.page_inactive_count"); e == nil {
+		// Older kernel without the external counter: fall back to the rougher
+		// free+inactive estimate rather than reporting nothing.
 		avail += uint64(inactive)
 	}
 	availBytes := avail * uint64(pageSize)
