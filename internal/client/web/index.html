@@ -4107,6 +4107,21 @@
     // (i) popover. Set by onWindowFrame; 'webrtc' means the P2P DataChannel,
     // 'ws' means the relay. Null until the first frame lands.
     let lastFrameVia = null;
+    let lastDCSeenAt = 0; // last time ANY message arrived over the DataChannel
+    // The label reports which transport is CARRYING the stream — not the
+    // transport of the last message processed. With a mixed viewer set the
+    // agent legitimately dual-sends (relay copies for WS-only viewers ride the
+    // broadcast to everyone, heartbeats have no seq so they bypass the dedup),
+    // so "last message wins" flapped webrtc↔relay every heartbeat and every
+    // WS-beats-DC arrival race, despite a perfectly healthy P2P stream. A relay
+    // message only claims the label once the DataChannel has been silent for a
+    // grace window (longer than the 3s heartbeat cadence, so an alive channel
+    // always re-stamps itself first).
+    const TRANSPORT_CLAIM_MS = 5000;
+    function noteTransport(viaDC) {
+      if (viaDC) { lastDCSeenAt = performance.now(); lastFrameVia = 'webrtc'; return; }
+      if (performance.now() - lastDCSeenAt > TRANSPORT_CLAIM_MS) lastFrameVia = 'ws';
+    }
     // Describe the current transport for a pane's (i) popover.
     function paneInfoHtml(p) {
       const webrtc = lastFrameVia === 'webrtc';
@@ -4853,7 +4868,7 @@
       if (payload.hb) { // liveness heartbeat — host alive, screen just unchanged (0 fps)
         p.errorMsg = null;
         p.lastAliveAt = performance.now();
-        lastFrameVia = viaDC ? 'webrtc' : 'ws';
+        noteTransport(viaDC);
         updatePaneOverlay(p);
         return;
       }
@@ -4861,7 +4876,7 @@
       // the channel, so the same seq can arrive twice. Render once — but still
       // ack a DataChannel copy so the agent learns the channel carries frames.
       if (p.lastSeq != null && payload.seq != null && payload.seq <= p.lastSeq && (p.lastSeq - payload.seq) < 1000) {
-        if (viaDC) { lastFrameVia = 'webrtc'; sendWindowAck(payload.id, payload.seq, true); }
+        if (viaDC) { noteTransport(true); sendWindowAck(payload.id, payload.seq, true); }
         return;
       }
       if (payload.seq != null) p.lastSeq = payload.seq;
@@ -4869,7 +4884,7 @@
       p.gotFrame = true;
       p.lastFrameAt = performance.now();
       p.lastAliveAt = p.lastFrameAt; // frames count as liveness too
-      lastFrameVia = viaDC ? 'webrtc' : 'ws'; // for the (i) transport popover
+      noteTransport(viaDC); // for the (i) transport popover
       (p.frameTimes || (p.frameTimes = [])).push(p.lastFrameAt); // rolling 1s window → fps
       while (p.frameTimes.length && p.lastFrameAt - p.frameTimes[0] > 1000) p.frameTimes.shift();
       updatePaneOverlay(p);
