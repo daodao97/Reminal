@@ -1,7 +1,7 @@
 #!/bin/bash
 set -euo pipefail
 
-VERSION="${VERSION:-1.9.8}"
+VERSION="${VERSION:-1.10.0}"
 OUTPUT="${OUTPUT:-dist/reminal}"
 
 mkdir -p dist
@@ -16,3 +16,21 @@ CGO_ENABLED=0 go build -ldflags "-s -w -X main.version=${VERSION} ${BUILD_LDFLAG
 
 echo "Built ${OUTPUT}"
 "${OUTPUT}" version
+
+# macOS: compile the ScreenCaptureKit capture helper alongside the binary. The
+# agent auto-discovers reminal-capture next to itself and uses it for a native,
+# ~30fps window mirror (falling back to screencapture if it's absent). Skipped on
+# non-macOS and when swiftc isn't installed — the mirror still works, just slower.
+if [[ "$(uname)" == "Darwin" ]]; then
+  if command -v swiftc >/dev/null 2>&1; then
+    HELPER="$(dirname "${OUTPUT}")/reminal-capture"
+    echo "Building capture helper ${HELPER}..."
+    # Same 12.3 deployment target as CI (the ScreenCaptureKit floor), so a
+    # locally-built helper doesn't silently require the build machine's OS.
+    swiftc -O -target "$(uname -m)-apple-macos12.3" -o "${HELPER}" native/reminal-capture/main.swift
+    codesign --force --sign - "${HELPER}" >/dev/null 2>&1 || true
+    echo "Built ${HELPER}"
+  else
+    echo "swiftc not found — skipping capture helper (window mirror will use screencapture)"
+  fi
+fi

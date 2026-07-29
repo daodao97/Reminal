@@ -35,8 +35,16 @@ class Reminal < Formula
   def install
     if build.head?
       system "go", "build", "-ldflags=#{ldflags}", "-o", bin/"reminal", "./cmd/reminal"
+      # Build the native window-capture helper from source when Xcode is present;
+      # otherwise the window mirror falls back to screencapture.
+      if OS.mac? && which("swiftc")
+        system "swiftc", "-O", "-o", bin/"reminal-capture", "native/reminal-capture/main.swift"
+      end
     else
       bin.install "reminal"
+      # The darwin bottle bundles the ScreenCaptureKit capture helper next to the
+      # binary; the agent auto-discovers it for the native window mirror.
+      bin.install "reminal-capture" if File.exist?("reminal-capture")
     end
   end
 

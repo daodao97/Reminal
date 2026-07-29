@@ -319,7 +319,12 @@ func apply(url string) error {
 	defer gz.Close()
 	tr := tar.NewReader(gz)
 
-	var reader io.Reader
+	// The darwin archives carry the reminal binary AND the reminal-capture native
+	// window-capture helper. Install both, each atomically. The helper is a
+	// best-effort sidecar: a failure to place it doesn't fail the upgrade (the
+	// window mirror just falls back to screencapture).
+	dir := filepath.Dir(bin)
+	installedBin := false
 	for {
 		hdr, err := tr.Next()
 		if err == io.EOF {
@@ -328,32 +333,38 @@ func apply(url string) error {
 		if err != nil {
 			return fmt.Errorf("tar: %w", err)
 		}
-		if filepath.Base(hdr.Name) == "reminal" {
-			reader = tr
-			break
+		switch filepath.Base(hdr.Name) {
+		case "reminal":
+			if err := installFileAtomic(bin, tr, dir); err != nil {
+				return err
+			}
+			installedBin = true
+		case "reminal-capture":
+			_ = installFileAtomic(filepath.Join(dir, "reminal-capture"), tr, dir)
 		}
 	}
-	if reader == nil {
+	if !installedBin {
 		return errors.New("reminal binary not found in archive")
 	}
+	return nil
+}
 
-	// Write to a sibling temp file on the same filesystem so the rename is
-	// atomic. On Unix the rename works even while the old binary is running
-	// because the kernel keeps the old inode alive for executing processes.
-	dir := filepath.Dir(bin)
+// installFileAtomic writes r to dest by streaming into a sibling temp file on
+// the same filesystem and renaming it over dest — atomic, and safe to do to a
+// currently-running binary (the kernel keeps the old inode alive for running
+// processes). dir must be dest's directory so the rename stays on one FS.
+func installFileAtomic(dest string, r io.Reader, dir string) error {
 	tmp, err := os.CreateTemp(dir, ".reminal.new-*")
 	if err != nil {
 		return fmt.Errorf("create temp file in %s: %w", dir, err)
 	}
 	tmpName := tmp.Name()
 	defer func() {
-		// If we never renamed, clean up the temp file.
 		if _, err := os.Stat(tmpName); err == nil {
 			_ = os.Remove(tmpName)
 		}
 	}()
-
-	if _, err := io.Copy(tmp, reader); err != nil {
+	if _, err := io.Copy(tmp, r); err != nil {
 		_ = tmp.Close()
 		return fmt.Errorf("write temp file: %w", err)
 	}
@@ -363,7 +374,7 @@ func apply(url string) error {
 	if err := os.Chmod(tmpName, 0o755); err != nil {
 		return err
 	}
-	if err := os.Rename(tmpName, bin); err != nil {
+	if err := os.Rename(tmpName, dest); err != nil {
 		return fmt.Errorf("install (need write access to %s): %w", dir, err)
 	}
 	return nil
