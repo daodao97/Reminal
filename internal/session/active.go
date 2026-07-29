@@ -267,5 +267,12 @@ func pidAlive(pid int) bool {
 	if err != nil {
 		return false
 	}
-	return p.Signal(syscall.Signal(0)) == nil
+	if p.Signal(syscall.Signal(0)) != nil {
+		return false
+	}
+	// Signal 0 succeeds for a zombie too — the PID lingers in the process table
+	// until its parent reaps it. Such a session is defunct (can't be attached or
+	// signalled), so treat it as dead; ReadAllActive then prunes its stale record
+	// instead of showing it in `reminal list` forever.
+	return !pidIsZombie(pid)
 }

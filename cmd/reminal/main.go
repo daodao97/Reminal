@@ -1518,7 +1518,7 @@ func runKill(idArg string, yes bool) error {
 			return nil
 		}
 	}
-	if err := terminateAgent(a.PID); err != nil {
+	if err := terminateAgent(*a); err != nil {
 		return err
 	}
 	fmt.Printf("  Killed session %s (PID %d).\n", a.ID, a.PID)
@@ -1526,11 +1526,25 @@ func runKill(idArg string, yes bool) error {
 }
 
 // terminateAgent SIGTERMs the agent, gives it a brief window to run its defers
-// (clear active record, close WS gracefully, restore the host terminal), then
-// escalates to SIGKILL if it's still alive — a hung agent shouldn't be able to
-// refuse a kill. Shared by `reminal kill` and `reminal prune`.
-func terminateAgent(pid int) error {
+// (close WS gracefully, restore the host terminal), then escalates to SIGKILL
+// if it's still alive — a hung agent shouldn't be able to refuse a kill.
+//
+// It then removes the session's active record itself rather than trusting the
+// agent's own SIGTERM handler to do it. A dead, zombie, or unresponsive agent
+// never runs that handler, which is how stale entries used to survive `reminal
+// kill` / `reminal prune` and linger in `reminal list` forever. The record
+// removal is idempotent and runs even when the process was already gone (ESRCH,
+// which we treat as success). Shared by `reminal kill` and `reminal prune`.
+func terminateAgent(a session.Active) error {
+	// Always drop the record, however termination goes — the agent may already
+	// be dead and unable to clean up after itself.
+	defer func() { _ = session.ClearActive(a.ID) }()
+
+	pid := a.PID
 	if err := syscall.Kill(pid, syscall.SIGTERM); err != nil {
+		if errors.Is(err, syscall.ESRCH) {
+			return nil // process already gone; record cleared by the defer
+		}
 		return fmt.Errorf("SIGTERM PID %d: %w", pid, err)
 	}
 	deadline := time.Now().Add(3 * time.Second)
@@ -1597,7 +1611,7 @@ func runPrune(idle time.Duration, yes bool) error {
 	}
 	killed := 0
 	for _, a := range victims {
-		if err := terminateAgent(a.PID); err != nil {
+		if err := terminateAgent(a); err != nil {
 			fmt.Printf("  ! %s: %v\n", a.ID, err)
 			continue
 		}
