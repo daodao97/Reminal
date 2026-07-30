@@ -53,7 +53,7 @@ func (darwinWindows) permissionHint() string {
 // which capture needs anyway). Emits tab-separated
 // "id<TAB>owner<TAB>title<TAB>x<TAB>y<TAB>w<TAB>h" lines. Layer 0 filters to
 // normal application windows (skips the menu bar, Dock, shadows, etc.).
-const jxaListScript = `ObjC.import("CoreGraphics"); ObjC.import("Foundation");
+const jxaListScript = `ObjC.import("CoreGraphics"); ObjC.import("Foundation"); ObjC.import("AppKit");
 var arr = ObjC.castRefToObject($.CGWindowListCopyWindowInfo($.kCGWindowListOptionOnScreenOnly | $.kCGWindowListExcludeDesktopElements, $.kCGNullWindowID));
 var n = arr.count, out = [];
 for (var i = 0; i < n; i++) {
@@ -68,7 +68,23 @@ for (var i = 0; i < n; i++) {
     b.objectForKey("X").intValue, b.objectForKey("Y").intValue,
     b.objectForKey("Width").intValue, b.objectForKey("Height").intValue].join("\t"));
 }
+// Whole desktops ride the same list as pseudo-windows ("display:<id>", owner
+// "Desktop"). CGDisplayBounds gives CG-coordinate (top-left origin) rects — the
+// same space as the window bounds above, so input mapping works unchanged.
+var screens = $.NSScreen.screens;
+for (var i = 0; i < screens.count; i++) {
+  var did = screens.objectAtIndex(i).deviceDescription.objectForKey("NSScreenNumber").intValue;
+  var db = $.CGDisplayBounds(did);
+  var dw = Math.round(db.size.width), dh = Math.round(db.size.height);
+  var label = (screens.count > 1 ? "Display " + (i + 1) : "Entire screen") + " — " + dw + "×" + dh;
+  out.push(["display:" + did, 0, "Desktop", label,
+    Math.round(db.origin.x), Math.round(db.origin.y), dw, dh].join("\t"));
+}
 out.join("\n");`
+
+// isDisplayID reports whether a window id names a whole display (a desktop
+// pseudo-window from the list above) rather than one CGWindow.
+func isDisplayID(id string) bool { return strings.HasPrefix(id, "display:") }
 
 func (darwinWindows) list() ([]winInfo, error) {
 	out, err := run("osascript", "-l", "JavaScript", "-e", jxaListScript)
@@ -106,6 +122,10 @@ func (darwinWindows) list() ([]winInfo, error) {
 const winMaxWidth = 1100
 
 func (darwinWindows) capture(w winInfo) ([]byte, error) {
+	if isDisplayID(w.ID) {
+		// Whole desktop: grab the display's rect (same space as CGWindowList).
+		return screencaptureJPEG(fmt.Sprintf("-R%d,%d,%d,%d", w.X, w.Y, w.W, w.H))
+	}
 	// -l<id>: capture exactly this window (even if occluded), -o: no drop shadow.
 	return screencaptureJPEG("-o", "-l"+w.ID)
 }
@@ -200,6 +220,9 @@ func (darwinWindows) openApp(id string) error {
 }
 
 func (darwinWindows) focus(w winInfo) error {
+	if isDisplayID(w.ID) {
+		return nil // a desktop has no window to raise; clicks land wherever aimed
+	}
 	// Raise the SPECIFIC window, not just the app. Merely activating the app
 	// (the old NSRunningApplication approach) leaves the target unfocused
 	// whenever the app has several windows or the window sits behind a
@@ -389,6 +412,12 @@ func (darwinWindows) key(w winInfo, name string) error {
 }
 
 func (darwinWindows) exists(id string) bool {
+	if isDisplayID(id) {
+		// Displays don't appear in CGWindowList; treat as present. A truly
+		// disconnected display vanishes from list(), which the stream's
+		// geometry poll (findWindow) already turns into a closed pane.
+		return true
+	}
 	// Check the SAME on-screen list the picker (list) uses, so a pane's lifetime
 	// tracks the picker exactly: closed and minimized windows leave this list
 	// immediately, whereas kCGWindowListOptionAll retains a closed window's

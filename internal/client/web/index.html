@@ -460,16 +460,17 @@
     .host-m .bar > span { display: block; height: 100%; border-radius: 2px; transition: width .4s ease, background-color .4s ease; }
     .host-foot { margin-top: 8px; font-size: 10.5px; color: #8b949e; font-variant-numeric: tabular-nums; }
     /* "+ New session" action button under the host stats. */
-    .host-new {
+    .host-new, .host-desktop {
       display: block; width: 100%; margin-top: 10px;
       padding: 8px 10px;
       background: #21262d; border: 1px solid #30363d; border-radius: 6px;
       color: #e6edf3; font-size: 12.5px; font-weight: 500; cursor: pointer;
       text-align: center;
     }
-    .host-new:hover { background: #2a313a; border-color: #3d444d; }
-    .host-new:active { background: #1f6feb; border-color: #388bfd; }
+    .host-new:hover, .host-desktop:hover { background: #2a313a; border-color: #3d444d; }
+    .host-new:active, .host-desktop:active { background: #1f6feb; border-color: #388bfd; }
     .host-new:disabled { opacity: 0.6; cursor: default; }
+    .host-desktop { margin-top: 6px; }
     .recents-list {
       position: absolute;
       top: 100%;
@@ -938,6 +939,21 @@
     let creatingSession = false;
     let hostNewError = '';
     let hostNewTimer = null;
+    let hostDesktopErr = '';
+    // Open a mirror pane for each display the host lists. An agent that's too
+    // old (or a platform without desktop capture) lists none — say so briefly.
+    async function openDesktopPanes() {
+      const wins = await nextWindowList();
+      const displays = wins.filter(w => (w.id || '').startsWith('display:'));
+      if (!displays.length) {
+        hostDesktopErr = 'Not supported by this host';
+        renderHost();
+        setTimeout(() => { hostDesktopErr = ''; renderHost(); }, 3500);
+        return;
+      }
+      const h = document.getElementById('host'); if (h) h.open = false;
+      for (const d of displays) openWinView(d);
+    }
     // Fill the login inputs with a session's creds and dial it, closing the
     // current one first when switching. Same path the Recent rows use.
     function connectToSession(id, pin) {
@@ -1019,6 +1035,10 @@
       // which survives the panel's periodic re-render via creatingSession.
       const label = hostNewError ? hostNewError : (creatingSession ? 'Starting…' : '+ New session on this host');
       html += '<button class="host-new"' + (creatingSession ? ' disabled' : '') + '>' + label + '</button>';
+      // Mirror the whole desktop (every display) as panes — same streaming and
+      // input pipeline as single windows, keyed by "display:<id>" entries the
+      // agent appends to the window list.
+      html += '<button class="host-desktop">' + (hostDesktopErr ? hostDesktopErr : 'View full desktop') + '</button>';
       html += '</div>';
       root.innerHTML = html;
     }
@@ -4062,6 +4082,7 @@
     // "+ New session" button lives inside the (re-rendered) host panel, so bind
     // it by delegation. Asks the host to spawn a headless reminal, then connects.
     document.getElementById('host-list').addEventListener('click', (e) => {
+      if (e.target.closest('.host-desktop')) { openDesktopPanes(); return; }
       if (!e.target.closest('.host-new')) return;
       if (creatingSession) return;
       creatingSession = true; hostNewError = '';
@@ -4218,6 +4239,9 @@
         return;
       }
       for (const w of winList) {
+        // Whole-desktop pseudo-entries ("display:<id>") are opened from the
+        // Host panel's "View full desktop" button, not this per-window list.
+        if ((w.id || '').startsWith('display:')) continue;
         const row = document.createElement('div');
         row.className = 'recents-row';
         row.title = 'Open and control this window';

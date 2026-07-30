@@ -61,8 +61,16 @@ if args.count >= 2, args[1] == "scroll" {
     exit(0)
 }
 
-guard args.count >= 2, let windowID = UInt32(args[1]) else {
-    FileHandle.standardError.write(Data("usage: reminal-capture <windowID> [maxWidth] [quality] [fps]\n".utf8))
+// Target: a CGWindowID for one window, or "display:<CGDirectDisplayID>" for a
+// whole desktop (the agent lists displays as pseudo-windows with that id form).
+var windowID: UInt32 = 0
+var displayID: UInt32 = 0
+if args.count >= 2, args[1].hasPrefix("display:"), let d = UInt32(args[1].dropFirst("display:".count)) {
+    displayID = d
+} else if args.count >= 2, let w = UInt32(args[1]) {
+    windowID = w
+} else {
+    FileHandle.standardError.write(Data("usage: reminal-capture <windowID|display:ID> [maxWidth] [quality] [fps]\n".utf8))
     exit(2)
 }
 let maxWidth = args.count >= 3 ? (Int(args[2]) ?? 1100) : 1100
@@ -163,28 +171,46 @@ final class FrameOutput: NSObject, SCStreamOutput, SCStreamDelegate {
     }
 }
 
-// ---- locate the window ----
+// ---- locate the target (one window, or a whole display) ----
 let sema = DispatchSemaphore(value: 0)
-var target: SCWindow?
+var targetWindow: SCWindow?
+var targetDisplay: SCDisplay?
 var contentErr: Error?
 SCShareableContent.getExcludingDesktopWindows(false, onScreenWindowsOnly: true) { content, error in
     contentErr = error
-    target = content?.windows.first(where: { $0.windowID == windowID })
+    if displayID != 0 {
+        targetDisplay = content?.displays.first(where: { $0.displayID == displayID })
+    } else {
+        targetWindow = content?.windows.first(where: { $0.windowID == windowID })
+    }
     sema.signal()
 }
 sema.wait()
 if let contentErr { die("shareable content (screen recording permission?): \(contentErr.localizedDescription)") }
-guard let window = target else { die("window \(windowID) not found") }
+
+let filter: SCContentFilter
+let srcW: Double, srcH: Double
+if displayID != 0 {
+    guard let display = targetDisplay else { die("display \(displayID) not found") }
+    // Whole desktop: everything on the display — windows, menu bar, cursor.
+    filter = SCContentFilter(display: display, excludingWindows: [])
+    srcW = Double(display.width)
+    srcH = Double(display.height)
+} else {
+    guard let window = targetWindow else { die("window \(windowID) not found") }
+    filter = SCContentFilter(desktopIndependentWindow: window)
+    srcW = Double(window.frame.width)
+    srcH = Double(window.frame.height)
+}
 
 // ---- configure + start capture ----
-let filter = SCContentFilter(desktopIndependentWindow: window)
 let config = SCStreamConfiguration()
 
-// Output size in PIXELS. Scale the window to maxWidth wide (never up past its
+// Output size in PIXELS. Scale the target to maxWidth wide (never up past its
 // native retina resolution), preserving aspect — SCStream does the downscale in
 // hardware, so there's no full-res intermediate to decode like the sips path.
-let pointW = max(1.0, window.frame.width)
-let pointH = max(1.0, window.frame.height)
+let pointW = max(1.0, srcW)
+let pointH = max(1.0, srcH)
 var scale = 2.0
 if #available(macOS 14.0, *) { scale = filter.pointPixelScale > 0 ? Double(filter.pointPixelScale) : 2.0 }
 let nativeW = pointW * scale
