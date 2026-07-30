@@ -28,8 +28,10 @@ Run `reminal`, scan a QR code, you're in.
   ┌─────────────┐            ┌─────────────┐              ┌─────────────┐
   │  reminal    │◄──WSS─────►│  Workers +  │◄────WSS─────►│  browser or │
   │  (PTY/shell)│            │  Durable Obj│              │  reminal -c │
-  └─────────────┘            └─────────────┘              └─────────────┘
-              end-to-end encrypted — the relay sees ciphertext only
+  └─────┬───────┘            └─────────────┘              └───────┬─────┘
+        │      end-to-end encrypted — the relay sees ciphertext only
+        └────────────────◄── WebRTC (DTLS) ──►────────────────────┘
+             window mirroring goes peer-to-peer, off the relay
 ```
 
 ---
@@ -50,6 +52,7 @@ SSH was designed in 1995. It assumes you own a static IP, a router you can confi
 | **Phone friendly** | Scan QR → in | No native client |
 | **Session survives disconnect** | Shell keeps running, hop between devices | Drop the connection, lose your work (unless you wrapped it in `tmux`) |
 | **Network blips** | Auto-reconnect, scrollback replay | `Write failed: Broken pipe` |
+| **GUI apps** | Mirror & control any window from the browser | X11 forwarding, if you dare |
 | **If laptop is stolen** | Sessions already dead | Old keys still grant access |
 | **Encryption** | End-to-end through relay | End-to-end direct (if configured right) |
 
@@ -67,7 +70,7 @@ Installs to `~/.local/bin/reminal`. No sudo. macOS and Linux, Apple Silicon and 
 
 `reminal` checks for updates on launch and offers to upgrade in place.
 
-<sub>Other options: `reminal upgrade` to force an immediate upgrade · build from source with `./scripts/build.sh` (Go 1.25+).</sub>
+<sub>Other options: `reminal upgrade` to force an immediate upgrade · build from source with `./scripts/build.sh` (Go 1.25+, Swift toolchain on macOS for the native capture helper).</sub>
 
 ---
 
@@ -125,7 +128,7 @@ Close the laptop, switch to your phone, reconnect from a different city — your
 
 #### Zero-install web terminal
 
-A full xterm.js terminal is built into the relay. **Any browser is the client.** Phone, iPad, locked-down work laptop, hotel-lobby PC. Open the URL, type the PIN, you're in. Nothing to install. Nothing to configure.
+A full xterm.js terminal is built into the relay. **Any browser is the client.** Phone, iPad, locked-down work laptop, hotel-lobby PC. Open the URL, type the PIN, you're in. Built for touch: pinch-zoom, text selection with draggable handles, on-screen modifier keys, find-in-scrollback.
 
 </td>
 <td width="33%" valign="top">
@@ -133,6 +136,29 @@ A full xterm.js terminal is built into the relay. **Any browser is the client.**
 #### Resilient by default
 
 Wi-Fi drop, tunnel switch, walk into the elevator — reminal auto-reconnects with exponential backoff and replays what you missed from a 2 MiB scrollback buffer. The connection layer is the part you should never have to think about.
+
+</td>
+</tr>
+<tr>
+<td width="33%" valign="top">
+
+#### Window mirroring
+
+See and **control any app window** from the browser — not just the terminal. Native ScreenCaptureKit capture on macOS streams ~30 fps over a direct WebRTC connection (DTLS, peer-to-peer, off the relay). Click, double-click, right-click menus, drag, scroll, type — from a phone, it's a trackpad cursor with pinch-zoom and two-finger scroll. Launch apps from the Apps menu; pop a window out into its own browser window.
+
+</td>
+<td width="33%" valign="top">
+
+#### A fleet, not a session
+
+`reminal new deploy` spawns a named background session that survives your terminal closing. `reminal list`, `attach`, `rename`, `kill`, `prune` manage them by name, id, or fuzzy match. The web viewer's **Host panel** shows the machine's name, live CPU and memory, and spawns a fresh session on that host in one tap.
+
+</td>
+<td width="33%" valign="top">
+
+#### Files, ports, pings
+
+`reminal send` pushes a file to every viewer (browsers auto-download). `reminal copy` / `reminal paste` move a file between any two machines with a one-time code. `reminal expose 3000` gives a local port a public, PIN-gated URL. `reminal notify "build done"` raises a browser notification on every viewer.
 
 </td>
 </tr>
@@ -148,7 +174,7 @@ Wi-Fi drop, tunnel switch, walk into the elevator — reminal auto-reconnects wi
 
 #### Forgot something at home
 
-Laptop sleeping on the desk. Phone in your pocket on the train. Scan, run the command, lock it back up.
+Laptop sleeping on the desk. Phone in your pocket on the train. Scan, run the command, lock it back up. Need a GUI app? Mirror its window and click through it from the phone.
 
 </td>
 <td width="33%" valign="top">
@@ -162,11 +188,23 @@ Hotel Wi-Fi, café Wi-Fi, conference NAT — all block inbound. They all allow o
 
 #### Pair from anywhere
 
-Send a session ID and PIN to a teammate. They scan or paste. Live shared terminal. Hang up when done — no keys to revoke.
+Send a session ID and PIN to a teammate. They scan or paste. Live shared terminal — or a shared window mirror. Hang up when done — no keys to revoke.
 
 </td>
 </tr>
 </table>
+
+---
+
+## The window mirror, in brief
+
+Open **Windows** in the web viewer, pick any window on the host, and it streams live into a draggable pane:
+
+- **Fast.** A native ScreenCaptureKit helper captures and hardware-encodes frames in ~7 ms — up to ~30 fps when the picture is changing, 0 fps when it isn't (change detection is native). Falls back to a screenshot loop automatically where SCK can't see the window (locked screen, older macOS); the pane's ⓘ popover always tells you which path — and why.
+- **Peer-to-peer.** Frames ride a WebRTC DataChannel (DTLS) straight between browser and host; the relay only carries a rate-capped fallback for viewers that can't punch through — so speed never runs up relay costs. The popover shows the live transport.
+- **Fully interactive.** Clicks (double/triple runs preserved), right-click with real context menus, drag & drop, smooth trackpad-style scrolling, and keyboard input. On touch: one finger is a trackpad cursor, long-press grabs for drag, two fingers scroll, pinch zooms.
+
+<sub>Control injection requires the host Mac to be unlocked — `reminal settings` covers keeping it that way for remote use.</sub>
 
 ---
 
@@ -185,6 +223,7 @@ SSH leaves port 22 open, stores long-lived keys on disk, and trusts you to confi
 | **End-to-end encryption** | AES-256-GCM with a fresh random 256-bit session key per agent run. Distributed to each viewer via a PIN-authenticated X25519 handshake (EKE-style) — the relay never sees the key or anything offline-brute-forceable from it. |
 | **Forward-secret handshake** | Each WebSocket connection runs its own ephemeral X25519 exchange. Even if a future attacker recovers the PIN, recorded ciphertext stays unreadable. |
 | **Relay-blind** | Cloudflare Workers route ciphertext. A relay that records traffic cannot recover the session key offline — wrong PIN guesses are detectable only by attempting a full handshake online (one shot each, bounded by the 5-strike lockout). |
+| **P2P you can trust** | WebRTC signaling (SDP, ICE) rides inside the already-encrypted session channel, so the relay can't tamper with DTLS fingerprints — no man-in-the-middle window. Frames on the DataChannel are DTLS-protected end-to-end. |
 | **TLS in transit** | WSS / TLS on every hop in production. |
 
 ### Best practices
@@ -197,7 +236,7 @@ SSH leaves port 22 open, stores long-lived keys on disk, and trusts you to confi
 
 ## Self-host the relay (free, one time)
 
-The relay runs on **Cloudflare Workers + Durable Objects**. Free tier handles thousands of sessions a month.
+The relay runs on **Cloudflare Workers + Durable Objects**. Free tier handles thousands of sessions a month — and window frames go peer-to-peer, so the heavy traffic never touches it.
 
 ```bash
 cd cloudflare
@@ -232,15 +271,32 @@ REMINAL_LOCAL=1 reminal --connect <session_id> --pin <pin>
 
 | Command | What it does |
 |---|---|
-| `reminal` | Share this terminal session |
+| `reminal [--name <name>]` | Share this terminal session |
+| `reminal new [name]` | Spawn a fresh background session (detached — survives this terminal closing) |
+| `reminal list [filter] [-v]` | List sessions, recent-first; filter by id/name/cwd/title (`--idle`, `--viewers`, `--headless`) |
+| `reminal attach [id\|name]` | Re-connect to a local session as a viewer (no arg → interactive picker) |
 | `reminal connect <id-or-url> [pin]` | Connect to a remote session from your terminal (PIN prompted if omitted) |
-| `reminal info [--json]` | Reprint the session ID / PIN / URL / QR for the agent running on this machine (or JSON for scripts) |
-| `reminal qr` | Print just the join QR for the running agent (for a second screen) |
+| `reminal rename [id\|name] <new-name>` | Rename a running session (inside a session: `reminal rename <new-name>`) |
+| `reminal stop [id\|name\|port]` | Stop the reminal layer — kicks viewers, keeps your shell/server running |
+| `reminal kill [id\|name]` | Fully terminate a session (kills the shell — irreversible) |
+| `reminal prune [dur] [-y]` | Kill idle, unwatched sessions in one go (default idle ≥ 30m) |
+| `reminal restart [--all]` | Hot-swap the running agent(s) onto the latest binary — the shell stays alive |
+| `reminal expose <port> [--public]` | Forward a local HTTP port to a public URL (PIN-protected by default) |
+| `reminal send <file>` | Push a file to every connected viewer (web client auto-downloads) |
+| `reminal copy [--ttl <dur>] <file>` | Offer a file for pickup anywhere; prints a one-time code |
+| `reminal paste <code> [dest]` | Fetch a file offered by `reminal copy` on another machine |
+| `reminal notify <message>` | Push a notification to viewers (browser notification on web) |
+| `reminal connections` | List currently attached viewers with connect time |
+| `reminal info [id\|name] [--all] [--qr] [--json]` | Show connect details — ID / PIN / URL / QR |
+| `reminal qr [id\|name]` | Print just the join QR (for a second screen) |
+| `reminal settings` | Open the settings page (e.g. keep this Mac unlocked for remote control) |
 | `reminal doctor` | Self-diagnostic: version, relay reachability, terminal, shell |
 | `reminal completion <bash\|zsh\|fish>` | Print a shell completion script |
 | `reminal upgrade` | Upgrade to the latest release |
 | `reminal relay [port]` | Start a local relay (development only) |
-| `reminal version` | Print version |
+| `reminal version [--verbose]` | Print version |
+
+Sessions resolve by **exact id, exact name, unique id prefix, or unique substring** of name / cwd / title — `reminal attach deploy` just works.
 
 ### Environment variables
 
@@ -250,6 +306,8 @@ REMINAL_LOCAL=1 reminal --connect <session_id> --pin <pin>
 | `REMINAL_WEB` | Cloudflare web URL | Override the web UI URL shown in the banner |
 | `REMINAL_LOCAL` | — | Set to `1` to point everything at `localhost` |
 | `REMINAL_NO_KEEP_AWAKE` | — | Set to `1` to let the host sleep while reminal runs (defaults to keeping it awake via `caffeinate` / `systemd-inhibit`) |
+| `REMINAL_TURN` / `REMINAL_TURN_USER` / `REMINAL_TURN_PASS` | — | Optional TURN server for P2P window mirroring behind hostile NATs (or `REMINAL_TURN_CF_KEY` + `REMINAL_TURN_CF_TOKEN` for Cloudflare TURN). Without one, un-punchable viewers stay on the relay fallback |
+| `REMINAL_NO_CAPTURE_HELPER` | — | Set to `1` to force the screenshot capture path (skip the native ScreenCaptureKit helper) |
 | `REMINAL_DEBUG` | — | Set to `1` to append the raw error string to status lines, for diagnosing connection problems |
 | `SHELL` | `$SHELL`, then probes `/bin/zsh`, `/bin/bash`, `/bin/sh` | Which shell to spawn inside the session |
 
