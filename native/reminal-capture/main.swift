@@ -26,16 +26,65 @@ import ScreenCaptureKit
 
 // ---- args ----
 let args = CommandLine.arguments
+
+// Input-injection subcommand: `reminal-capture scroll <x> <y> <dx> <dy>` moves
+// the cursor to screen point (x,y) and posts a pixel scroll-wheel event there.
+// Lives here (compiled) because the agent's JXA path builds a scroll event
+// whose wheel deltas don't marshal — it posts as a silent no-op, so scrolling a
+// mirrored window from a viewer did nothing. dx/dy use CGEvent convention
+// (positive = up/left); the agent pre-negates from DOM deltas.
+if args.count >= 2, args[1] == "scroll" {
+    guard args.count >= 6, let x = Double(args[2]), let y = Double(args[3]),
+          let dy = Int32(args[4]), let dx = Int32(args[5]) else {
+        FileHandle.standardError.write(Data("usage: reminal-capture scroll <x> <y> <dy> <dx>\n".utf8))
+        exit(2)
+    }
+    let src = CGEventSource(stateID: .hidSystemState)
+    if let mv = CGEvent(mouseEventSource: src, mouseType: .mouseMoved,
+                        mouseCursorPosition: CGPoint(x: x, y: y), mouseButton: .left) {
+        mv.post(tap: .cghidEventTap)
+    }
+    // Modern macOS apps IGNORE phase-less synthetic scroll events (verified on
+    // 14.8: plain wheel events in line or pixel units do nothing) — they only
+    // honor trackpad-style gestures: continuous events carrying a scroll-phase
+    // sequence. Post each call as a minimal gesture: began → changed → ended.
+    func phasedScroll(_ phase: Int64, _ w1: Int32, _ w2: Int32) {
+        guard let e = CGEvent(scrollWheelEvent2Source: src, units: .pixel,
+                              wheelCount: 2, wheel1: w1, wheel2: w2, wheel3: 0) else { return }
+        e.setIntegerValueField(.scrollWheelEventIsContinuous, value: 1)
+        e.setIntegerValueField(.scrollWheelEventScrollPhase, value: phase)
+        e.post(tap: .cghidEventTap)
+    }
+    phasedScroll(1, dy / 2, dx / 2) // began
+    phasedScroll(2, dy - dy / 2, dx - dx / 2) // changed (remainder — full delta total)
+    phasedScroll(4, 0, 0) // ended
+    exit(0)
+}
+
 guard args.count >= 2, let windowID = UInt32(args[1]) else {
-    FileHandle.standardError.write(Data("usage: reminal-capture <windowID> [maxWidth] [quality]\n".utf8))
+    FileHandle.standardError.write(Data("usage: reminal-capture <windowID> [maxWidth] [quality] [fps]\n".utf8))
     exit(2)
 }
 let maxWidth = args.count >= 3 ? (Int(args[2]) ?? 1100) : 1100
 let quality = args.count >= 4 ? (Double(args[3]) ?? 45) / 100.0 : 0.45
 let fps = args.count >= 5 ? max(1, min(60, Int(args[4]) ?? 60)) : 60
 
+// frameByteBudget bounds each JPEG so its base64-in-JSON envelope stays well
+// under every browser's DataChannel maxMessageSize (140_000 × 1.34 + overhead
+// ≈ 188 KiB < Chrome's 256 KiB). See the encode loop in FrameOutput.
+let frameByteBudget = 140_000
+
 let ciContext = CIContext(options: [.useSoftwareRenderer: false])
 let stdoutHandle = FileHandle.standardOutput
+
+// encodeJPEG compresses cg at the given quality via ImageIO's hardware path.
+func encodeJPEG(_ cg: CGImage, _ quality: Double) -> Data? {
+    let out = NSMutableData()
+    guard let dest = CGImageDestinationCreateWithData(out, "public.jpeg" as CFString, 1, nil) else { return nil }
+    CGImageDestinationAddImage(dest, cg, [kCGImageDestinationLossyCompressionQuality: quality] as CFDictionary)
+    guard CGImageDestinationFinalize(dest) else { return nil }
+    return out as Data
+}
 // Serialize writes: the sample handler queue is single-threaded here, but keep a
 // dedicated lock so a future multi-output setup can't interleave frame bytes.
 let writeLock = NSLock()
@@ -83,18 +132,27 @@ final class FrameOutput: NSObject, SCStreamOutput, SCStreamDelegate {
         let ciImage = CIImage(cvImageBuffer: pixelBuffer)
         guard let cgImage = ciContext.createCGImage(ciImage, from: ciImage.extent) else { return }
 
-        let data = NSMutableData()
-        guard let dest = CGImageDestinationCreateWithData(data, "public.jpeg" as CFString, 1, nil) else { return }
-        CGImageDestinationAddImage(dest, cgImage, [kCGImageDestinationLossyCompressionQuality: quality] as CFDictionary)
-        guard CGImageDestinationFinalize(dest), data.length > 0 else { return }
+        // Encode under a byte budget: frames ride a WebRTC DataChannel as
+        // base64-in-JSON (~1.34× the JPEG), and a peer CLOSES the channel on any
+        // message above its maxMessageSize (Chrome 256 KiB, some browsers 64 KiB
+        // — the spec says kill, not drop). A photo-heavy window at the base
+        // quality can blow past that, so step quality down until the frame fits
+        // — a briefly softer picture beats a dead transport.
+        var q = quality
+        var data = encodeJPEG(cgImage, q)
+        while let d = data, d.count > frameByteBudget, q > 0.18 {
+            q *= 0.65
+            data = encodeJPEG(cgImage, q)
+        }
+        guard let jpeg = data, !jpeg.isEmpty else { return }
 
-        var lenBE = UInt32(data.length).bigEndian
+        var lenBE = UInt32(jpeg.count).bigEndian
         writeLock.lock()
         defer { writeLock.unlock() }
         // A closed pipe (agent stopped the stream) throws — exit quietly.
         do {
             try stdoutHandle.write(contentsOf: Data(bytes: &lenBE, count: 4))
-            try stdoutHandle.write(contentsOf: data as Data)
+            try stdoutHandle.write(contentsOf: jpeg)
         } catch {
             exit(0)
         }

@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	"github.com/pion/webrtc/v4"
 	"github.com/reminal/reminal/internal/keepawake"
 	"github.com/reminal/reminal/internal/protocol"
 )
@@ -684,348 +685,509 @@ func wsSinkNeeded(viewerCount, confirmed int) bool {
 	return confirmed == 0 || viewerCount <= 0 || viewerCount > confirmed
 }
 
+// helperRetryCooldown is how long a stream waits before re-attempting the
+// native capture helper after it failed to start or died. A helper failure —
+// SCK transiently losing the window (moved to another Space, minimized), a
+// crash — used to demote the stream to the ~5fps screencapture path silently
+// and PERMANENTLY; now it just degrades until the next retry succeeds.
+const helperRetryCooldown = 10 * time.Second
+
+// winSinks is the resolved set of destinations for ONE frame — the single
+// source of truth for who receives it. Every throttle (the billed-WS rate cap,
+// the probe cadence) is applied during resolution, so "will anyone take this
+// frame" and the actual sends can never disagree. They once could: probing
+// channels passed the send gate while the probe throttle skipped the send, so
+// seq inflated ~30/s with nothing delivered, the viewer's acks fell permanently
+// behind, and the in-flight gate degraded a healthy stream to a few fps.
+type winSinks struct {
+	confirmed []*webrtc.DataChannel // proven channels — get every frame
+	probe     []*webrtc.DataChannel // unproven — at most one frame per winProbeFrame
+	ws        bool                  // billed relay — at most one frame per wsFrameMinInterval
+}
+
+func (s winSinks) any() bool { return len(s.confirmed) > 0 || len(s.probe) > 0 || s.ws }
+
+// expectsAck reports whether a frame sent to these sinks should produce a
+// viewer ack: true only for proven receivers (confirmed P2P, or the relay). A
+// probe-only send doesn't count — the channel is unproven, and the demote logic
+// must only punish silence from viewers that demonstrably received frames.
+func (s winSinks) expectsAck() bool { return len(s.confirmed) > 0 || s.ws }
+
+// winStream is the state machine for one mirrored window. One runs per
+// streamed id (see startWindowStream); all fields are goroutine-local.
+type winStream struct {
+	a    *Agent
+	b    windowBackend
+	w    winInfo
+	stop <-chan struct{}
+	ack  <-chan uint64
+
+	// Frame source: the native SCK helper when available (hardware capture +
+	// JPEG at winHelperFPS with its own change detection), else per-frame
+	// screencapture. capNative reports which produced the CURRENT frame;
+	// helperErr is why the helper isn't running (stamped onto fallback frames
+	// so the viewer's popover can say WHY it's on the slow path — usually a
+	// locked screen or a window SCK can't see).
+	helper        *winHelper
+	helperRetryAt time.Time
+	helperErr     string
+	capNative     bool
+
+	// Ack pacing: seq stamps sent frames, acked tracks the viewer's highest
+	// confirmation. sentSinceAck counts ack-expected frames sent since the last
+	// consumed ack — the demote evidence (see dispatch).
+	seq, acked   uint64
+	lastAck      time.Time
+	gotAnyAck    bool
+	sentSinceAck int
+
+	// Change detection for the screencapture path (the helper does its own).
+	// The pending signature is committed only when the frame is actually sent —
+	// committing on detection would mark a skipped frame "already seen" and
+	// silently drop its content.
+	lastSig, pendingSig   frameSig
+	haveSig, pendingSigOK bool
+
+	// Cadence stamps.
+	lastSent     time.Time // last frame OR heartbeat (paces both)
+	lastWSFrame  time.Time // billed-relay rate cap
+	lastProbe    time.Time // probe-frame cadence
+	lastGeoCheck time.Time // window liveness / geometry poll
+	lastImg      []byte    // newest frame — lets a probe go out while idle
+	fails        int       // consecutive capture failures while the window exists
+}
+
+// streamWindow captures w and streams JPEG frames to viewers until stop closes
+// or the connection goes away. Frames ride confirmed P2P DataChannels at the
+// full capture rate and the billed WS relay at a capped rate (wsFrameMinInterval)
+// for viewers without P2P; unproven channels get one probe frame a second until
+// the viewer acks one over them. The stream is ack-paced: at most
+// maxFramesInFlight unacknowledged frames, so latency can't accumulate on a
+// slow link and the rate adapts to what the viewer actually consumes.
 func (a *Agent) streamWindow(w winInfo, stop <-chan struct{}, ack <-chan uint64) {
-	b := a.windows()
-	defer func() {
-		a.winMu.Lock()
-		if ch, ok := a.winStreams[w.ID]; ok && ch == stop {
-			delete(a.winStreams, w.ID)
-			delete(a.winAck, w.ID)
-		}
-		delete(a.winMenu, w.ID) // don't leak the right-click region-capture entry
-		// A stream that exits on its own — window closed, viewer went silent —
-		// bypasses stopWindowStream, so it must release the keep-awake inhibitor
-		// itself when it's the last one; otherwise a window closing under mirror
-		// pins the host display awake (never idle-locks) forever. Only release if
-		// we actually removed the last stream (a replaced id leaves the map non-
-		// empty, so the check below is false and the new stream keeps the hold).
-		var release func()
-		if len(a.winStreams) == 0 && a.winAwake != nil {
-			release, a.winAwake = a.winAwake, nil
-		}
-		a.winMu.Unlock()
-		if release != nil {
-			release()
-		}
-	}()
-	var seq, acked uint64 // last frame sent, and highest the viewer confirmed
-	var fails int         // consecutive capture failures while the window exists
-	var lastSig frameSig
-	var haveSig bool
-	var lastSent time.Time      // when we last sent a frame OR heartbeat (paces both)
-	var lastAck time.Time       // when the viewer last genuinely acked a frame
-	var gotAnyAck bool          // has this viewer ever acked (arms the idle stop)?
-	var sentSinceAck int        // real frames sent with no ack consumed since — see the demote check
-	var lastWSFrame time.Time   // rate-limits the billed WS path independently of P2P
-	lastLiveCheck := time.Now() // last time we verified a static window still exists
+	s := &winStream{a: a, b: a.windows(), w: w, stop: stop, ack: ack, lastGeoCheck: time.Now()}
+	defer s.cleanup()
+	s.run()
+}
 
-	// Prefer the native ScreenCaptureKit helper (hardware capture + JPEG, ~30fps,
-	// its own change-detection) as the frame source. Fall back to the per-frame
-	// screencapture path when it's unavailable — non-macOS, older macOS, no Screen
-	// Recording permission, helper binary missing, or REMINAL_NO_CAPTURE_HELPER.
-	var helper *winHelper
-	// Closure, not `defer helper.stop()`: the resize path below replaces the
-	// helper mid-stream, and a plain defer would capture (and stop) only the
-	// original one, leaking its successor.
-	defer func() {
-		if helper != nil {
-			helper.stop()
-		}
-	}()
-	if os.Getenv("REMINAL_NO_CAPTURE_HELPER") == "" {
-		if h, err := startWinHelper(w.ID, winMaxWidth, winCaptureQuality, winHelperFPS); err == nil {
-			helper = h
-		}
+// cleanup clears the stream's map entry (unless already replaced) so the id can
+// be re-streamed, drops any right-click region-capture entry, releases the
+// keep-awake inhibitor when this was the last stream, and stops the helper.
+func (s *winStream) cleanup() {
+	if s.helper != nil {
+		s.helper.stop()
 	}
-	var lastProbe time.Time // throttles full frames to unconfirmed DataChannels
+	a := s.a
+	a.winMu.Lock()
+	if ch, ok := a.winStreams[s.w.ID]; ok && ch == s.stop {
+		delete(a.winStreams, s.w.ID)
+		delete(a.winAck, s.w.ID)
+	}
+	delete(a.winMenu, s.w.ID)
+	// A stream that exits on its own — window closed, viewer went silent —
+	// bypasses stopWindowStream, so it must release the keep-awake inhibitor
+	// itself when it's the last one; otherwise a window closing under mirror
+	// pins the host display awake forever. Only release if we actually removed
+	// the last stream (a replaced id leaves the map non-empty).
+	var release func()
+	if len(a.winStreams) == 0 && a.winAwake != nil {
+		release, a.winAwake = a.winAwake, nil
+	}
+	a.winMu.Unlock()
+	if release != nil {
+		release()
+	}
+}
 
+func (s *winStream) run() {
 	for {
-		conn := a.liveConn()
+		conn := s.a.liveConn()
 		if conn == nil {
 			return
 		}
-		// Drain any acks that arrived since last iteration BEFORE the in-flight
-		// gate. Acks used to be consumed only inside the gate (which is entered
-		// only when 2+ frames are outstanding), so lastAck could go stale while
-		// the viewer was acking perfectly — and the demote check below then
-		// misread the stale timestamp as a dead channel.
-		for {
-			select {
-			case s := <-ack:
-				if s > acked {
-					acked = s
-				}
-				lastAck, gotAnyAck, sentSinceAck = time.Now(), true, 0
-				continue
-			default:
-			}
-			break
-		}
-		// Hold once maxFramesInFlight frames are outstanding (bounded by the
-		// timeout), so we never outrun the viewer by more than that — latency
-		// stays bounded instead of accumulating on a slow link.
-		for seq-acked >= maxFramesInFlight {
-			select {
-			case s := <-ack:
-				if s > acked {
-					acked = s
-				}
-				lastAck, gotAnyAck, sentSinceAck = time.Now(), true, 0
-			case <-time.After(ackWaitTimeout):
-				// A viewer that was acking has gone silent — it vanished without
-				// a clean close and the relay hasn't reported count==0 yet. Stop
-				// rather than stream to nobody (see streamAckIdleTimeout).
-				if gotAnyAck && time.Since(lastAck) > streamAckIdleTimeout {
-					return
-				}
-				acked = seq // assume delivered; keep the stream moving
-			case <-stop:
-				return
-			}
+		s.drainAcks()
+		if !s.waitCapacity() {
+			return
 		}
 		start := time.Now()
-		// While a right-click's context menu is up, capture the window's screen
-		// region so the menu (a separate OS window overlapping this one) is in the
-		// frame. The region matches the window's bounds, so frame size and click
-		// mapping are unchanged; an expired entry falls back to per-window capture.
-		a.winMu.Lock()
-		menu, menuActive := a.winMenu[w.ID]
-		if menuActive && time.Now().After(menu.until) {
-			delete(a.winMenu, w.ID)
-			menuActive = false
-		}
-		a.winMu.Unlock()
-		var img []byte
-		var err error
-		// The helper can't do the right-click region grab (it captures one window
-		// by id), so a menu falls back to screencapture for its brief hold.
-		usingHelper := helper != nil && !menuActive
-		if usingHelper && !helper.alive() {
-			helper.stop() // died mid-stream — screencapture from here on
-			helper = nil
-			usingHelper = false
-		}
-		if usingHelper {
-			// Push model: block up to winHeartbeat for a fresh frame. The helper
-			// only emits frames whose picture changed, so anything it returns is
-			// new content; a timeout means the window was static this interval.
-			img, _ = helper.next(stop, winHeartbeat)
-		} else if menuActive {
-			img, err = b.captureRegion(menu.x, menu.y, menu.w, menu.h)
-		} else {
-			img, err = b.capture(w)
-		}
-
-		// An unchanged window sends NO frame at all (0 fps) — only a tiny heartbeat
-		// every winHeartbeat so the viewer knows the host is alive. A frame goes out
-		// only when the picture actually changes. The helper decides "changed" for
-		// us (a returned frame IS a change); the screencapture path compares coarse
-		// frame signatures.
-		var sig frameSig
-		var sigOK bool
-		captureFailed := false
-		changed := false
+		img, err := s.capture()
 		switch {
-		case usingHelper:
-			changed = len(img) > 0
-			fails = 0
-		case err == nil && len(img) > 0:
-			fails = 0
-			sig, sigOK = frameSignature(img)
-			changed = !sigOK || !haveSig || sigDiffers(lastSig, sig)
+		case err != nil || (len(img) == 0 && !s.capNative):
+			// No pixels from the subprocess path: closed window, or capture
+			// genuinely broken (permissions). The helper path never lands here —
+			// an empty helper read just means "no change this interval".
+			if !s.captureFailure(conn, err) {
+				return
+			}
 		default:
-			captureFailed = true
+			s.fails = 0
+			changed := s.detectChange(img)
+			if len(img) > 0 {
+				s.lastImg = img
+			}
+			if !s.checkWindow(conn, changed) {
+				return
+			}
+			s.dispatch(conn, changed)
 		}
-
-		if !captureFailed {
-			// A closed window keeps capturing its LAST frame for a while (macOS
-			// retains the backing store) instead of erroring, so a static picture
-			// alone can't tell "idle" from "gone" — the closed-check below only
-			// fires on a capture failure that may never come. While nothing is
-			// changing, periodically confirm the window is still listed (the same
-			// on-screen list the picker uses); if it isn't, it was closed/minimized
-			// — drop the pane instead of freezing on the last frame forever.
-			switch {
-			case usingHelper:
-				// The helper scales into its start-time output size, so a window
-				// resized mid-stream would render distorted forever; and resizes
-				// happen precisely WHILE frames are flowing, so this poll can't
-				// hide in the static branch below. On a slow cadence re-find the
-				// window: gone → drop the pane; bounds moved → restart the helper
-				// at the new geometry (also refreshes the W/H stamped on frames).
-				if time.Since(lastLiveCheck) >= 2*winLiveCheck {
-					lastLiveCheck = time.Now()
-					cur, ferr := findWindow(b, w.ID)
-					if ferr != nil {
-						a.sendWindowClosed(conn, w.ID)
-						return
-					}
-					if absInt(cur.W-w.W) > 8 || absInt(cur.H-w.H) > 8 {
-						helper.stop()
-						helper = nil
-						w = cur
-						if h, herr := startWinHelper(w.ID, winMaxWidth, winCaptureQuality, winHelperFPS); herr == nil {
-							helper = h
-						}
-					} else {
-						w = cur
-					}
-				}
-			case changed:
-				lastLiveCheck = time.Now()
-			case time.Since(lastLiveCheck) >= winLiveCheck:
-				lastLiveCheck = time.Now()
-				if !b.exists(w.ID) {
-					a.sendWindowClosed(conn, w.ID)
-					return
-				}
-			}
-			confirmed, probing := a.rtcSinks()
-			a.viewerSizeMu.Lock()
-			vc := a.viewerCount
-			a.viewerSizeMu.Unlock()
-			// Send a real frame when the picture changed, OR periodically while a
-			// channel is open-but-unconfirmed so a static window can still prove
-			// the channel (else P2P would never engage on an idle window). Probing
-			// needs a frame in hand — a helper timeout hands back none.
-			probeFrame := len(img) > 0 && len(confirmed) == 0 && len(probing) > 0 && time.Since(lastSent) >= winProbeFrame
-			// The WS relay is the billed path, so cap its frame rate independently
-			// of the (unbounded) P2P DataChannel rate — see wsFrameMinInterval.
-			wsReady := wsSinkNeeded(vc, len(confirmed)) && time.Since(lastWSFrame) >= wsFrameMinInterval
-			// Only advance seq / encode when a sink will actually take this frame.
-			// Bumping seq for a frame sent to nobody (WS-capped this instant AND no
-			// P2P channel) would let seq outrun the viewer's acks and stall the
-			// in-flight gate — so drop it and grab a fresher frame next tick. With a
-			// confirmed/probing DataChannel this is always true, so P2P still gets
-			// every frame.
-			if (changed || probeFrame) && len(img) > 0 && (len(confirmed) > 0 || len(probing) > 0 || wsReady) {
-				seq++
-				frame := struct {
-					ID  string `json:"id"`
-					W   int    `json:"w"`
-					H   int    `json:"h"`
-					Seq uint64 `json:"seq"`
-					Img string `json:"img"` // base64 JPEG
-				}{ID: w.ID, W: w.W, H: w.H, Seq: seq, Img: base64.StdEncoding.EncodeToString(img)}
-				// Verify-before-switch: frames go over a DataChannel ONLY once it's
-				// confirmed to deliver them (the viewer acked one over it). Until
-				// then WS carries frames and any open channel is probed in parallel,
-				// so a channel that connects but can't carry frames (cellular MTU)
-				// never causes a stall.
-				//
-				// Demote only when the viewer HAD frames to ack and didn't:
-				// several real frames sent since the last consumed ack, and 6+
-				// seconds of silence. Gating on elapsed time alone flickered the
-				// transport on every idle window: no frames sent → no acks → a
-				// stale lastAck — and the first frame after the pause falsely
-				// demoted a perfectly healthy channel, dropping the stream to the
-				// capped WS rate until the 1/s probe re-confirmed it, over and
-				// over (visible as a WS↔P2P rate oscillation on idle-prone
-				// windows like terminals, with no actual network change).
-				if gotAnyAck && sentSinceAck >= 3 && time.Since(lastAck) > streamAckIdleTimeout/2 {
-					a.unconfirmRTC()
-					confirmed, probing = a.rtcSinks()
-					// A demoted viewer now needs WS — re-check the WS gate.
-					wsReady = wsSinkNeeded(vc, len(confirmed)) && time.Since(lastWSFrame) >= wsFrameMinInterval
-				}
-				if raw, mErr := json.Marshal(frame); mErr == nil {
-					for _, dc := range confirmed {
-						_ = dc.Send(raw)
-					}
-					// Also carry the frame over WS whenever a viewer isn't on a
-					// confirmed DataChannel (a WS-only viewer, or none confirmed
-					// yet). Sending ONLY to confirmed DCs froze every other viewer.
-					// WS is skipped only when every viewer is confirmed on P2P, so
-					// an all-P2P set still keeps frames off the billed relay.
-					//
-					// The WS relay is the billed path, so it's rate-capped to
-					// wsFrameMinInterval independently of the (unbounded) P2P rate:
-					// a fast native-capture stream never raises Cloudflare cost,
-					// while P2P viewers still get every frame.
-					if wsReady {
-						a.sendWindowMsg(conn, protocol.TypeWindowFrame, frame)
-						lastWSFrame = time.Now()
-					}
-					// Probe unconfirmed channels at winProbeFrame cadence, not per
-					// frame: with the 30fps helper, per-frame probing would pump
-					// ~3MB/s into a channel that may be black-holing (pion buffers
-					// sends unboundedly). One frame a second still confirms a
-					// working channel promptly.
-					if len(probing) > 0 && time.Since(lastProbe) >= winProbeFrame {
-						for _, dc := range probing {
-							_ = dc.Send(raw) // probe: prove it can carry a frame
-						}
-						lastProbe = time.Now()
-					}
-				}
-				// The screencapture path tracks the last frame's signature to detect
-				// change; the helper does its own change-detection, so there's none.
-				if !usingHelper {
-					lastSig, haveSig = sig, sigOK
-				}
-				sentSinceAck++
-				lastSent = time.Now()
-			} else if time.Since(lastSent) >= winHeartbeat {
-				// Idle: no frame, just a few-byte liveness ping over the current
-				// transport. Not acked and doesn't confirm a channel (only a real
-				// frame's ack can) — it just keeps the viewer's overlay quiet.
-				hb := struct {
-					ID string `json:"id"`
-					HB bool   `json:"hb"`
-				}{ID: w.ID, HB: true}
-				if raw, mErr := json.Marshal(hb); mErr == nil {
-					for _, dc := range confirmed {
-						_ = dc.Send(raw)
-					}
-					if wsSinkNeeded(vc, len(confirmed)) {
-						a.sendWindowMsg(conn, protocol.TypeWindowFrame, hb)
-					}
-					for _, dc := range probing {
-						_ = dc.Send(raw)
-					}
-				}
-				lastSent = time.Now()
-			}
-		} else if !b.exists(w.ID) {
-			// Capture failed and the window is gone from the list — it was closed
-			// on the host. Tell the viewer to drop its pane, then stop.
-			a.sendWindowClosed(conn, w.ID)
-			return
-		} else {
-			// The window's still there but we're getting no pixels. Rather than
-			// leave a silent blank/frozen pane, tell the viewer why (once it's
-			// clearly persistent, then occasionally in case a frame was missed).
-			// The usual macOS cause is missing Screen Recording permission.
-			fails++
-			if fails == 4 || fails%64 == 0 {
-				msg := b.permissionHint()
-				if msg == "" {
-					if err != nil {
-						msg = "Couldn't capture this window: " + err.Error()
-					} else {
-						msg = "Couldn't capture this window."
-					}
-				}
-				a.sendWindowMsg(conn, protocol.TypeWindowFrame, struct {
-					ID    string `json:"id"`
-					Error string `json:"error"`
-				}{ID: w.ID, Error: msg})
-			}
-		}
-		// Floor the period so a fast capture + instant ack can't peg a core.
-		// Skipped on the helper path: next() already blocks until SCK delivers
-		// (paced at winHelperFPS by the helper itself), and flooring on top of
-		// that silently capped P2P at ~16fps instead of the native rate.
-		if !usingHelper {
+		// Floor the loop period so a cheap subprocess capture with instant acks
+		// can't spin a core. The helper path self-paces (next blocks until SCK
+		// delivers, at most winHelperFPS), so flooring it would only cap P2P.
+		if !s.capNative {
 			if rem := windowFrameInterval - time.Since(start); rem > 0 {
 				select {
-				case <-stop:
+				case <-s.stop:
 					return
 				case <-time.After(rem):
 				}
 			}
 		}
 	}
+}
+
+// consumeAck folds one viewer ack into the pacing state.
+func (s *winStream) consumeAck(v uint64) {
+	if v > s.acked {
+		s.acked = v
+	}
+	s.lastAck, s.gotAnyAck, s.sentSinceAck = time.Now(), true, 0
+}
+
+// drainAcks consumes every ack that arrived since the last iteration, without
+// blocking. Draining only inside the in-flight gate (which is entered when 2+
+// frames are outstanding) let lastAck go stale while the viewer was acking
+// perfectly — which the demote logic then misread as a dead channel.
+func (s *winStream) drainAcks() {
+	for {
+		select {
+		case v := <-s.ack:
+			s.consumeAck(v)
+		default:
+			return
+		}
+	}
+}
+
+// waitCapacity blocks while maxFramesInFlight frames are unacknowledged, so we
+// never outrun the viewer by more than that — latency stays bounded instead of
+// accumulating on a slow link. Returns false when the stream should end: stop
+// closed, or a viewer that used to ack has been silent past
+// streamAckIdleTimeout (it vanished uncleanly; don't stream to nobody).
+func (s *winStream) waitCapacity() bool {
+	for s.seq-s.acked >= maxFramesInFlight {
+		select {
+		case v := <-s.ack:
+			s.consumeAck(v)
+		case <-time.After(ackWaitTimeout):
+			if s.gotAnyAck && time.Since(s.lastAck) > streamAckIdleTimeout {
+				return false
+			}
+			s.acked = s.seq // assume delivered; keep the stream moving
+		case <-s.stop:
+			return false
+		}
+	}
+	return true
+}
+
+// ensureHelper keeps the native capture helper alive: reaps one that died and
+// (re)starts it, subject to helperRetryCooldown after a failure.
+func (s *winStream) ensureHelper() {
+	if os.Getenv("REMINAL_NO_CAPTURE_HELPER") != "" {
+		return
+	}
+	if s.helper != nil {
+		if s.helper.alive() {
+			return
+		}
+		msg := strings.TrimSpace(s.helper.stderr.String())
+		if msg == "" {
+			msg = "capture helper exited"
+		}
+		s.helperErr = msg
+		s.helper.stop()
+		s.helper = nil
+		s.helperRetryAt = time.Now().Add(helperRetryCooldown)
+	}
+	if time.Now().Before(s.helperRetryAt) {
+		return
+	}
+	if h, err := startWinHelper(s.w.ID, winMaxWidth, winCaptureQuality, winHelperFPS); err == nil {
+		s.helper = h
+		s.helperErr = ""
+	} else {
+		s.helperErr = err.Error()
+		s.helperRetryAt = time.Now().Add(helperRetryCooldown)
+	}
+}
+
+// activeMenu returns the window's live right-click region-capture entry, if the
+// hold hasn't expired (see handleWindowInput's right-click path).
+func (a *Agent) activeMenu(id string) (winMenuState, bool) {
+	a.winMu.Lock()
+	defer a.winMu.Unlock()
+	m, ok := a.winMenu[id]
+	if ok && time.Now().After(m.until) {
+		delete(a.winMenu, id)
+		return m, false
+	}
+	return m, ok
+}
+
+// capture produces the next frame. Helper path: blocks up to winHeartbeat for a
+// changed frame (an empty result = the window was static this interval).
+// Subprocess path (helper unavailable, or a context menu needs a region grab):
+// one screencapture, change-detected by the caller via frame signatures.
+func (s *winStream) capture() (img []byte, err error) {
+	menu, menuActive := s.a.activeMenu(s.w.ID)
+	s.ensureHelper()
+	if s.helper != nil && !menuActive {
+		s.capNative = true
+		img, _ = s.helper.next(s.stop, winHeartbeat)
+		return img, nil
+	}
+	s.capNative = false
+	if menuActive {
+		return s.b.captureRegion(menu.x, menu.y, menu.w, menu.h)
+	}
+	return s.b.capture(s.w)
+}
+
+// detectChange reports whether img is new content. The helper only ever emits
+// changed frames; the subprocess path compares coarse frame signatures.
+func (s *winStream) detectChange(img []byte) bool {
+	if len(img) == 0 {
+		return false
+	}
+	if s.capNative {
+		return true
+	}
+	sig, ok := frameSignature(img)
+	s.pendingSig, s.pendingSigOK = sig, ok
+	return !ok || !s.haveSig || sigDiffers(s.lastSig, sig)
+}
+
+// checkWindow verifies the mirrored window still exists (drop the pane if not)
+// and, on the helper path, that its geometry hasn't changed — the helper scales
+// into its start-time output size, so a resized window would render distorted
+// forever. The geometry poll runs even while frames flow (that's exactly when
+// resizes happen); the subprocess path polls existence only while static, as a
+// closed window there keeps "capturing" its retained backing store instead of
+// erroring. Returns false when the stream should end.
+func (s *winStream) checkWindow(conn *websocket.Conn, changed bool) bool {
+	if s.capNative {
+		if time.Since(s.lastGeoCheck) < 2*winLiveCheck {
+			return true
+		}
+		s.lastGeoCheck = time.Now()
+		cur, err := findWindow(s.b, s.w.ID)
+		if err != nil {
+			s.a.sendWindowClosed(conn, s.w.ID)
+			return false
+		}
+		resized := absInt(cur.W-s.w.W) > 8 || absInt(cur.H-s.w.H) > 8
+		s.w = cur
+		if resized && s.helper != nil {
+			s.helper.stop()
+			s.helper = nil
+			if h, err := startWinHelper(s.w.ID, winMaxWidth, winCaptureQuality, winHelperFPS); err == nil {
+				s.helper = h
+			} else {
+				s.helperRetryAt = time.Now().Add(helperRetryCooldown)
+			}
+		}
+		return true
+	}
+	if changed {
+		s.lastGeoCheck = time.Now()
+		return true
+	}
+	if time.Since(s.lastGeoCheck) < winLiveCheck {
+		return true
+	}
+	s.lastGeoCheck = time.Now()
+	if !s.b.exists(s.w.ID) {
+		s.a.sendWindowClosed(conn, s.w.ID)
+		return false
+	}
+	return true
+}
+
+// captureFailure handles a subprocess capture that produced no pixels: a closed
+// window ends the stream; anything else (usually missing Screen Recording
+// permission) surfaces a message to the viewer instead of a silent frozen pane.
+// Returns false when the stream should end.
+func (s *winStream) captureFailure(conn *websocket.Conn, err error) bool {
+	if !s.b.exists(s.w.ID) {
+		s.a.sendWindowClosed(conn, s.w.ID)
+		return false
+	}
+	s.fails++
+	if s.fails == 4 || s.fails%64 == 0 {
+		msg := s.b.permissionHint()
+		if msg == "" {
+			if err != nil {
+				msg = "Couldn't capture this window: " + err.Error()
+			} else {
+				msg = "Couldn't capture this window."
+			}
+		}
+		s.a.sendWindowMsg(conn, protocol.TypeWindowFrame, struct {
+			ID    string `json:"id"`
+			Error string `json:"error"`
+		}{ID: s.w.ID, Error: msg})
+	}
+	return true
+}
+
+// dispatch decides what this iteration sends: a frame (when the picture changed
+// and a sink will take it, or an unproven channel is due a probe), else a
+// heartbeat when it's time. All send-rate decisions live in the sink resolution
+// here — nowhere else.
+func (s *winStream) dispatch(conn *websocket.Conn, changed bool) {
+	confirmed, probing := s.a.rtcSinks()
+	vc := s.a.currentViewerCount()
+
+	// Demote confirmed channels only on EVIDENCE of a dead link: several
+	// ack-expected frames sent since the last consumed ack, and sustained
+	// silence. (Elapsed time alone falsely demoted after every idle pause — no
+	// frames sent means no acks arrive — flapping the transport with no actual
+	// network change.)
+	if s.gotAnyAck && s.sentSinceAck >= 3 && time.Since(s.lastAck) > streamAckIdleTimeout/2 {
+		s.a.unconfirmRTC()
+		confirmed, probing = s.a.rtcSinks()
+	}
+
+	probeDue := len(probing) > 0 && time.Since(s.lastProbe) >= winProbeFrame
+	wsDue := wsSinkNeeded(vc, len(confirmed)) && time.Since(s.lastWSFrame) >= wsFrameMinInterval
+
+	var sinks winSinks
+	if changed {
+		sinks = winSinks{confirmed: confirmed, ws: wsDue}
+		if probeDue {
+			sinks.probe = probing
+		}
+	} else if probeDue && len(confirmed) == 0 {
+		// Static window with an unproven channel: re-send the newest frame so
+		// the channel can still prove itself (heartbeats aren't confirmable —
+		// only a frame ack over the channel is). Without this, P2P could never
+		// engage on a window that isn't changing.
+		sinks = winSinks{probe: probing}
+	}
+
+	if sinks.any() && len(s.lastImg) > 0 {
+		s.sendFrame(conn, sinks)
+		return
+	}
+	// A changed frame with every sink throttled out this instant is simply
+	// dropped — seq must not advance for a frame nobody receives (the viewer's
+	// acks would fall behind and stall the in-flight gate); the next iteration
+	// captures fresher content anyway.
+	if time.Since(s.lastSent) >= winHeartbeat {
+		s.sendHeartbeat(conn, confirmed, probing, vc)
+	}
+}
+
+// winDCMaxMsg is the largest frame message the agent will put on a WebRTC
+// DataChannel. A peer CLOSES the channel outright on any message above its
+// maxMessageSize (Chrome 256 KiB; the spec mandates kill, not drop) — which
+// showed up as the mirror spontaneously "falling back to relay" whenever the
+// window content got busy enough to fatten a frame past the limit. The native
+// helper already encodes under a byte budget; this is the hard backstop for the
+// screencapture fallback path, which can't cheaply re-encode.
+const winDCMaxMsg = 192 << 10
+
+// sendFrame stamps and ships the newest frame to exactly the resolved sinks.
+func (s *winStream) sendFrame(conn *websocket.Conn, sinks winSinks) {
+	capSrc := "shot"
+	if s.capNative {
+		capSrc = "native"
+	}
+	capErr := ""
+	if !s.capNative && s.helperErr != "" {
+		// Why we're on the slow path — shown in the (i) popover. Bounded: SCK
+		// error strings can ramble.
+		capErr = s.helperErr
+		if len(capErr) > 120 {
+			capErr = capErr[:120] + "…"
+		}
+	}
+	frame := struct {
+		ID     string `json:"id"`
+		W      int    `json:"w"`
+		H      int    `json:"h"`
+		Seq    uint64 `json:"seq"`
+		Cap    string `json:"cap,omitempty"`     // capture source, shown in the (i) popover
+		CapErr string `json:"cap_err,omitempty"` // why the native path is unavailable
+		Img    string `json:"img"`               // base64 JPEG
+	}{ID: s.w.ID, W: s.w.W, H: s.w.H, Seq: s.seq + 1, Cap: capSrc, CapErr: capErr, Img: base64.StdEncoding.EncodeToString(s.lastImg)}
+	raw, err := json.Marshal(frame)
+	if err != nil {
+		return
+	}
+	if len(raw) > winDCMaxMsg {
+		// Too big for any DataChannel — route around them entirely (better a
+		// relay-capped frame than a killed channel), INCLUDING when every
+		// viewer is on P2P: they'd freeze otherwise. Still relay-rate-capped;
+		// if the WS window isn't open yet, drop without advancing seq and let
+		// the next iteration carry fresher content.
+		sinks.confirmed, sinks.probe = nil, nil
+		sinks.ws = time.Since(s.lastWSFrame) >= wsFrameMinInterval
+		if !sinks.ws {
+			return
+		}
+	}
+	s.seq++
+	for _, dc := range sinks.confirmed {
+		_ = dc.Send(raw)
+	}
+	if sinks.ws {
+		s.a.sendWindowMsg(conn, protocol.TypeWindowFrame, frame)
+		s.lastWSFrame = time.Now()
+	}
+	if len(sinks.probe) > 0 {
+		for _, dc := range sinks.probe {
+			_ = dc.Send(raw)
+		}
+		s.lastProbe = time.Now()
+	}
+	if sinks.expectsAck() {
+		s.sentSinceAck++
+	}
+	if !s.capNative {
+		s.lastSig, s.haveSig = s.pendingSig, s.pendingSigOK
+	}
+	s.lastSent = time.Now()
+}
+
+// sendHeartbeat pings viewers over every live path so an idle (0 fps) window
+// doesn't read as a dead host. Not acked, and can't confirm a channel.
+func (s *winStream) sendHeartbeat(conn *websocket.Conn, confirmed, probing []*webrtc.DataChannel, vc int) {
+	hb := struct {
+		ID string `json:"id"`
+		HB bool   `json:"hb"`
+	}{ID: s.w.ID, HB: true}
+	raw, err := json.Marshal(hb)
+	if err != nil {
+		return
+	}
+	for _, dc := range confirmed {
+		_ = dc.Send(raw)
+	}
+	if wsSinkNeeded(vc, len(confirmed)) {
+		s.a.sendWindowMsg(conn, protocol.TypeWindowFrame, hb)
+	}
+	for _, dc := range probing {
+		_ = dc.Send(raw)
+	}
+	s.lastSent = time.Now()
+}
+
+// currentViewerCount returns the relay-reported live viewer count.
+func (a *Agent) currentViewerCount() int {
+	a.viewerSizeMu.Lock()
+	defer a.viewerSizeMu.Unlock()
+	return a.viewerCount
 }
 
 // liveConn returns the current relay connection under the same lock the rest
@@ -1043,6 +1205,11 @@ func (a *Agent) liveConn() *websocket.Conn {
 // single message of the given type. Errors are swallowed — a dropped frame is
 // not worth tearing down the session.
 func (a *Agent) sendWindowMsg(conn *websocket.Conn, t protocol.MessageType, payload any) {
+	// Callers on async paths (e.g. OnICECandidate) pass a.liveConn(), which is
+	// nil while the relay connection is down — writing would nil-deref.
+	if conn == nil {
+		return
+	}
 	raw, err := json.Marshal(payload)
 	if err != nil {
 		return

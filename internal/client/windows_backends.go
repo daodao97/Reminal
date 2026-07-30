@@ -340,6 +340,18 @@ func (darwinWindows) scroll(w winInfo, fx, fy, dx, dy float64) error {
 	// up), so negate: positive dy (scroll down) → negative wheel1. Pixel units
 	// give smooth, 1:1 scrolling.
 	w1, w2 := -int(dy), -int(dx)
+	// Post via the compiled helper when it's installed: the JXA bridge builds a
+	// scroll event whose wheel deltas don't marshal — it posts as a silent
+	// no-op, so viewer scrolling did nothing (the mouse-move from the same
+	// script works, which is why clicks were fine). The helper is also ~5×
+	// faster per event than an osascript spawn.
+	if p, err := captureHelperPath(); err == nil {
+		if _, err := run(p, "scroll", strconv.Itoa(x), strconv.Itoa(y), strconv.Itoa(w1), strconv.Itoa(w2)); err == nil {
+			return nil
+		}
+	}
+	// Fallback for installs without the helper (may no-op on some macOS
+	// versions — kept because it's still the only path there).
 	body := fmt.Sprintf(`
 var mv=$.CGEventCreateMouseEvent(src,$.kCGEventMouseMoved,$.CGPointMake(%d,%d),$.kCGMouseButtonLeft);$.CGEventPost($.kCGHIDEventTap,mv);
 var sc=$.CGEventCreateScrollWheelEvent2(src,$.kCGScrollEventUnitPixel,2,%d,%d,0);$.CGEventPost($.kCGHIDEventTap,sc);`, x, y, w1, w2)

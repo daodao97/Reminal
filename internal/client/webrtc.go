@@ -236,9 +236,16 @@ func (a *Agent) handleWebRTCHello(conn *websocket.Conn, encData string) {
 		})
 	})
 	pc.OnConnectionStateChange(func(s webrtc.PeerConnectionState) {
-		if s == webrtc.PeerConnectionStateFailed ||
-			s == webrtc.PeerConnectionStateClosed ||
-			s == webrtc.PeerConnectionStateDisconnected {
+		// Tear down ONLY on terminal states. "Disconnected" is transient — ICE
+		// keepalives missed for a few seconds, routine on phones (WiFi power-
+		// save, brief radio fades) — and normally self-heals back to
+		// "connected"; killing the peer on it made every radio nap a full
+		// relay-fallback + renegotiate cycle, flapping the transport with no
+		// user-visible network change. While disconnected, the stream's own
+		// liveness machinery covers us: acks dry up → frames demote to WS in
+		// ~6s; the channel re-proves via a probe when connectivity returns; and
+		// a blip that doesn't heal escalates to "failed", which lands here.
+		if s == webrtc.PeerConnectionStateFailed || s == webrtc.PeerConnectionStateClosed {
 			peer.open.Store(false)
 			a.dropRTCPeer(hello.Peer)
 		}

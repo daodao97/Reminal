@@ -4164,7 +4164,11 @@
     const TRANSPORT_CLAIM_MS = 5000;
     function noteTransport(viaDC) {
       if (viaDC) { lastDCSeenAt = performance.now(); lastFrameVia = 'webrtc'; return; }
-      if (performance.now() - lastDCSeenAt > TRANSPORT_CLAIM_MS) lastFrameVia = 'ws';
+      // !lastDCSeenAt = no DataChannel traffic EVER — claim immediately. (The
+      // 0 init otherwise reads as "DC activity at page load", which blocked
+      // relay frames from labeling for the page's first 5s: the popover sat on
+      // "—" while frames were already painting.)
+      if (!lastDCSeenAt || performance.now() - lastDCSeenAt > TRANSPORT_CLAIM_MS) lastFrameVia = 'ws';
     }
     // Describe the current transport for a pane's (i) popover.
     function paneInfoHtml(p) {
@@ -4177,7 +4181,15 @@
       const enc = webrtc ? 'DTLS (end-to-end)' : 'AES-256-GCM (end-to-end)';
       const res = (p.w.w && p.w.h) ? (p.w.w + '×' + p.w.h) : '—';
       const fps = p.frameTimes ? p.frameTimes.length : 0;
+      // Capture source, stamped by the agent on each frame: "native" = the
+      // ScreenCaptureKit helper (fast path), "shot" = per-frame screencapture
+      // fallback. Surfaced here so "why is it slow" is diagnosable at a glance.
+      // On the fallback path the agent stamps WHY native capture is unavailable
+      // (locked screen and windows on other Spaces are the usual reasons).
+      const cap = p.capSrc === 'native' ? 'Native · ScreenCaptureKit'
+        : p.capSrc === 'shot' ? ('Screenshot fallback' + (p.capErr ? ' · ' + escapeHtml(p.capErr) : '')) : '\u2014';
       return '<div class="row"><span class="k">Transport</span><span class="v ' + cls + '">' + transport + '</span></div>'
+        + '<div class="row"><span class="k">Capture</span><span class="v">' + cap + '</span></div>'
         + '<div class="row"><span class="k">Encryption</span><span class="v">' + enc + '</span></div>'
         + '<div class="row"><span class="k">Resolution</span><span class="v">' + res + '</span></div>'
         + '<div class="row"><span class="k">Frame rate</span><span class="v">' + fps + ' fps</span></div>';
@@ -4775,7 +4787,13 @@
       };
       pc.onconnectionstatechange = () => {
         if (DEBUG) dbg('rtc ' + pc.connectionState);
-        if (rtcPc === pc && (pc.connectionState === 'failed' || pc.connectionState === 'closed' || pc.connectionState === 'disconnected')) retryWebRTC('conn ' + pc.connectionState, 12000);
+        // Only terminal states trigger a teardown+retry. 'disconnected' is
+        // transient (missed ICE keepalives — routine on phones during WiFi
+        // power-save naps) and normally self-heals to 'connected' in seconds;
+        // retrying on it tore down a healthy connection on every radio nap and
+        // flapped the transport webrtc↔relay with no real network change. If a
+        // blip doesn't heal, the browser escalates to 'failed' and we land here.
+        if (rtcPc === pc && (pc.connectionState === 'failed' || pc.connectionState === 'closed')) retryWebRTC('conn ' + pc.connectionState, 12000);
       };
       pc.ondatachannel = (e) => {
         const ch = e.channel;
@@ -4929,6 +4947,7 @@
       p.lastFrameAt = performance.now();
       p.lastAliveAt = p.lastFrameAt; // frames count as liveness too
       noteTransport(viaDC); // for the (i) transport popover
+      if (payload.cap) { p.capSrc = payload.cap; p.capErr = payload.cap_err || null; }
       (p.frameTimes || (p.frameTimes = [])).push(p.lastFrameAt); // rolling 1s window → fps
       while (p.frameTimes.length && p.lastFrameAt - p.frameTimes[0] > 1000) p.frameTimes.shift();
       updatePaneOverlay(p);
