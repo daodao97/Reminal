@@ -1967,6 +1967,10 @@
       fitAddon.fit();
       sendResize();
       term.focus();
+      if (winStreamsNeedRestart) {
+        winStreamsNeedRestart = false;
+        restartWinStreams();
+      }
       // Warm the window list so the Windows dropdown opens instantly (no
       // "Loading…" flash) the first time it's clicked — and let the reply
       // restore any panes this session had open (Recent → reopens its windows).
@@ -2132,6 +2136,25 @@
       }
     }
 
+    // Streams must be re-armed after the NEXT successful (re)connect: the
+    // visibility-resume path can fire while the socket is still down (its
+    // start commands drop silently in sendWin), and the agent idle-stops any
+    // stream whose viewer vanished — so without this, panes come back frozen
+    // (inputs flow, frames don't) until closed and reopened by hand.
+    let winStreamsNeedRestart = false;
+
+    // Waking the page (or the network coming back) shouldn't sit out a 30s
+    // backoff that grew while every throttled background retry failed — dial
+    // immediately and let the normal machinery take over.
+    function fastReconnect() {
+      if (manualClose || fatal || !helloShown) return;
+      if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) return;
+      backoffMs = 1000;
+      cancelReconnect();
+      openSocket();
+    }
+    window.addEventListener('online', fastReconnect);
+
     function scheduleReconnect() {
       cancelReconnect();
       if (manualClose || fatal) return;
@@ -2278,7 +2301,7 @@
         // helloShown so we don't print on the very first failed
         // connect attempt (where there's no prior session to
         // "reconnect" to).
-        if (helloShown && !manualClose && !fatal) reconnectMessagePending = true;
+        if (helloShown && !manualClose && !fatal) { reconnectMessagePending = true; winStreamsNeedRestart = true; }
         if (manualClose) {
           setStatus('Disconnected');
           hideOverlay();
@@ -2359,6 +2382,7 @@
           // turned out to be the same agent — we just refresh our K.
           {
             const wasLive = agentLive;
+            if (!wasLive) winStreamsNeedRestart = true; // fresh agent process = no live streams
             agentLive = true;
             connectedAt = Date.now();
             backoffMs = 1000;
@@ -4700,8 +4724,19 @@
         sendWin('window_ctl', { action: 'start', id });
       }
     }
+    // Re-arm every open pane's stream (popped-out ones included — their
+    // agent-side streams died with the drop just the same).
+    function restartWinStreams() {
+      winStreamsPaused = false;
+      for (const [id, p] of panes) {
+        p.lastSeq = null; // new stream numbers from zero — forget the dedup cursor
+        sendWin('window_ctl', { action: 'start', id });
+      }
+    }
     document.addEventListener('visibilitychange', () => {
-      if (document.hidden) pauseWinStreams(); else resumeWinStreams();
+      if (document.hidden) { pauseWinStreams(); return; }
+      resumeWinStreams();
+      fastReconnect();
     });
 
     // ---- WebRTC peer-to-peer frame transport --------------------------------
