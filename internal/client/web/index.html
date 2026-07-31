@@ -593,6 +593,9 @@
       background: #21262d; border: 1px solid #30363d; border-radius: 5px;
       color: #c9d1d9; padding: 4px 6px; cursor: pointer;
     }
+    /* Keyboard-mode indicator: lit while the hidden key input holds focus (the
+       soft keyboard is up); the same button then acts as the dismiss toggle. */
+    .wkbd-open .wpane-kbd { background: #1f6feb; border-color: #388bfd; color: #fff; }
     .wpane-btn:hover { background: #30363d; color: #e6edf3; }
     .wpane-close:hover { background: #da3633; border-color: #da3633; color: #fff; }
     /* The soft-keyboard button only helps on touch (no physical keyboard); hide
@@ -4498,7 +4501,16 @@
       el.addEventListener('pointerdown', () => focusPane(w.id));
       closeBtn.addEventListener('click', (e) => { e.stopPropagation(); closePane(w.id); });
       popBtn.addEventListener('click', (e) => { e.stopPropagation(); popOutPane(pane); });
-      kbdBtn.addEventListener('click', (e) => { e.stopPropagation(); focusPane(w.id); wkey.focus(); });
+      kbdBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        // Toggle: a second tap dismisses the soft keyboard. Without an explicit
+        // exit the hidden input kept focus forever — pane taps preventDefault,
+        // which suppresses the browser's natural tap-elsewhere blur — so on
+        // mobile every tap re-summoned the keyboard with no way out.
+        if (document.activeElement === wkey) { wkey.blur(); return; }
+        focusPane(w.id);
+        wkey.focus();
+      });
       infoBtn.addEventListener('click', (e) => {
         e.stopPropagation();
         pane.infoShown = !pane.infoShown;
@@ -5267,6 +5279,23 @@
 
     // Shared keyboard → focused pane. Physical keys via keydown; soft-keyboard
     // text via input; backspace via either.
+    // Keyboard-mode state for the pane buttons' active styling.
+    wkey.addEventListener('focus', () => document.body.classList.add('wkbd-open'));
+    wkey.addEventListener('blur', () => document.body.classList.remove('wkbd-open'));
+    // Respect the OS keyboard-dismiss gesture (Android back, iOS "done"): the
+    // IME collapses WITHOUT blurring the input, so the page still considers the
+    // user "typing" and the next pane tap re-summons the keyboard. Detect the
+    // dismissal by the visual viewport growing back while our input holds
+    // focus, and release the focus to match. Touch devices only — on desktop a
+    // window resize mid-typing must not eat keyboard focus.
+    if (window.visualViewport && matchMedia('(pointer: coarse)').matches) {
+      let vvHeight = visualViewport.height;
+      visualViewport.addEventListener('resize', () => {
+        const grewBy = visualViewport.height - vvHeight;
+        vvHeight = visualViewport.height;
+        if (grewBy > 120 && document.activeElement === wkey) wkey.blur();
+      });
+    }
     wkey.addEventListener('keydown', (e) => {
       if (!focusedPaneId) return;
       const sp = WIN_SPECIAL_KEYS[e.key];
