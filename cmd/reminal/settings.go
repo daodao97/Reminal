@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
+	"runtime"
 	"strings"
 
 	"github.com/reminal/reminal/internal/config"
@@ -23,6 +25,10 @@ type settingRow struct {
 	get   func(*config.Settings) bool
 	set   func(*config.Settings, bool)
 	apply func(bool) int
+	// tty marks an apply that talks to the user on the terminal (e.g. a sudo
+	// password prompt) — the interactive settings page drops out of raw mode
+	// and the alt screen around it.
+	tty bool
 }
 
 func settingRows() []settingRow {
@@ -30,10 +36,21 @@ func settingRows() []settingRow {
 		{
 			key:   "always-unlocked",
 			label: "Always keep unlocked",
-			desc:  "Keep this Mac's display awake so it can't idle-lock — remote window control needs it unlocked. Costs a lit screen; can't beat a closed lid.",
+			desc:  "Keep this Mac's display awake so it can't idle-lock — remote window control needs it unlocked. Costs a lit screen; can't beat a closed lid (see closed-lid).",
 			get:   func(s *config.Settings) bool { return s.StayUnlocked },
 			set:   func(s *config.Settings, v bool) { s.StayUnlocked = v },
 			apply: applyStayUnlocked,
+		},
+		{
+			key:   "closed-lid",
+			label: "Closed-lid mode",
+			desc: "Leave & forget: keep serving with the lid shut and nothing plugged in. Disables lid-close sleep (asks for your admin password via sudo pmset) and " +
+				"auto-creates a virtual display while no monitor is attached, so remote view and control keep working in any unplug order. " +
+				"Costs battery when unplugged — and never bag a running laptop.",
+			get:   func(s *config.Settings) bool { return s.ClosedLid },
+			set:   func(s *config.Settings, v bool) { s.ClosedLid = v },
+			apply: applyClosedLid,
+			tty:   true,
 		},
 	}
 }
@@ -59,6 +76,38 @@ func applyStayUnlocked(on bool) int {
 		}
 	}
 	return n
+}
+
+// applyClosedLid flips the sleep half of closed-lid mode: `pmset disablesleep`
+// needs root, so this runs sudo interactively (the caller guarantees a cooked
+// terminal — see settingRow.tty). The display half needs no push: running
+// agents re-read the setting on their next census poll. Best-effort by design —
+// a failed/aborted sudo keeps the setting as chosen and says exactly what to
+// run by hand.
+func applyClosedLid(on bool) int {
+	if runtime.GOOS != "darwin" {
+		fmt.Println("  (closed-lid sleep control is macOS-only)")
+		return 0
+	}
+	val, verb := "1", "disable"
+	if !on {
+		val, verb = "0", "re-enable"
+	}
+	fmt.Printf("\n  Closed-lid mode needs to %s lid-close sleep — running:\n", verb)
+	fmt.Printf("    sudo pmset -a disablesleep %s\n\n", val)
+	cmd := exec.Command("sudo", "pmset", "-a", "disablesleep", val)
+	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
+	if err := cmd.Run(); err != nil {
+		fmt.Printf("\n  ⚠ pmset didn't run (%v).\n", err)
+		fmt.Printf("    The setting is saved, but until you run the command above yourself,\n")
+		fmt.Printf("    closing the lid will still sleep the Mac.\n")
+	} else if on {
+		fmt.Println("  Lid-close sleep disabled. Remember: unplugged = battery drain, and")
+		fmt.Println("  never carry the laptop in a bag while this is on.")
+	} else {
+		fmt.Println("  Lid-close sleep restored to normal.")
+	}
+	return 0
 }
 
 // runSettings is the `reminal settings` entrypoint. With no args on a TTY it
@@ -158,8 +207,8 @@ func settingsUI(rows []settingRow, s config.Settings) error {
 	defer term.Restore(fd, old)
 
 	out := os.Stdout
-	fmt.Fprint(out, "\x1b[?1049h\x1b[?25l")            // alt screen, hide cursor
-	defer fmt.Fprint(out, "\x1b[?25h\x1b[?1049l")      // restore
+	fmt.Fprint(out, "\x1b[?1049h\x1b[?25l")       // alt screen, hide cursor
+	defer fmt.Fprint(out, "\x1b[?25h\x1b[?1049l") // restore
 
 	cursor, status := 0, ""
 	drawSettings(out, rows, &s, cursor, status)
@@ -201,7 +250,23 @@ func settingsUI(rows []settingRow, s config.Settings) error {
 			_ = config.SaveSettings(s)
 			cnt := 0
 			if row.apply != nil {
-				cnt = row.apply(v)
+				if row.tty {
+					// The apply needs the real terminal (sudo password prompt):
+					// leave the alt screen and raw mode, run it, wait for a key
+					// so its output can be read, then rebuild the page.
+					fmt.Fprint(out, "\x1b[?25h\x1b[?1049l")
+					_ = term.Restore(fd, old)
+					cnt = row.apply(v)
+					fmt.Print("\n  press any key to return to settings… ")
+					if _, err := term.MakeRaw(fd); err != nil {
+						return printSettings(rows, s)
+					}
+					one := make([]byte, 1)
+					_, _ = os.Stdin.Read(one)
+					fmt.Fprint(out, "\x1b[?1049h\x1b[?25l")
+				} else {
+					cnt = row.apply(v)
+				}
 			}
 			status = "\x1b[38;5;35m✓ Saved\x1b[0m  \x1b[2m" + row.label + " " + onOffWord(v) + appliedSuffix(cnt) + "\x1b[0m"
 		}

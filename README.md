@@ -204,7 +204,7 @@ Open **Windows** in the web viewer, pick any window on the host, and it streams 
 - **Peer-to-peer.** Frames ride a WebRTC DataChannel (DTLS) straight between browser and host; the relay only carries a rate-capped fallback for viewers that can't punch through — so speed never runs up relay costs. The popover shows the live transport.
 - **Fully interactive.** Clicks (double/triple runs preserved), right-click with real context menus, drag & drop, smooth trackpad-style scrolling, and keyboard input. On touch: one finger is a trackpad cursor, long-press grabs for drag, two fingers scroll, pinch zooms.
 
-<sub>Control injection requires the host Mac to be unlocked — `reminal settings` covers keeping it that way for remote use.</sub>
+<sub>Control injection requires the host Mac to be unlocked — `reminal settings` covers keeping it that way for remote use. Its **closed-lid mode** goes further: shut the lid, unplug the monitor in any order, and the host keeps serving on an auto-created virtual display.</sub>
 
 ---
 
@@ -289,7 +289,7 @@ REMINAL_LOCAL=1 reminal --connect <session_id> --pin <pin>
 | `reminal connections` | List currently attached viewers with connect time |
 | `reminal info [id\|name] [--all] [--qr] [--json]` | Show connect details — ID / PIN / URL / QR |
 | `reminal qr [id\|name]` | Print just the join QR (for a second screen) |
-| `reminal settings` | Open the settings page (e.g. keep this Mac unlocked for remote control) |
+| `reminal settings` | Settings page: keep the Mac unlocked for remote control; **closed-lid mode** (serve with the lid shut and nothing plugged in — disables clamshell sleep, auto-creates a virtual display while headless) |
 | `reminal doctor` | Self-diagnostic: version, relay reachability, terminal, shell |
 | `reminal completion <bash\|zsh\|fish>` | Print a shell completion script |
 | `reminal upgrade` | Upgrade to the latest release |

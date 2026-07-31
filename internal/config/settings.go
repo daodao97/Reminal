@@ -17,6 +17,14 @@ type Settings struct {
 	// can leave reminal running, walk away, and find remote window control dead
 	// on return. Costs a lit screen; can't beat a closed lid (clamshell sleep).
 	StayUnlocked bool `json:"stay_unlocked"`
+	// ClosedLid is "leave & forget" mode: the settings page disables lid-close
+	// sleep via `sudo pmset -a disablesleep` when this is toggled, and running
+	// agents watch the display census — when the machine goes fully headless
+	// (lid shut, no monitor) they spin up a virtual display so windows keep a
+	// coordinate space and remote view/control keep working. Off by default:
+	// it costs battery when unplugged and a closed hot laptop must not be
+	// bagged, so it's an explicit opt-in.
+	ClosedLid bool `json:"closed_lid,omitempty"`
 }
 
 func settingsPath() (string, error) {

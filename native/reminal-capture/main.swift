@@ -61,6 +61,104 @@ if args.count >= 2, args[1] == "scroll" {
     exit(0)
 }
 
+func die(_ msg: String) -> Never {
+    FileHandle.standardError.write(Data((msg + "\n").utf8))
+    exit(1)
+}
+
+
+// Parent lifeline: the agent holds our stdin pipe open and never writes; EOF
+// means it's gone — including deaths that skip its cleanup (SIGKILL, crash, or
+// its hot-restart exec, all of which close the fd). Without this, a helper on a
+// STATIC window would outlive a dead agent forever: it only notices a closed
+// stdout when a frame write fails, and a static window never writes. Armed only
+// when stdin is a pipe, so running the helper by hand from a terminal still works.
+var stdinStat = stat()
+if fstat(0, &stdinStat) == 0 && (stdinStat.st_mode & S_IFMT) == S_IFIFO {
+    DispatchQueue.global(qos: .utility).async {
+        while true {
+            guard let d = try? FileHandle.standardInput.read(upToCount: 4096), !d.isEmpty else {
+                exit(0) // EOF or read error — parent is gone
+            }
+        }
+    }
+}
+
+// Virtual display subcommand: `reminal-capture vdisplay <w> <h>` creates a
+// software display of w×h points named "reminal" and keeps it alive until this
+// process exits (stdin lifeline above included). Used by closed-lid mode: a
+// headless Mac (lid shut, no monitor) has no display, so windows lose their
+// coordinate space and capture/input die — this gives them a stable home, the
+// same trick DeskPad/BetterDisplay use. Built on the private CGVirtualDisplay*
+// classes, driven via the ObjC runtime: every selector is existence-checked
+// first, so an OS release that changes the interface makes us exit(1) (the
+// agent just doesn't get a display) rather than crash.
+if args.count >= 2, args[1] == "vdisplay" {
+    let vw = args.count >= 3 ? (UInt(args[2]) ?? 1920) : 1920
+    let vh = args.count >= 4 ? (UInt(args[3]) ?? 1080) : 1080
+
+    func objcNew(_ className: String) -> NSObject? {
+        guard let cls = NSClassFromString(className) as? NSObject.Type else { return nil }
+        return cls.init()
+    }
+    // KVC with an existence check so a renamed property in a future macOS makes
+    // us fail cleanly instead of throwing setValue:forUndefinedKey:.
+    func setIfPossible(_ obj: NSObject, _ key: String, _ value: Any?) -> Bool {
+        let cap = key.prefix(1).uppercased() + key.dropFirst()
+        guard obj.responds(to: NSSelectorFromString("set\(cap):")) else { return false }
+        obj.setValue(value, forKey: key)
+        return true
+    }
+
+    guard let desc = objcNew("CGVirtualDisplayDescriptor") else { die("vdisplay: CGVirtualDisplayDescriptor unavailable") }
+    _ = setIfPossible(desc, "name", "reminal")
+    guard setIfPossible(desc, "maxPixelsWide", vw), setIfPossible(desc, "maxPixelsHigh", vh) else {
+        die("vdisplay: descriptor interface changed (maxPixels)")
+    }
+    // Physical size drives the assumed DPI; ~24" at this resolution reads sanely.
+    _ = setIfPossible(desc, "sizeInMillimeters", NSValue(size: NSSize(width: 530, height: Double(vh) / Double(vw) * 530)))
+    _ = setIfPossible(desc, "productID", 0x7265)
+    _ = setIfPossible(desc, "vendorID", 0x6d69)
+    _ = setIfPossible(desc, "serialNum", 0x0001)
+    _ = setIfPossible(desc, "queue", DispatchQueue.main)
+
+    guard let displayCls: AnyClass = NSClassFromString("CGVirtualDisplay") else { die("vdisplay: CGVirtualDisplay unavailable") }
+    let initSel = NSSelectorFromString("initWithDescriptor:")
+    guard class_getInstanceMethod(displayCls, initSel) != nil,
+          let rawAlloc = (displayCls as AnyObject).perform(NSSelectorFromString("alloc"))?.takeUnretainedValue(),
+          let display = (rawAlloc as? NSObject)?.perform(initSel, with: desc)?.takeUnretainedValue() as? NSObject
+    else { die("vdisplay: CGVirtualDisplay init failed") }
+
+    guard let modeCls: AnyClass = NSClassFromString("CGVirtualDisplayMode") else { die("vdisplay: CGVirtualDisplayMode unavailable") }
+    let modeSel = NSSelectorFromString("initWithWidth:height:refreshRate:")
+    guard let modeMethod = class_getInstanceMethod(modeCls, modeSel),
+          let rawMode = (modeCls as AnyObject).perform(NSSelectorFromString("alloc"))?.takeUnretainedValue() as? NSObject
+    else { die("vdisplay: mode interface changed") }
+    typealias ModeInit = @convention(c) (NSObject, Selector, UInt, UInt, Double) -> NSObject
+    let modeInit = unsafeBitCast(method_getImplementation(modeMethod), to: ModeInit.self)
+    let mode = modeInit(rawMode, modeSel, vw, vh, 60.0)
+
+    guard let settings = objcNew("CGVirtualDisplaySettings") else { die("vdisplay: CGVirtualDisplaySettings unavailable") }
+    _ = setIfPossible(settings, "hiDPI", 0)
+    guard setIfPossible(settings, "modes", [mode]) else { die("vdisplay: settings interface changed (modes)") }
+
+    let applySel = NSSelectorFromString("applySettings:")
+    guard let applyMethod = class_getInstanceMethod(type(of: display), applySel) else { die("vdisplay: applySettings unavailable") }
+    typealias ApplyFn = @convention(c) (NSObject, Selector, NSObject) -> Bool
+    let apply = unsafeBitCast(method_getImplementation(applyMethod), to: ApplyFn.self)
+    guard apply(display, applySel, settings) else { die("vdisplay: applySettings failed") }
+
+    let did = (display.value(forKey: "displayID") as? NSNumber)?.uint32Value ?? 0
+    // One line to stdout so the agent can log/inspect; then hold forever. The
+    // display lives exactly as long as this process (`display` is kept alive by
+    // the closure reference below).
+    print("vdisplay up id=\(did) \(vw)x\(vh)")
+    FileHandle.standardOutput.synchronizeFile()
+    withExtendedLifetime(display) { CFRunLoopRun() }
+    exit(0)
+}
+
+
 // Target: a CGWindowID for one window, or "display:<CGDirectDisplayID>" for a
 // whole desktop (the agent lists displays as pseudo-windows with that id form).
 var windowID: UInt32 = 0
@@ -97,27 +195,7 @@ func encodeJPEG(_ cg: CGImage, _ quality: Double) -> Data? {
 // dedicated lock so a future multi-output setup can't interleave frame bytes.
 let writeLock = NSLock()
 
-func die(_ msg: String) -> Never {
-    FileHandle.standardError.write(Data((msg + "\n").utf8))
-    exit(1)
-}
 
-// Parent lifeline: the agent holds our stdin pipe open and never writes; EOF
-// means it's gone — including deaths that skip its cleanup (SIGKILL, crash, or
-// its hot-restart exec, all of which close the fd). Without this, a helper on a
-// STATIC window would outlive a dead agent forever: it only notices a closed
-// stdout when a frame write fails, and a static window never writes. Armed only
-// when stdin is a pipe, so running the helper by hand from a terminal still works.
-var stdinStat = stat()
-if fstat(0, &stdinStat) == 0 && (stdinStat.st_mode & S_IFMT) == S_IFIFO {
-    DispatchQueue.global(qos: .utility).async {
-        while true {
-            guard let d = try? FileHandle.standardInput.read(upToCount: 4096), !d.isEmpty else {
-                exit(0) // EOF or read error — parent is gone
-            }
-        }
-    }
-}
 
 // ---- stream output: encode changed frames to JPEG and emit them ----
 final class FrameOutput: NSObject, SCStreamOutput, SCStreamDelegate {

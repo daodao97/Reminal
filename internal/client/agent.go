@@ -585,6 +585,12 @@ func (a *Agent) Run() error {
 	// regardless of how the session was started. Stops when the shell exits.
 	go a.metaFlushLoop(shellExit)
 
+	// Closed-lid mode's display watcher (macOS; no-op elsewhere): keeps a
+	// virtual display up while the machine is headless so remote view/control
+	// survive "unplug everything and shut the lid". Gated at runtime by the
+	// closed-lid setting, which it re-reads every poll.
+	go a.vdisplayLoop(shellExit)
+
 	// Trap SIGINT/SIGTERM so the process exits via the normal return path
 	// (defers fire: ClearActive, exit summary, keepawake stop). Default Go
 	// behavior is to die immediately on these signals, skipping defers and
