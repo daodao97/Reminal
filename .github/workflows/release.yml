@@ -75,7 +75,14 @@ jobs:
           tar czf "${ARCHIVE}" $FILES
           echo "ARCHIVE=${ARCHIVE}" >> "$GITHUB_ENV"
 
+      - name: Write release notes
+        # The release commit message IS the changelog — surface it on the
+        # GitHub release page instead of leaving the body empty. The CLA
+        # trailer stays in git history but is noise on a release page.
+        run: git log -1 --pretty=%B | sed '/^Co-Authored-By:/d' > release-notes.md
+
       - name: Upload release asset
         uses: softprops/action-gh-release@v2
         with:
+          body_path: release-notes.md
           files: reminal_*.tar.gz
