@@ -400,7 +400,16 @@ var darwinKeyCodes = map[string]int{
 }
 
 func (darwinWindows) key(w winInfo, name string) error {
-	code, ok := darwinKeyCodes[strings.ToLower(name)]
+	name = strings.ToLower(name)
+	// "ctrl-x" chords (the keybar's ^C/^D/… in window-keyboard mode):
+	// keystroke with the control modifier is layout-aware and needs no
+	// key-code table.
+	if ch, ok := strings.CutPrefix(name, "ctrl-"); ok && len(ch) == 1 && ch[0] >= 'a' && ch[0] <= 'z' {
+		script := fmt.Sprintf(`tell application "System Events" to keystroke "%s" using {control down}`, ch)
+		_, err := run("osascript", "-e", script)
+		return err
+	}
+	code, ok := darwinKeyCodes[name]
 	if !ok {
 		return fmt.Errorf("unknown key %q", name)
 	}
@@ -863,7 +872,12 @@ func (linuxWindows) key(w winInfo, name string) error {
 	if !have("xdotool") {
 		return fmt.Errorf("install xdotool for input control")
 	}
-	sym, ok := linuxKeySyms[strings.ToLower(name)]
+	name = strings.ToLower(name)
+	if ch, ok := strings.CutPrefix(name, "ctrl-"); ok && len(ch) == 1 && ch[0] >= 'a' && ch[0] <= 'z' {
+		_, err := run("xdotool", "key", "ctrl+"+ch)
+		return err
+	}
+	sym, ok := linuxKeySyms[name]
 	if !ok {
 		return fmt.Errorf("unknown key %q", name)
 	}
