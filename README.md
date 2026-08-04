@@ -92,6 +92,16 @@ Hand the session ID and PIN to an agent and it connects like any other viewer �
 
 ---
 
+## The last thing you'll install standing at your computer
+
+Set it up once, in person — then you never have to sit at that machine again. From any browser you get its terminal, any window, the whole desktop, a public link to a local port, files to and from it, even a live session shared with someone else. One tool, every remote job.
+
+<div align="center">
+<img src="docs/toolkit.gif" alt="reminal at the center, wired to the five things it does: a terminal in any browser, control any window or desktop, a public URL for a local port, sending files between machines, and pairing with anyone live — no accounts, no subscriptions, nothing for the other side to install" width="900">
+</div>
+
+---
+
 ## How it works
 
 <div align="center">
