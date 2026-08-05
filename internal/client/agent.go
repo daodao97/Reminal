@@ -1572,6 +1572,25 @@ func (a *Agent) printQR() {
 }
 
 // pumpPTY reads the PTY forever, encrypts each chunk and stores it in the
+// resolveSeedGeometry picks the geometry the snapshot emulator and history
+// rebuild start from. Precedence: the size a viewer last applied → the live
+// PTY's own size → an 80x24 fallback. The PTY step is what matters on hot-restart
+// resume: no viewer has reported a size yet, but the inherited PTY still carries
+// the dimensions the shell is rendering at. Without it initScreen seeds 80x24, so
+// every byte emitted before the first viewer resize replays through the history
+// rebuild at the wrong height and mis-anchors into duplicated scrollback.
+func resolveSeedGeometry(lastCols, lastRows uint16, ptySize func() (uint16, uint16, error)) (uint16, uint16) {
+	if lastCols > 0 && lastRows > 0 {
+		return lastCols, lastRows
+	}
+	if ptySize != nil {
+		if c, r, err := ptySize(); err == nil && c > 0 && r > 0 {
+			return c, r
+		}
+	}
+	return 80, 24
+}
+
 // initScreen sets up the headless emulator used for snapshot-on-attach, unless
 // REMINAL_SNAPSHOT=0 disables it (falling back to raw replay). Sized to the
 // current PTY size; kept in sync by feedScreen / resizeScreen.
@@ -1581,10 +1600,11 @@ func (a *Agent) initScreen() {
 	}
 	a.scrollbackLines = config.SnapshotScrollbackLines()
 	a.scrollbackBytes = config.SnapshotScrollbackBytes()
-	cols, rows := a.lastAppliedCol, a.lastAppliedRow
-	if cols == 0 || rows == 0 {
-		cols, rows = 80, 24
+	var ptySize func() (uint16, uint16, error)
+	if a.term != nil {
+		ptySize = a.term.Getsize
 	}
+	cols, rows := resolveSeedGeometry(a.lastAppliedCol, a.lastAppliedRow, ptySize)
 	a.screenMu.Lock()
 	a.screen = vt.NewEmulator(int(cols), int(rows))
 	if a.scrollbackLines > 0 {

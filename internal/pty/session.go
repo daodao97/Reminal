@@ -56,6 +56,17 @@ func (s *Session) Resize(cols, rows uint16) error {
 	return pty.Setsize(s.ptmx, &pty.Winsize{Cols: cols, Rows: rows})
 }
 
+// Getsize reports the PTY master's current window size. The hot-restart path
+// inherits an already-sized PTY, so this recovers the dimensions the shell is
+// actually rendering at before any viewer has reported a size.
+func (s *Session) Getsize() (cols, rows uint16, err error) {
+	ws, err := pty.GetsizeFull(s.ptmx)
+	if err != nil {
+		return 0, 0, err
+	}
+	return ws.Cols, ws.Rows, nil
+}
+
 func (s *Session) Wait() error {
 	return s.cmd.Wait()
 }
