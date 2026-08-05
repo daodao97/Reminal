@@ -4041,6 +4041,21 @@
       wrap.addEventListener('touchend', onTouchEnd, { passive: true });
       wrap.addEventListener('touchcancel', () => { cancelLP(); if (extending) { extending = false; dragWhich = null; stopAutoScroll(); } }, { passive: true });
 
+      // Native-style dismiss: a tap or click ANYWHERE outside the selection's
+      // own controls (the copy/select-all bar and the two grips) clears it —
+      // including taps that land off the terminal (header, page margins) which
+      // the wrap-bound touchend above never sees. pointerdown unifies mouse,
+      // touch and pen; capture-phase so we run before the grip/toolbar handlers
+      // (which we exclude), and before xterm re-selects on a fresh press.
+      document.addEventListener('pointerdown', (e) => {
+        if (!active) return;
+        if (e.target.closest('#sel-toolbar, #sel-handle-start, #sel-handle-end')) return;
+        clearSelection();
+        // A tap on the terminal itself will fire a follow-up click; swallow it
+        // so dismissing the selection doesn't also pop the soft keyboard open.
+        if (e.target.closest('#terminal-wrap')) suppressFocusClick = true;
+      }, true);
+
       // --- toolbar actions ---
       copyBtn.addEventListener('click', async (e) => {
         e.preventDefault();
