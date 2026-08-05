@@ -27,52 +27,83 @@ case "$(uname -m)" in
     *) echo "reminal: unsupported architecture: $(uname -m)" >&2; exit 1 ;;
 esac
 
-# Install shell tab-completion for the user's shell so `reminal attach/kill/...`
-# completes session ids and names out of the box. Best-effort — never fails the
-# install. Skip with REMINAL_NO_COMPLETION=1. Idempotent (marker-guarded) so it
-# can run again on every upgrade without duplicating. The rc snippets source
-# `reminal completion ...` at shell startup, so they stay fresh across upgrades.
-install_completion() {
-    [ "${REMINAL_NO_COMPLETION:-}" = "1" ] && return 0
+# Set up shell integration for the user's shell: put reminal on PATH (so a fresh
+# terminal can just run `reminal`) and enable tab-completion for session ids and
+# names. Best-effort — never fails the install. Skip with REMINAL_NO_RC=1 (the
+# older REMINAL_NO_COMPLETION=1 is still honored). Idempotent and self-repairing:
+# each run rewrites a single marker-guarded block, so re-running the installer
+# fixes a broken PATH and upgrades never duplicate. The PATH line only prepends
+# when missing; the completion line sources `reminal completion ...` at startup,
+# so it stays fresh across upgrades.
+setup_shell() {
+    { [ "${REMINAL_NO_RC:-}" = "1" ] || [ "${REMINAL_NO_COMPLETION:-}" = "1" ]; } && return 0
 
-    _begin="# >>> reminal completion >>>"
-    _end="# <<< reminal completion <<<"
+    _begin="# >>> reminal >>>"
+    _end="# <<< reminal <<<"
+
+    # Prefer a $HOME-relative dir so the rc line is portable and readable.
+    case "$INSTALL_DIR" in
+        "$HOME/"*) _rc_dir="\$HOME/${INSTALL_DIR#"$HOME"/}" ;;
+        *)         _rc_dir="$INSTALL_DIR" ;;
+    esac
+    # PATH snippet for POSIX shells: prepend only when not already present, so
+    # it's safe to run on every shell startup.
+    _path_snip="case \":\$PATH:\" in *\":${_rc_dir}:\"*) ;; *) export PATH=\"${_rc_dir}:\$PATH\" ;; esac"
 
     _add_to_rc() { # $1=rcfile  $2=body
         _rc="$1"
+        _dir=$(dirname "$_rc")
+        [ -d "$_dir" ] || mkdir -p "$_dir" 2>/dev/null || return 0
         if [ ! -e "$_rc" ]; then : >"$_rc" 2>/dev/null || return 0; fi
-        if grep -qF "$_begin" "$_rc" 2>/dev/null; then return 0; fi
+        # Strip any previously-managed reminal block (this marker or the older
+        # "reminal completion" one) so we rewrite exactly one fresh block.
+        if grep -qE '^# >>> reminal( completion)? >>>' "$_rc" 2>/dev/null; then
+            _tmp=$(mktemp) 2>/dev/null || return 0
+            awk '
+              /^# >>> reminal( completion)? >>>/ { skip=1 }
+              skip==0 { print }
+              /^# <<< reminal( completion)? <<</ { skip=0 }
+            ' "$_rc" >"$_tmp" 2>/dev/null && cat "$_tmp" >"$_rc" 2>/dev/null
+            rm -f "$_tmp" 2>/dev/null
+        fi
         printf '\n%s\n%s\n%s\n' "$_begin" "$2" "$_end" >>"$_rc" 2>/dev/null || return 0
-        echo "  + tab-completion enabled in $_rc (open a new shell, or: source $_rc)"
+        RC_UPDATED=1
+        echo "  + reminal shell setup written to $_rc"
     }
 
     case "$(basename "${SHELL:-sh}")" in
         zsh)
-            _add_to_rc "${ZDOTDIR:-$HOME}/.zshrc" 'if command -v reminal >/dev/null 2>&1; then
-  (( $+functions[compdef] )) || { autoload -Uz compinit && compinit -u; }
+            _add_to_rc "${ZDOTDIR:-$HOME}/.zshrc" "$_path_snip
+if command -v reminal >/dev/null 2>&1; then
+  (( \$+functions[compdef] )) || { autoload -Uz compinit && compinit -u; }
   source <(reminal completion zsh)
-fi'
+fi"
             ;;
         bash)
             _rcfile="$HOME/.bashrc"
             [ "$OS" = "darwin" ] && [ -e "$HOME/.bash_profile" ] && _rcfile="$HOME/.bash_profile"
-            _add_to_rc "$_rcfile" 'command -v reminal >/dev/null 2>&1 && source <(reminal completion bash)'
+            _add_to_rc "$_rcfile" "$_path_snip
+command -v reminal >/dev/null 2>&1 && source <(reminal completion bash)"
             ;;
         fish)
             _fdir="${XDG_CONFIG_HOME:-$HOME/.config}/fish/completions"
             if mkdir -p "$_fdir" 2>/dev/null && printf '%s\n' 'reminal completion fish | source' >"$_fdir/reminal.fish" 2>/dev/null; then
                 echo "  + tab-completion installed: $_fdir/reminal.fish"
             fi
+            # fish uses its own PATH syntax; add a guarded block to config.fish.
+            _add_to_rc "${XDG_CONFIG_HOME:-$HOME/.config}/fish/config.fish" "if not contains \"${_rc_dir}\" \$PATH
+    set -gx PATH \"${_rc_dir}\" \$PATH
+end"
             ;;
         *)
-            echo "  (couldn't detect your shell — set up completion with: reminal completion <bash|zsh|fish>)"
+            echo "  (couldn't detect your shell — add ${INSTALL_DIR} to PATH and run: reminal completion <bash|zsh|fish>)"
             ;;
     esac
 }
 
-# Re-run completion setup only (no download): REMINAL_SETUP_COMPLETION_ONLY=1.
+# Re-run shell setup only (no download): REMINAL_SETUP_COMPLETION_ONLY=1.
 if [ "${REMINAL_SETUP_COMPLETION_ONLY:-}" = "1" ]; then
-    install_completion || true
+    setup_shell || true
     exit 0
 fi
 
@@ -120,8 +151,8 @@ fi
 echo
 echo "Installed reminal v${VERSION} to ${INSTALL_DIR}/reminal"
 
-# Set up tab-completion for the user's shell (best-effort).
-install_completion || true
+# Set up shell integration: PATH + tab-completion (best-effort).
+setup_shell || true
 
 # Heads-up if a different reminal is going to win on PATH.
 EXISTING="$(command -v reminal 2>/dev/null || true)"
@@ -132,17 +163,26 @@ if [ -n "$EXISTING" ] && [ "$EXISTING" != "$INSTALL_DIR/reminal" ]; then
 fi
 
 # Tell the user how to actually run it.
+echo
 case ":$PATH:" in
     *":$INSTALL_DIR:"*)
-        echo
         echo "Run: reminal"
         ;;
     *)
-        echo
-        echo "$INSTALL_DIR is not on your PATH. Add this to your shell rc:"
-        echo "  export PATH=\"\$HOME/.local/bin:\$PATH\""
-        echo
-        echo "Or run directly:"
-        echo "  $INSTALL_DIR/reminal"
+        if [ -n "${RC_UPDATED:-}" ]; then
+            # We added INSTALL_DIR to the rc, but the current shell hasn't
+            # re-read it — so `reminal` won't resolve here until a new shell.
+            echo "Added $INSTALL_DIR to your PATH. Open a new terminal and run:"
+            echo "  reminal"
+            echo
+            echo "Or use it right now in this shell:"
+            echo "  export PATH=\"$INSTALL_DIR:\$PATH\" && reminal"
+        else
+            echo "$INSTALL_DIR is not on your PATH. Add this to your shell rc:"
+            echo "  export PATH=\"$INSTALL_DIR:\$PATH\""
+            echo
+            echo "Or run directly:"
+            echo "  $INSTALL_DIR/reminal"
+        fi
         ;;
 esac
