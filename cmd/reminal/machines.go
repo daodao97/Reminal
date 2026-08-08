@@ -55,28 +55,41 @@ func listMachines() error {
 	if err != nil {
 		return err
 	}
-	if len(machines) == 0 {
-		fmt.Println("  " + cBold("This machine isn't an owner of any other machines yet."))
-		fmt.Println()
-		fmt.Println("  Run " + cBold("reminal own") + " on this device to get its id, enroll it on another")
-		fmt.Println("  machine (" + cBold("sudo reminal add owner <id>") + " there), and once you owner-connect")
-		fmt.Println("  it shows up here.")
-		return nil
+	// The machine we're running on always appears — you own the machine you're
+	// sitting at, so it's served straight from the local registry (no relay, no
+	// ownership handshake). Split it out from the enrolled machines, which are
+	// reached over their directory channels.
+	localKey, _ := client.MachinePub()
+	var remote []client.OwnedMachine
+	localOM := client.OwnedMachine{Key: localKey}
+	for _, m := range machines {
+		if localKey != nil && m.Key.Equal(localKey) {
+			localOM = m // reuse its stored name/label
+			continue
+		}
+		remote = append(remote, m)
 	}
 
-	// Reach every machine's directory channel in parallel — one slow/offline
-	// machine shouldn't hold up the rest.
-	results := make([]machineResult, len(machines))
+	// Reach every enrolled machine's directory channel in parallel — one
+	// slow/offline machine shouldn't hold up the rest.
+	remoteResults := make([]machineResult, len(remote))
 	var wg sync.WaitGroup
-	for i, m := range machines {
+	for i, m := range remote {
 		wg.Add(1)
 		go func(i int, m client.OwnedMachine) {
 			defer wg.Done()
 			resp, qerr := client.QueryDirectory(m.Key, client.DirectoryTimeout)
-			results[i] = machineResult{m: m, resp: resp, err: qerr}
+			remoteResults[i] = machineResult{m: m, resp: resp, err: qerr}
 		}(i, m)
 	}
 	wg.Wait()
+
+	// Local machine first (from the registry), then the remote ones.
+	var results []machineResult
+	if localKey != nil {
+		results = append(results, machineResult{m: localOM, resp: client.LocalDirectory()})
+	}
+	results = append(results, remoteResults...)
 
 	online := 0
 	for _, r := range results {
@@ -84,14 +97,15 @@ func listMachines() error {
 			online++
 		}
 	}
-	// The machine we're running on, so we can flag it like `reminal list` flags
-	// the current session.
-	localKey, _ := client.MachinePub()
 
-	fmt.Printf("  %s\n\n", cBold(fmt.Sprintf("Machines this device owns (%d) — %d online", len(machines), online)))
+	fmt.Printf("  %s\n\n", cBold(fmt.Sprintf("Machines this device owns (%d) — %d online", len(results), online)))
 	for _, r := range results {
 		printMachine(r, localKey != nil && r.m.Key.Equal(localKey))
 		fmt.Println()
+	}
+	if len(remote) == 0 {
+		fmt.Println("  " + cDim("Just this machine so far. To reach another here, run ") + cBold("reminal own"))
+		fmt.Println("  " + cDim("on it, then ") + cBold("sudo reminal add owner <id>") + cDim(" — it'll show up once you owner-connect."))
 	}
 	return nil
 }

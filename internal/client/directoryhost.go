@@ -634,6 +634,25 @@ func renameLocalSession(id, name string) error {
 // localSessions projects the local session registry to the wire DTO, dropping
 // the PIN (owners reach sessions without it) and anything sensitive.
 func (dh *dirHost) localSessions() []protocol.DirSession {
+	return localDirSessions()
+}
+
+// LocalDirectory returns THIS machine's directory response — hostname + live
+// sessions — read straight from the local registry, with no relay round-trip
+// and no ownership handshake. `reminal machines` uses it for the machine it's
+// running on: you always own the machine you're sitting at, so it should show up
+// instantly and never depend on being enrolled as an owner of yourself.
+func LocalDirectory() protocol.DirResponse {
+	resp := protocol.DirResponse{Sessions: localDirSessions()}
+	if host, err := os.Hostname(); err == nil {
+		resp.Hostname = host
+	}
+	return resp
+}
+
+// localDirSessions is the shared projection used by both the directory host (for
+// remote owners) and LocalDirectory (for the local CLI).
+func localDirSessions() []protocol.DirSession {
 	all, err := session.ReadAllActive()
 	if err != nil {
 		return nil
