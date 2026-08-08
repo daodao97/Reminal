@@ -182,11 +182,35 @@ func ReadActiveByID(id string) (*Active, error) {
 	if err != nil {
 		return nil, err
 	}
-	if !pidAlive(a.PID) {
+	if !pidAlive(a.PID) || pidReused(a.PID, a.StartedAt) {
 		_ = os.Remove(p)
 		return nil, os.ErrNotExist
 	}
 	return a, nil
+}
+
+// pidReuseTolerance absorbs the small, always-negative gap between when a process
+// starts (per the OS) and when it writes its StartedAt (a moment later, from
+// inside the process). A process whose start time is MORE than this after the
+// record was written can only be a different process that inherited a recycled
+// PID — so the recorded session is dead.
+const pidReuseTolerance = 60 * time.Second
+
+// pidReused reports whether the process currently at pid started meaningfully
+// AFTER the session recorded startedAt — i.e. the OS reused the PID for an
+// unrelated process (which otherwise passes pidAlive and lingers as a phantom
+// row in `reminal list`). Conservative by design: if the platform can't report a
+// start time, or the record predates StartedAt tracking, it returns false, so a
+// live session is never pruned on missing evidence.
+func pidReused(pid int, startedAt time.Time) bool {
+	if startedAt.IsZero() {
+		return false
+	}
+	start, ok := procStartTime(pid)
+	if !ok {
+		return false
+	}
+	return start.After(startedAt.Add(pidReuseTolerance))
 }
 
 // ReadAllActive scans ~/.reminal/ for active-*.json files, drops any
@@ -215,7 +239,7 @@ func ReadAllActive() ([]Active, error) {
 		if err != nil {
 			continue // skip corrupt entries silently — best-effort enumeration
 		}
-		if !pidAlive(a.PID) {
+		if !pidAlive(a.PID) || pidReused(a.PID, a.StartedAt) {
 			_ = os.Remove(full)
 			continue
 		}
