@@ -72,6 +72,16 @@ Hand the session ID and PIN to an agent and it connects like any other viewer �
 
 ---
 
+## Own a machine once — then skip the PIN
+
+The PIN is perfect for handing a session to someone else. For your *own* laptop, phone, and servers, typing it every time is friction.
+
+**Enroll a device as an owner** — `reminal own` prints its id, you paste `sudo reminal add owner <id>` on each machine once — and from then on that device connects to any of the machine's sessions with no PIN at all. The trust is a per-device key: revoke one device without touching the others (or self-revoke from any browser), all gated behind `sudo` to enroll. The relay still only ever sees ciphertext.
+
+Then `reminal machines` becomes your fleet dashboard — every machine you own and every live session on it, what's running, who's watching, how long it's been idle, in one list. The web viewer's **Machines panel** shows the same, and lets you jump in, rename, spawn, or kill a session on any box straight from the browser.
+
+---
+
 ## Share a local port with the world
 
 `reminal expose 3000` turns whatever's running on `localhost` into a **public HTTPS URL** — a dev server, a webhook target, a build to show a client. PIN-gated by default (or `--public` to open it up), so you can share the link without deploying anything. It's a built-in ngrok, on the tool you already have running.
@@ -167,6 +177,22 @@ No open ports, ephemeral session ID + PIN, AES-256-GCM end-to-end with a PIN-aut
 
 </td>
 </tr>
+<tr>
+<td width="50%" valign="top">
+
+#### Own a machine, skip the PIN
+
+Enroll a device as an **owner** — `reminal own`, then `sudo reminal add owner <id>` once — and it connects to any of that machine's sessions with no PIN. Per-device trust, revocable one at a time (`reminal owners revoke`, or self-revoke from the browser). The relay stays blind either way.
+
+</td>
+<td width="50%" valign="top">
+
+#### Every machine, one list
+
+`reminal machines` shows every box you own and each live session on it — what's running, viewers, idle time. Same view in the web **Machines panel**: attach, rename, spawn, or kill a session on any machine from the browser.
+
+</td>
+</tr>
 </table>
 
 ---
@@ -181,6 +207,7 @@ SSH leaves port 22 open, stores long-lived keys on disk, and trusts you to confi
 |---|---|
 | **No open ports** | Your machine only initiates outbound connections. There is nothing on the network to scan, brute-force, or zero-day. |
 | **Ephemeral credentials** | Session ID and PIN exist only while `reminal` is running. Ctrl+C and they are gone forever. |
+| **Owner devices, revocable** | A device you enroll as an owner connects without the PIN using its own key — a separate trust path from the ephemeral PIN, gated behind `sudo` to enroll and revocable per-device (or self-revoked from any browser). The relay still only routes ciphertext. |
 | **Dual-factor by design** | An attacker needs both the session ID (~1 trillion combinations) and the 6-digit PIN. Knowing one is useless. |
 | **Lockout on abuse** | Five wrong PINs trigger a 5-minute lockout. PIN guessing is not viable. |
 | **End-to-end encryption** | AES-256-GCM with a fresh random 256-bit session key per agent run. Distributed to each viewer via a PIN-authenticated X25519 handshake (EKE-style) — the relay never sees the key or anything offline-brute-forceable from it. |
@@ -254,6 +281,7 @@ The mirroring you see above isn't macOS-only — window capture **and** full con
 | Capability | macOS | Linux |
 |---|---|---|
 | Terminal sharing · sessions · files · port forwarding | ✅ | ✅ |
+| Owner connect (PIN-free) · `reminal machines` | ✅ | ✅ |
 | Window & desktop mirroring + control | ✅ ScreenCaptureKit (~30 fps) | ✅ X11 — `wmctrl` · `xdotool` · ImageMagick |
 | Closed-lid mode (auto virtual display) | ✅ | — |
 
@@ -279,6 +307,10 @@ The mirroring you see above isn't macOS-only — window capture **and** full con
 | `reminal paste <code> [dest]` | Fetch a file offered by `reminal copy` on another machine |
 | `reminal notify <message>` | Push a notification to viewers (browser notification on web) |
 | `reminal connections` | List currently attached viewers with connect time |
+| `reminal own` | Print this device's owner id + the `add owner` line to paste on machines you want to own |
+| `reminal add owner <id> [--label <name>]` | Enroll an owner device on this machine (needs `sudo`) — lets it connect PIN-free |
+| `reminal owners [rename\|revoke\|restore <id\|label> …]` | List / relabel / revoke / restore this machine's owner devices |
+| `reminal machines [rename <id\|name> <new-name>]` | List every machine you own and its live sessions (web Machines panel manages them) |
 | `reminal info [id\|name] [--all] [--qr] [--json]` | Show connect details — ID / PIN / URL / QR |
 | `reminal qr [id\|name]` | Print just the join QR (for a second screen) |
 | `reminal settings` | Settings page: keep the Mac unlocked for remote control; **closed-lid mode** (serve with the lid shut and nothing plugged in — disables clamshell sleep, auto-creates a virtual display while headless) |
@@ -297,6 +329,7 @@ Sessions resolve by **exact id, exact name, unique id prefix, or unique substrin
 | `REMINAL_RELAY` | Cloudflare relay URL | Override the relay WebSocket base URL |
 | `REMINAL_WEB` | Cloudflare web URL | Override the web UI URL shown in the banner |
 | `REMINAL_LOCAL` | — | Set to `1` to point everything at `localhost` |
+| `REMINAL_OWNERS_DIR` | `/etc/reminal` | Where the machine's owner list lives (the sudo-gated trust store) — override for tests or unusual layouts |
 | `REMINAL_NO_KEEP_AWAKE` | — | Set to `1` to let the host sleep while reminal runs (defaults to keeping it awake via `caffeinate` / `systemd-inhibit`) |
 | `REMINAL_TURN` / `REMINAL_TURN_USER` / `REMINAL_TURN_PASS` | — | Optional TURN server for P2P window mirroring behind hostile NATs (or `REMINAL_TURN_CF_KEY` + `REMINAL_TURN_CF_TOKEN` for Cloudflare TURN). Without one, un-punchable viewers stay on the relay fallback |
 | `REMINAL_NO_CAPTURE_HELPER` | — | Set to `1` to force the screenshot capture path (skip the native ScreenCaptureKit helper) |
