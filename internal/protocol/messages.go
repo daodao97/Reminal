@@ -44,6 +44,44 @@ const (
 	// agent's blinded ephemeral public key plus the wrapped session key
 	// (AES-256-GCM under HKDF(ECDH-shared, salt=ex_id)).
 	TypeKexResp MessageType = "kex_resp"
+	// TypeOwnerInit is an enrolled device's opening message of a PIN-free
+	// (owner) connect: its raw ephemeral X25519 key (Data), its owner public
+	// key (DevicePub), and a signature (DeviceSig) proving it controls that key
+	// for this session. See internal/crypto/owner.go.
+	TypeOwnerInit MessageType = "own_init"
+	// TypeOwnerResp is the agent's reply to a TypeOwnerInit: the agent's raw
+	// ephemeral key (Data), the machine identity key (MachinePub) and a
+	// signature over both ephemerals + both identities (MachineSig) so the
+	// device can confirm it's the real host, plus the wrapped session key
+	// (Wrap) — delivered only after the device signature verified.
+	TypeOwnerResp MessageType = "own_resp"
+	// TypeDirQuery is sent by an owner device on a machine's owner-derived
+	// directory channel, AFTER an own_init/own_resp handshake there has proven
+	// ownership, to ask "what sessions are you running?". No payload.
+	TypeDirQuery MessageType = "dir_query"
+	// TypeDirResp is the directory host's reply: the machine's live session list
+	// (and hostname) as a DirResponse JSON, encrypted under the channel's session
+	// key (Data) so the relay never sees what's running. `reminal machines` and
+	// the web Machines panel render it.
+	TypeDirResp MessageType = "dir_resp"
+	// TypeDirRename asks the directory host to rename one of the machine's live
+	// sessions (from the Machines panel). Data is {"id","name","req_id"} encrypted
+	// under the channel key — so, like new_session, only an authenticated owner can
+	// issue it. The host drives the target session's local control socket. It
+	// replies with a TypeDirRename echoing req_id and any error.
+	TypeDirRename MessageType = "dir_rename"
+	// TypeDirRevokeSelf asks the directory host to revoke the SENDING device's own
+	// PIN-free access to this machine. Data is {"device_pub","sig","req_id"}
+	// encrypted under the channel key; sig is over RevokeSelfTranscript so only the
+	// device itself can revoke itself (no owner can revoke another). The host
+	// tombstones the device and replies echoing req_id.
+	TypeDirRevokeSelf MessageType = "dir_revoke_self"
+	// TypeDirKill asks the directory host to terminate one of the machine's live
+	// sessions (the Machines panel's kill action). Data is {"id","req_id"}
+	// encrypted under the channel key — owner-gated like new_session/dir_rename.
+	// The host SIGTERMs (then SIGKILLs) the target agent and replies echoing
+	// req_id.
+	TypeDirKill MessageType = "dir_kill"
 	// TypeCopyAck is sent by the paste side of a rendezvous AFTER it has
 	// received every chunk and written the file, to tell the source the
 	// transfer landed. The source waits for it before closing — otherwise
@@ -211,4 +249,34 @@ type Message struct {
 	// Wrap carries the AES-GCM-wrapped session key in TypeKexResp,
 	// base64-encoded.
 	Wrap string `json:"wrap,omitempty"`
+	// Owner-connect fields (TypeOwnerInit / TypeOwnerResp), all base64. The
+	// ephemeral X25519 keys ride in Data (same as the PIN path). DevicePub +
+	// DeviceSig authenticate the device to the agent; MachinePub + MachineSig
+	// authenticate the machine to the device.
+	DevicePub  string `json:"device_pub,omitempty"`
+	DeviceSig  string `json:"device_sig,omitempty"`
+	MachinePub string `json:"machine_pub,omitempty"`
+	MachineSig string `json:"machine_sig,omitempty"`
+}
+
+// DirSession is one live session as reported by a machine's directory host. It
+// deliberately OMITS the PIN — an owner reaches sessions PIN-free, and the PIN
+// must never leak onto the directory channel.
+type DirSession struct {
+	ID       string `json:"id"`
+	Name     string `json:"name,omitempty"`
+	Cwd      string `json:"cwd,omitempty"`
+	Title    string `json:"title,omitempty"`
+	Kind     string `json:"kind,omitempty"`
+	Port     int    `json:"port,omitempty"`
+	Headless bool   `json:"headless,omitempty"`
+	Viewers  int    `json:"viewers,omitempty"`
+	IdleSecs int64  `json:"idle_secs,omitempty"` // seconds since last PTY activity
+}
+
+// DirResponse is the encrypted payload of a TypeDirResp: the machine's hostname
+// (so owners can auto-name it) and its live sessions.
+type DirResponse struct {
+	Hostname string       `json:"hostname,omitempty"`
+	Sessions []DirSession `json:"sessions"`
 }
