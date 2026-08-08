@@ -67,7 +67,35 @@ func runAddOwner(args []string) error {
 			fmt.Println("  " + cDim("To relabel it:  reminal owners rename "+o.ID+" <new-name>"))
 		}
 	}
+	// Now that this machine has an owner, make sure it keeps a presence even with
+	// no live session — so it stays listable and "+"-spawnable from the owner's
+	// phone. Runs here (the context that actually wrote the store, under sudo), so
+	// it installs exactly once; the auto-escalating parent doesn't re-run it.
+	enableBackgroundHost()
 	return nil
+}
+
+// enableBackgroundHost installs (idempotently) the login service that keeps this
+// machine's directory host running when idle. Best-effort: enrollment already
+// succeeded, so a service hiccup must not fail the command — we just tell the
+// user the machine will then only be reachable while a session is up.
+func enableBackgroundHost() {
+	if err := client.InstallDaemonService(); err != nil {
+		fmt.Println("  " + cDim("(background host not enabled: "+err.Error()+")"))
+		fmt.Println("  " + cDim("This machine stays reachable to you only while a session is running."))
+		return
+	}
+	fmt.Println("  " + cDim("Background host enabled — this machine stays reachable to you even when idle."))
+}
+
+// disableBackgroundHostIfLastOwner tears the login service down once the machine
+// has no owners left — the presence is only needed while someone owns it.
+func disableBackgroundHostIfLastOwner() {
+	owners, err := client.ListOwners()
+	if err != nil || len(owners) > 0 {
+		return
+	}
+	_ = client.UninstallDaemonService()
 }
 
 // parseAddOwnerArgs pulls the owner id and label out of `add owner` arguments.
@@ -165,6 +193,9 @@ func runOwners(args []string) error {
 				name = o.ID
 			}
 			fmt.Printf("  %s Revoked %s  %s\n", cGreen("✓"), cBold(name), cDim("("+o.ID+")"))
+			// If that was the last owner, the machine no longer needs a standing
+			// presence — remove the login service.
+			disableBackgroundHostIfLastOwner()
 		}
 		return nil
 

@@ -84,6 +84,28 @@ func (s *Server) HandleSessionWS(w http.ResponseWriter, r *http.Request, session
 	go s.handleSessionConn(sessionID, peerRole, conn)
 }
 
+// forwardableTypes is the single source of truth for which message types the
+// relay blindly relays between an agent and its viewers. BOTH connection
+// handlers (handleSessionConn and the legacy handleLegacyConn) consult it, so a
+// new agent↔viewer type is forwarded on every path the moment it's added here —
+// no more silently maintaining two lists that drift (an omission drops the type
+// only on this local relay; the production Worker forwards opaquely, so such bugs
+// hide until someone tests locally). Everything here is ciphertext or already
+// end-to-end authenticated; the relay never inspects the contents.
+var forwardableTypes = map[protocol.MessageType]bool{
+	protocol.TypeData: true, protocol.TypeResize: true, protocol.TypeResume: true,
+	protocol.TypeKexInit: true, protocol.TypeKexResp: true,
+	protocol.TypeOwnerInit: true, protocol.TypeOwnerResp: true,
+	protocol.TypeDirQuery: true, protocol.TypeDirResp: true, protocol.TypeDirRename: true,
+	protocol.TypeDirRevokeSelf: true, protocol.TypeDirKill: true,
+	protocol.TypeWindowList: true, protocol.TypeWindowCtl: true,
+	protocol.TypeWindowFrame: true, protocol.TypeWindowInput: true, protocol.TypeWindowAck: true,
+	protocol.TypeAppList: true, protocol.TypeAppOpen: true,
+	protocol.TypeHostInfo: true, protocol.TypeNewSession: true,
+	protocol.TypeWebRTCHello: true, protocol.TypeWebRTCOffer: true,
+	protocol.TypeWebRTCAnswer: true, protocol.TypeWebRTCICE: true,
+}
+
 func (s *Server) handleSessionConn(sessionID string, role protocol.Role, conn *websocket.Conn) {
 	defer conn.Close()
 	defer s.detach(sessionID, role, conn)
@@ -159,22 +181,11 @@ func (s *Server) handleSessionConn(sessionID string, role protocol.Role, conn *w
 		}
 		r.mu.Unlock()
 
-		switch msg.Type {
-		case protocol.TypeData, protocol.TypeResize, protocol.TypeResume,
-			protocol.TypeKexInit, protocol.TypeKexResp,
-			protocol.TypeOwnerInit, protocol.TypeOwnerResp,
-			protocol.TypeDirQuery, protocol.TypeDirResp, protocol.TypeDirRename,
-			protocol.TypeDirRevokeSelf, protocol.TypeDirKill,
-			protocol.TypeWindowList, protocol.TypeWindowCtl,
-			protocol.TypeWindowFrame, protocol.TypeWindowInput,
-			protocol.TypeWindowAck,
-			protocol.TypeAppList, protocol.TypeAppOpen,
-			protocol.TypeHostInfo, protocol.TypeNewSession,
-			protocol.TypeWebRTCHello, protocol.TypeWebRTCOffer,
-			protocol.TypeWebRTCAnswer, protocol.TypeWebRTCICE:
-			s.forward(sessionID, role, msg)
-		case protocol.TypePing:
+		switch {
+		case msg.Type == protocol.TypePing:
 			s.writeTo(p, protocol.Message{Type: protocol.TypePong})
+		case forwardableTypes[msg.Type]:
+			s.forward(sessionID, role, msg)
 		}
 	}
 }
@@ -319,18 +330,17 @@ func (s *Server) handleLegacyConn(conn *websocket.Conn) {
 			})
 			s.broadcastViewers(sessionID, protocol.Message{Type: protocol.TypeConnected})
 
-		case protocol.TypeData, protocol.TypeResize, protocol.TypeResume,
-			protocol.TypeKexInit, protocol.TypeKexResp,
-			protocol.TypeOwnerInit, protocol.TypeOwnerResp,
-			protocol.TypeDirQuery, protocol.TypeDirResp, protocol.TypeDirRename,
-			protocol.TypeDirRevokeSelf, protocol.TypeDirKill:
-			if !registered {
-				continue
-			}
-			s.forward(sessionID, role, msg)
-
 		case protocol.TypePing:
 			s.write(conn, protocol.Message{Type: protocol.TypePong})
+
+		default:
+			// Blindly relay agent↔viewer traffic. Shares forwardableTypes with
+			// handleSessionConn so the two paths can never drift (this legacy path
+			// had silently fallen behind — missing new_session, window, app, and
+			// webrtc types).
+			if registered && forwardableTypes[msg.Type] {
+				s.forward(sessionID, role, msg)
+			}
 		}
 	}
 

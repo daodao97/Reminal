@@ -79,7 +79,7 @@ _reminal_complete() {
         cword=$COMP_CWORD
     }
 
-    local subcommands="connect new attach list ls kill stop rename prune restart expose send copy paste notify connections info qr doctor completion upgrade relay version help"
+    local subcommands="connect new attach list ls kill stop rename prune restart expose send copy paste notify connections info qr own owners machines doctor completion upgrade relay version help"
     local flags="--connect --pin --name --verbose -v"
 
     case "${prev}" in
@@ -135,6 +135,9 @@ _reminal() {
         'connections:List currently attached viewers'
         'info:Show session info (id/name)'
         'qr:Print the join QR (id/name)'
+        'own:Print this device'"'"'s owner id'
+        'owners:List/rename/revoke this machine'"'"'s owners'
+        'machines:List machines you own'
         'doctor:Run a self-diagnostic'
         'completion:Generate shell completion script'
         'upgrade:Upgrade to the latest release'
@@ -199,6 +202,9 @@ complete -c reminal -n '__fish_use_subcommand' -a 'notify'      -d 'Push a notif
 complete -c reminal -n '__fish_use_subcommand' -a 'connections' -d 'List currently attached viewers'
 complete -c reminal -n '__fish_use_subcommand' -a 'info'        -d 'Show session info (id/name)'
 complete -c reminal -n '__fish_use_subcommand' -a 'qr'          -d 'Print the join QR (id/name)'
+complete -c reminal -n '__fish_use_subcommand' -a 'own'         -d 'Print this device\'s owner id'
+complete -c reminal -n '__fish_use_subcommand' -a 'owners'      -d 'List/rename/revoke this machine\'s owners'
+complete -c reminal -n '__fish_use_subcommand' -a 'machines'    -d 'List machines you own'
 complete -c reminal -n '__fish_use_subcommand' -a 'doctor'      -d 'Run a self-diagnostic'
 complete -c reminal -n '__fish_use_subcommand' -a 'completion'  -d 'Generate shell completion script'
 complete -c reminal -n '__fish_use_subcommand' -a 'upgrade'     -d 'Upgrade to the latest release'

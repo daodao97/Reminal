@@ -81,9 +81,16 @@ func main() {
 			}
 			return
 		case "upgrade":
-			if err := updater.Upgrade(version); err != nil {
+			updated, err := updater.Upgrade(version)
+			if err != nil {
 				fmt.Fprintf(os.Stderr, "error: %v\n", err)
 				os.Exit(1)
+			}
+			if updated {
+				// The background host is a hidden, long-lived service, so unlike
+				// sessions the user can't be told to restart it — move it onto the
+				// new binary now. Best-effort and a no-op if it isn't installed.
+				_ = client.RestartDaemonService()
 			}
 			return
 		case "info":
@@ -147,6 +154,17 @@ func main() {
 			// list session id/name/port candidates for `attach`/`kill`/etc.
 			// Best-effort and silent — completion must never print errors.
 			client.CompleteSessions()
+			return
+		case "daemon":
+			// Hidden. The always-on directory host: keeps an owned machine
+			// reachable (listable + "+"-spawnable) even with no live session.
+			// Installed as a login service when an owner is enrolled (see
+			// runAddOwner); not a user-facing command. `--install`/`--uninstall`
+			// manage that service; bare `daemon` runs the host in the foreground.
+			if err := runDaemon(os.Args[2:]); err != nil {
+				fmt.Fprintf(os.Stderr, "error: %v\n", err)
+				os.Exit(1)
+			}
 			return
 		case "connect":
 			if len(os.Args) < 3 {
@@ -1220,8 +1238,19 @@ func runRestartAll() error {
 	if err != nil {
 		return err
 	}
-	if len(all) == 0 {
+	daemonInstalled := client.DaemonServiceInstalled()
+	if len(all) == 0 && !daemonInstalled {
 		return errors.New("no active reminal sessions on this machine")
+	}
+	// Refresh the background host too — it runs independently of any terminal (so
+	// it can't cut this command off) and, being a hidden service, would otherwise
+	// be the one thing left on the old binary after an upgrade. No-op if absent.
+	if daemonInstalled {
+		if err := client.RestartDaemonService(); err != nil {
+			fmt.Fprintf(os.Stderr, "  background host  failed: %v\n", err)
+		} else {
+			fmt.Println("  restarted background host")
+		}
 	}
 	// The session we're being run from must be restarted LAST: hot-restarting it
 	// re-execs the agent our own terminal is attached to, which cuts this command
@@ -1260,11 +1289,15 @@ func runRestartAll() error {
 		ok++ // count it now; the restart below may cut us off before we can print
 		fmt.Printf("  restarted %s (this session, last)\n", self.ID)
 	}
-	msg := fmt.Sprintf("Hot-restarted %d session(s)", ok)
-	if skipped > 0 {
-		msg += fmt.Sprintf(" (skipped %d port forward(s))", skipped)
+	// When only the background host was refreshed (no shell sessions), the line
+	// above already said so — don't tack on a confusing "0 session(s)" summary.
+	if ok > 0 || skipped > 0 {
+		msg := fmt.Sprintf("Hot-restarted %d session(s)", ok)
+		if skipped > 0 {
+			msg += fmt.Sprintf(" (skipped %d port forward(s))", skipped)
+		}
+		fmt.Println(msg + ". Viewers briefly disconnect.")
 	}
-	fmt.Println(msg + ". Viewers briefly disconnect.")
 	if self != nil {
 		_, _ = sendControl(self.PID, "restart")
 	}

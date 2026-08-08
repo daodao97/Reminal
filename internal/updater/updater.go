@@ -109,23 +109,26 @@ func CheckAndPromptOnStart(currentVersion string) {
 // Upgrade runs the explicit `reminal upgrade` subcommand: forces a fresh
 // version check and applies the upgrade if one is available. Returns an
 // error so the caller can set a nonzero exit code on failure.
-func Upgrade(currentVersion string) error {
+// Upgrade performs an interactive upgrade. It reports whether the binary was
+// actually replaced (false when already on the latest release) so the caller can
+// skip post-upgrade work — like refreshing the background host — on a no-op.
+func Upgrade(currentVersion string) (updated bool, err error) {
 	// Bypass the cache so explicit `reminal upgrade` always hits the network.
 	clearCache()
 	latestTag, assetURL, _, err := check(currentVersion, httpTimeoutInteractive)
 	if err != nil {
-		return fmt.Errorf("check for updates: %w", err)
+		return false, fmt.Errorf("check for updates: %w", err)
 	}
 	if latestTag == "" {
 		fmt.Printf("reminal is already up to date (v%s).\n", currentVersion)
-		return nil
+		return false, nil
 	}
 	fmt.Printf("Upgrading from v%s to %s...\n", currentVersion, latestTag)
 	if err := apply(assetURL); err != nil {
-		return err
+		return false, err
 	}
 	fmt.Printf("Upgraded to %s. Restart reminal to use the new version.\n", latestTag)
-	return nil
+	return true, nil
 }
 
 // shouldCheck reports whether the version-check is meaningful for this build.

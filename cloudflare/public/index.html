@@ -1083,6 +1083,34 @@
       if (sessionId && sessionId !== id) userDisconnect();
       startConnect();
     }
+
+    // --- Spawn timeouts: one source of truth so the two spawn paths can't drift.
+    // SPAWN_HANDSHAKE_MS mirrors the host's spawnHandshakeTimeout
+    // (internal/client/spawn.go) — the most time it spends forking a headless
+    // agent and waiting for its ready handshake. A viewer-side spawn wait MUST
+    // exceed this plus that path's own overhead, or a slow-but-successful spawn is
+    // misreported as a failure and the session is orphaned.
+    const SPAWN_HANDSHAKE_MS = 15000;
+    // Host panel: request rides the already-open session channel — small reply margin.
+    const HOST_SPAWN_TIMEOUT_MS = SPAWN_HANDSHAKE_MS + 2000;
+    // Machines panel: request opens a FRESH directory channel and completes the
+    // owner handshake before the spawn even starts — needs more headroom.
+    const DIR_SPAWN_TIMEOUT_MS = SPAWN_HANDSHAKE_MS + 5000;
+
+    // connectToSpawnedSession connects to a freshly-spawned session {id, pin}.
+    // Owner spawns (Machines panel) connect PIN-free via the owner path; host-panel
+    // spawns use the returned PIN. Both spawn paths funnel through here so a spawn
+    // result is always handled identically. Returns false if there's no session.
+    function connectToSpawnedSession(r, owner) {
+      if (!r || !r.id) return false;
+      if (owner) {
+        if (r.pin) saveCred(r.id, r.pin);
+        connectOwned(r.id);
+      } else {
+        connectToSession(r.id, r.pin);
+      }
+      return true;
+    }
     function onNewSession(p) {
       creatingSession = false;
       if (hostNewTimer) { clearTimeout(hostNewTimer); hostNewTimer = null; }
@@ -1092,7 +1120,7 @@
         setTimeout(() => { hostNewError = ''; renderHost(); }, 4000);
         return;
       }
-      if (p && p.id && p.pin) connectToSession(p.id, p.pin);
+      connectToSpawnedSession(p, false); // host-panel spawn → connect with its PIN
     }
     // Health colour for a 0..100 usage: green → amber → red.
     function meterColor(p) {
@@ -2525,6 +2553,16 @@
     // killed session back into the list. Session ids are one-time (never reused),
     // so keeping them filtered for the life of the page never hides a live session.
     const killedSessionIds = new Set();
+    // Consecutive failed liveness probes per machine (keyed by owned-machine b64).
+    // A reachable machine that's momentarily between relay connections (its host
+    // just woke and is re-dialing, or a probe raced the reconnect) misses a probe
+    // or two before it answers. We keep it in the amber "reconnecting…" state for
+    // MACHINE_GRACE misses instead of flipping straight to a hard "offline", so a
+    // machine that's actually up doesn't read as down (and its cached session list
+    // — which would otherwise diverge from `reminal list` — isn't replaced with
+    // "offline"). Reset to 0 on any successful probe.
+    const machineFail = new Map();
+    const MACHINE_GRACE = 3;
     // Consistent stroke icons for the Machines panel — the caret / + / edit /
     // kill controls all render at the same visual size (Unicode glyphs don't).
     const MICONS = {
@@ -2658,6 +2696,35 @@
       renderRecents();
     }
 
+    // Re-probe every owned machine's liveness in place, WITHOUT rebuilding the
+    // skeleton — updates each existing card's dot + session list as its query
+    // lands. Runs on a timer while the Machines panel is open so a machine that
+    // comes back (or whose host finishes reconnecting after a sleep/wake) flips
+    // to green on its own, instead of staying stuck on a stale gray dot until the
+    // user closes and reopens the panel. fillMachineSessions is idempotent and
+    // gen-guarded, so re-running it against live boxes just refreshes them.
+    let machinesPolling = false;
+    async function pollMachines() {
+      if (document.hidden) return; // don't burn probes on a backgrounded tab
+      // Re-entrancy guard: a directory query can take up to its ~6s timeout, which
+      // is longer than the poll interval, so without this a slow/offline machine
+      // would let successive ticks stack — each opening a fresh WebSocket handshake
+      // to every machine. Skip a tick if the previous poll is still in flight.
+      if (machinesPolling) return;
+      machinesPolling = true;
+      try {
+        const store = await loadOwnedMachines();
+        const gen = machinesGen; // don't bump — we're updating the current skeleton
+        const keys = Object.keys(store).filter(b64 =>
+          !store[b64].pendingRevoke &&
+          document.querySelector('.machine-box[data-key="' + cssEscape(b64) + '"]'));
+        await Promise.all(keys.map(b64 => fillMachineSessions(b64, store[b64], gen)));
+        if (gen === machinesGen) renderRecents(); // reflect newly-revealed sessions
+      } finally {
+        machinesPolling = false;
+      }
+    }
+
     async function fillMachineSessions(b64, rec, gen) {
       let resp;
       let ok = true;
@@ -2681,6 +2748,22 @@
       const sessions = box.querySelector('.machine-sessions');
       const countEl = box.querySelector('.machine-count');
       if (!ok) {
+        const n = (machineFail.get(b64) || 0) + 1;
+        machineFail.set(b64, n);
+        // Grace before a hard offline: the machine's directory host may just be
+        // between relay connections (it woke from sleep and is re-dialing, or the
+        // probe raced its reconnect). Hold the amber "reconnecting…" dot and keep
+        // the cached sessions for the first few misses — the panel's poll re-probes
+        // and flips it green the moment the host answers, without a false gray flash
+        // or a stale "offline" that no longer matches `reminal list`.
+        if (n < MACHINE_GRACE) {
+          // Amber "checking" pulse, NOT the blue refresh spinner — a machine
+          // that's missing probes must read as "not quite healthy, retrying",
+          // visually distinct from a healthy machine refreshing in the background.
+          dot.className = 'machine-dot checking';
+          dot.title = 'reconnecting…';
+          return;
+        }
         dot.className = 'machine-dot offline';
         dot.title = 'offline';
         // Keep the last-known (cached) list visible so a transient blip doesn't
@@ -2691,6 +2774,7 @@
         }
         return;
       }
+      machineFail.set(b64, 0);
       dot.className = 'machine-dot online';
       dot.title = 'online';
       // Auto-name an unnamed machine from its reported hostname. Persist WITHOUT
@@ -2825,17 +2909,18 @@
     async function spawnOnMachine(b64, name) {
       try {
         setStatus('Starting a session on ' + name + '…', 'info');
-        const r = await queryDirectory(base64ToU8(b64URLToStd(b64)), { spawn: true, spawnName: '' });
-        if (r && r.id) {
-          // Remember the PIN so the connect can fall back if the owner path
-          // hiccups, then connect (owner path needs no PIN).
-          if (r.pin) saveCred(r.id, r.pin);
-          connectOwned(r.id);
-        } else {
+        // DIR_SPAWN_TIMEOUT_MS covers the host's spawn budget + the directory
+        // channel's owner handshake, so a slow-but-successful spawn isn't reported
+        // as a failure here (which would strand a session the user was told never
+        // started).
+        const r = await queryDirectory(base64ToU8(b64URLToStd(b64)), { spawn: true, spawnName: '', timeout: DIR_SPAWN_TIMEOUT_MS });
+        if (!connectToSpawnedSession(r, true)) { // owner spawn → PIN-free connect
           setStatus('Could not start a session on ' + name, 'error');
         }
       } catch (e) {
-        setStatus('Could not reach ' + name + ' to start a session', 'error');
+        // Reached-but-failed (host returned an error) and couldn't-reach both land
+        // here; surface the host's reason when we have one rather than guessing.
+        setStatus('Could not start a session on ' + name + (e && e.message && e.message !== 'timeout' ? ' (' + e.message + ')' : ''), 'error');
       }
     }
 
@@ -5114,11 +5199,25 @@
     renderRecents();
     renderMachines();
 
-    // Re-probe every owned machine's liveness each time the Machines panel opens,
-    // so the dots and session lists are fresh without polling in the background.
+    // Re-probe every owned machine's liveness when the Machines panel opens, then
+    // keep re-probing on a timer WHILE it stays open — so a machine that comes
+    // back, or whose host finishes reconnecting after a sleep/wake, flips from
+    // gray to green on its own instead of stranding a stale dot until the user
+    // reopens the panel. Poll stops when the panel closes.
     (function () {
       const rec = document.getElementById('recents');
-      if (rec) rec.addEventListener('toggle', () => { if (rec.open) renderMachines(); });
+      if (!rec) return;
+      let machinesPollTimer = null;
+      rec.addEventListener('toggle', () => {
+        if (machinesPollTimer) { clearInterval(machinesPollTimer); machinesPollTimer = null; }
+        if (rec.open) {
+          renderMachines();
+          machinesPollTimer = setInterval(() => {
+            if (!rec.open) { clearInterval(machinesPollTimer); machinesPollTimer = null; return; }
+            pollMachines();
+          }, 5000);
+        }
+      });
     })();
 
     // Keep Recent live across tabs/windows: when another same-origin document
@@ -5231,7 +5330,7 @@
         creatingSession = false; hostNewError = 'Timed out';
         renderHost();
         setTimeout(() => { hostNewError = ''; renderHost(); }, 3000);
-      }, 15000);
+      }, HOST_SPAWN_TIMEOUT_MS);
     });
 
     // ---- Window mirroring: list host windows, stream one, control it -------
@@ -6168,13 +6267,19 @@
         if (p.placeCursor && p.cursor) p.placeCursor();
         if (payload.seq != null) sendWindowAck(payload.id, payload.seq, viaDC);
       };
+      // Ack even if the frame can't be decoded: the ack means "received seq N and
+      // kept up", which drives the host's frame pacing AND its liveness check —
+      // withholding it on a rare bad frame makes lastAck go stale, so the host can
+      // wrongly conclude the viewer vanished (streamAckIdleTimeout) and END a live
+      // stream. paint() acks on success; these handle the decode-failure paths.
+      const ackDropped = () => { if (payload.seq != null) sendWindowAck(payload.id, payload.seq, viaDC); };
       if (window.createImageBitmap) {
-        createImageBitmap(blob).then((bmp) => { paint(bmp, bmp.width, bmp.height); bmp.close(); }, () => {});
+        createImageBitmap(blob).then((bmp) => { paint(bmp, bmp.width, bmp.height); bmp.close(); }, ackDropped);
       } else {
         const url = URL.createObjectURL(blob);
         const im = new Image();
         im.onload = () => { paint(im, im.naturalWidth, im.naturalHeight); URL.revokeObjectURL(url); };
-        im.onerror = () => URL.revokeObjectURL(url);
+        im.onerror = () => { URL.revokeObjectURL(url); ackDropped(); };
         im.src = url;
       }
     }

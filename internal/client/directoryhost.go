@@ -42,9 +42,13 @@ import (
 
 const (
 	// With single-host locking there's no sibling to fight, so a dropped
-	// connection is always a genuine network blip — reclaim fast.
+	// connection is always a genuine network blip — reclaim fast. Cap the backoff
+	// low (not tens of seconds): after a wake-from-sleep or a network flap we want
+	// the machine's presence back within seconds, so the phone stops showing it
+	// gray. A failed dial is a cheap TCP attempt, so polling every few seconds
+	// while the network is still down costs little.
 	dirHostRetry    = 2 * time.Second
-	dirHostRetryMax = 30 * time.Second
+	dirHostRetryMax = 8 * time.Second
 	// How often a standing-by agent re-checks to take over the lock, and how
 	// often an unowned machine re-checks for newly-enrolled owners.
 	dirHostLockPoll     = 3 * time.Second
