@@ -477,6 +477,21 @@
     .host-new:active, .host-desktop:active { background: #1f6feb; border-color: #388bfd; }
     .host-new:disabled { opacity: 0.6; cursor: default; }
     .host-desktop { margin-top: 6px; }
+    .own-box { margin-top: 8px; background: #0d1117; border: 1px solid #21262d; border-radius: 6px; padding: 8px; }
+    .own-box .own-label { font-size: 11px; color: #8b949e; margin-bottom: 6px; line-height: 1.4; }
+    .own-box .own-id { display: flex; gap: 6px; align-items: stretch; }
+    .own-box code { flex: 1; font-size: 11px; color: #c9d1d9; word-break: break-all; background: #010409; padding: 6px 8px; border-radius: 4px; border: 1px solid #21262d; }
+    .own-copy { flex: 0 0 auto; font-size: 11px; padding: 5px 10px; border-radius: 5px; background: #21262d; color: #c9d1d9; border: 1px solid #30363d; cursor: pointer; }
+    .own-copy:hover { background: #2a313a; }
+    .own-actions { display: flex; }
+    .own-copy-main { flex: 1; text-align: center; padding: 7px 10px; }
+    .own-box .own-id { margin-top: 6px; }
+    .own-toggle { margin-top: 6px; text-align: center; }
+    .own-reveal { font-size: 11px; color: #6b7890; cursor: pointer; border-bottom: 1px dashed #3a4252; }
+    .own-reveal:hover { color: #8fbdff; }
+    .own-owned { margin-top: 8px; font-size: 12px; color: #3fb950; text-align: center; padding: 6px; }
+    .own-fp { margin-top: 8px; font-size: 11px; color: #8b949e; text-align: center; }
+    .own-fp code { background: #010409; border: 1px solid #21262d; border-radius: 4px; padding: 1px 6px; color: #c9d1d9; }
     .recents-list {
       position: absolute;
       top: 100%;
@@ -520,7 +535,7 @@
     .recents-empty { padding: 12px; color: #8b949e; font-size: 13px; text-align: center; }
     .recents-row {
       display: flex; align-items: center; gap: 6px;
-      padding: 6px 8px; border-radius: 4px;
+      padding: 8px 12px; border-radius: 4px;
       cursor: pointer; color: #e6edf3;
     }
     .recents-row:hover { background: #21262d; }
@@ -545,6 +560,63 @@
       padding: 4px 6px; font-size: 13px; cursor: pointer; border-radius: 4px;
     }
     .recents-row .row-btn:hover { background: #30363d; color: #e6edf3; }
+
+    /* Machines panel: each owned machine is a self-contained CARD — a titled
+       header (dot + name + actions) with its live sessions nested inside — so
+       it's visually distinct from the Recent-sessions list below. */
+    .machine-box {
+      border: 1px solid #3d444d; background: #0d1117; border-radius: 8px;
+      margin-bottom: 10px; overflow: hidden; box-shadow: 0 1px 3px rgba(1,4,9,0.5);
+    }
+    .machine-head {
+      display: flex; align-items: center; gap: 8px; padding: 8px 12px;
+      background: #1c2128; border-bottom: 1px solid #30363d;
+    }
+    .machine-name { font-size: 13px; font-weight: 600; color: #e6edf3; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .machine-caret { font-size: 10px; color: #8b949e; flex: none; width: 10px; }
+    .machine-count { font-size: 11px; color: #8b949e; font-family: monospace; flex: none; }
+    .machine-sessions.collapsed { display: none; }
+    .machine-dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+    .machine-dot.online { background: #3fb950; box-shadow: 0 0 0 2px rgba(63,185,80,0.18); }
+    .machine-dot.offline { background: #6e7681; }
+    .machine-dot.checking { background: #d29922; animation: mdotpulse 1s ease-in-out infinite; }
+    @keyframes mdotpulse { 0%,100% { opacity: 0.4; } 50% { opacity: 1; } }
+    .machine-box.is-pending { opacity: 0.6; }
+    .machine-pending { font-size: 11px; color: #d29922; font-style: italic; margin-left: 6px; white-space: nowrap; }
+    /* Subtle icon buttons in the header — explicitly styled to override the
+       global green <button> default (which otherwise makes them big and green). */
+    .machine-btn {
+      background: transparent; color: #8b949e; border: 1px solid transparent;
+      font-size: 14px; font-weight: 400; line-height: 1; padding: 4px 9px;
+      border-radius: 5px; cursor: pointer; flex: none;
+    }
+    .machine-btn:hover { background: #21262d; color: #e6edf3; border-color: #30363d; }
+    .machine-sessions { padding: 4px 0; }
+    .machine-sub { font-size: 11px; color: #8b949e; padding: 8px 12px 8px 30px; font-style: italic; }
+    .machine-session {
+      display: flex; align-items: baseline; gap: 8px; padding: 8px 12px 8px 30px;
+      cursor: pointer;
+    }
+    .machine-session:hover { background: #161b22; }
+    .machine-session.is-current { background: rgba(56,139,253,0.12); }
+    .machine-session.is-current .ms-label { color: #79c0ff; font-weight: 500; }
+    .machine-session.is-current .ms-meta { color: #58a6ff; }
+    .machine-session.is-port { cursor: default; opacity: 0.7; }
+    .machine-session.is-port:hover { background: transparent; }
+    .machine-session .ms-label { flex: 1; min-width: 0; font-size: 13px; color: #e6edf3; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .machine-session .ms-meta { font-size: 11px; color: #8b949e; font-family: monospace; white-space: nowrap; }
+    .machine-session .ms-btn {
+      background: transparent; border: none; color: #6e7681; cursor: pointer;
+      font-size: 12px; padding: 2px 6px; flex: none; border-radius: 4px; line-height: 1;
+    }
+    .machine-session .ms-btn:hover { background: #21262d; color: #e6edf3; }
+    .machine-session .ms-kill:hover { background: rgba(248,81,73,0.15); color: #f85149; }
+    /* Divider label separating the Machines cards from the Recent-sessions list. */
+    .section-label {
+      font-size: 10px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase;
+      color: #6e7681; padding: 8px 12px 4px; margin-top: 2px;
+    }
+
     /* When connected, the inputs collapse but the recents dropdown stays
        useful: rename the current session, hop to another one. */
 
@@ -710,8 +782,11 @@
     <h1><span>re</span>minal</h1>
     <div id="session-form">
       <details id="recents">
-        <summary><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 7v5l3.5 2"/><circle cx="12" cy="12" r="9"/></svg>Recent<span class="caret">▾</span></summary>
-        <div class="recents-list" id="recents-list"></div>
+        <summary><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="12" rx="1.5"/><path d="M8 20h8M12 16v4"/></svg>Machines<span class="caret">▾</span></summary>
+        <div class="recents-list">
+          <div id="machines-list"></div>
+          <div id="recents-list"></div>
+        </div>
       </details>
       <details id="windows" title="View & control a window on the host">
         <summary><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><rect x="3" y="3" width="8" height="8" rx="1.5"/><rect x="13" y="3" width="8" height="8" rx="1.5"/><rect x="3" y="13" width="8" height="8" rx="1.5"/><rect x="13" y="13" width="8" height="8" rx="1.5"/></svg>Windows<span class="caret">▾</span></summary>
@@ -998,6 +1073,74 @@
         + '<div class="bar"><span style="width:' + p + '%;background-color:' + meterColor(p) + '"></span></div>'
         + '</div>';
     }
+    // ---- Own this machine (browser device identity) --------------------------
+    // The browser mints its own non-extractable Ed25519 keypair (in IndexedDB)
+    // and shows its PUBLIC id, formatted identically to `reminal own` on the CLI
+    // (rmnl_ + base64url of the 32-byte public key), so it drops straight into
+    // `sudo reminal add owner <id>` on the host. The private key never leaves
+    // the browser. Ownership isn't consumed for connect yet — this is the
+    // enrollment surface.
+    let ownIdShown = null;   // the rmnl_ id, once generated (persists across host re-renders)
+    let ownCopied = false;
+    let ownRevealed = false; // the raw id string is hidden by default (it's ugly)
+    let ownErr = '';
+    let iOwnThisMachine = false; // true once we've owner-connected to the current machine → hide the enroll offer
+    let ownFp = null;        // this browser's short device fingerprint (dv_…), shown so you can match it in `reminal owners`
+
+    // deviceFingerprint mirrors Go's: "dv_" + hex(first 4 bytes of SHA-256(pub)).
+    async function deviceFingerprint(pubRaw) {
+      const h = new Uint8Array(await crypto.subtle.digest('SHA-256', pubRaw));
+      let hex = '';
+      for (let i = 0; i < 4; i++) hex += h[i].toString(16).padStart(2, '0');
+      return 'dv_' + hex;
+    }
+    async function refreshOwnFingerprint() {
+      try { const dk = await loadDeviceKeyPair(); ownFp = dk ? await deviceFingerprint(dk.pubRaw) : null; }
+      catch (_) { ownFp = null; }
+      if (typeof renderHost === 'function') renderHost();
+    }
+    function b64url(bytes) {
+      let s = '';
+      for (const b of bytes) s += String.fromCharCode(b);
+      return btoa(s).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+    }
+    function openOwnDB() {
+      return new Promise((res, rej) => {
+        const r = indexedDB.open('reminal-own', 1);
+        r.onupgradeneeded = () => r.result.createObjectStore('keys');
+        r.onsuccess = () => res(r.result);
+        r.onerror = () => rej(r.error);
+      });
+    }
+    function idbGet(db, key) {
+      return new Promise((res, rej) => {
+        const t = db.transaction('keys', 'readonly').objectStore('keys').get(key);
+        t.onsuccess = () => res(t.result);
+        t.onerror = () => rej(t.error);
+      });
+    }
+    function idbPut(db, key, val) {
+      return new Promise((res, rej) => {
+        const t = db.transaction('keys', 'readwrite').objectStore('keys').put(val, key);
+        t.onsuccess = () => res();
+        t.onerror = () => rej(t.error);
+      });
+    }
+    async function ownDeviceId() {
+      const db = await openOwnDB();
+      const rec = await idbGet(db, 'device');
+      let pub;
+      if (rec && rec.publicKey) {
+        pub = new Uint8Array(await crypto.subtle.exportKey('raw', rec.publicKey));
+      } else {
+        // extractable=false → the PRIVATE key can never leave the browser.
+        const kp = await crypto.subtle.generateKey({ name: 'Ed25519' }, false, ['sign', 'verify']);
+        await idbPut(db, 'device', { privateKey: kp.privateKey, publicKey: kp.publicKey });
+        pub = new Uint8Array(await crypto.subtle.exportKey('raw', kp.publicKey));
+      }
+      return 'rmnl_' + b64url(pub);
+    }
+
     function renderHost() {
       const root = document.getElementById('host-list');
       if (!root) return;
@@ -1048,6 +1191,30 @@
       // input pipeline as single windows, keyed by "display:<id>" entries the
       // agent appends to the window list.
       html += '<button class="host-desktop">' + (hostDesktopErr ? hostDesktopErr : 'View full desktop') + '</button>';
+      // Always show this browser's device fingerprint so it can be matched to a
+      // row in `reminal owners` (or the web owners list) without a label.
+      if (ownFp) html += '<div class="own-fp">This browser · <code>' + ownFp + '</code></div>';
+      // Own this machine: hidden entirely once this device already owns it (a
+      // PIN-free/owner connect proves ownership); otherwise offer to enroll.
+      if (iOwnThisMachine) {
+        html += '<div class="own-owned">✓ You own this machine</div>';
+      } else if (ownErr) {
+        html += '<div class="own-box"><div class="own-label">' + ownErr + '</div></div>';
+      } else if (ownIdShown) {
+        const cmd = 'sudo reminal add owner ' + ownIdShown;
+        html += '<div class="own-box">'
+          + '<div class="own-label">Run this on ' + name + ' to make this device an owner:</div>'
+          + '<div class="own-actions"><button class="own-copy own-copy-main">'
+          + (ownCopied ? 'Copied ✓' : 'Copy enroll command') + '</button></div>';
+        if (ownRevealed) {
+          html += '<div class="own-id"><code>' + cmd + '</code></div>';
+        }
+        html += '<div class="own-toggle"><span class="own-reveal">'
+          + (ownRevealed ? 'hide command' : 'show command') + '</span></div>';
+        html += '</div>';
+      } else {
+        html += '<button class="host-desktop host-own">Own this machine</button>';
+      }
       html += '</div>';
       root.innerHTML = html;
     }
@@ -1059,14 +1226,28 @@
       return Math.floor(s / 86400) + 'd ago';
     }
     function renderRecents() {
-      const list = loadHistory();
       const root = document.getElementById('recents-list');
       if (!root) return;
+      const hasMachines = !!document.querySelector('#machines-list .machine-box');
+      // Drop sessions already shown under an owned-machine card — they'd be
+      // duplicates (e.g. the current session appears in its machine's card).
+      const list = loadHistory().filter(e => !ownedSessionIds.has(e.id));
       if (list.length === 0) {
-        root.innerHTML = '<div class="recents-empty">No recent sessions yet — connect once and it\'ll show up here.</div>';
+        // Only show the recents hint when there are no Machines cards above it,
+        // otherwise it reads as a redundant second empty-state.
+        root.innerHTML = hasMachines
+          ? '' : '<div class="recents-empty">No recent sessions yet — connect once and it\'ll show up here.</div>';
         return;
       }
       root.innerHTML = '';
+      // When Machines cards are shown above, label this list so the boundary
+      // between "machines you own" and "sessions you've connected to" is clear.
+      if (hasMachines) {
+        const label = document.createElement('div');
+        label.className = 'section-label';
+        label.textContent = 'Recent sessions';
+        root.appendChild(label);
+      }
       for (const e of list) {
         const row = document.createElement('div');
         const isCurrent = !!sessionId && e.id === sessionId;
@@ -1951,6 +2132,661 @@
       if (kexTimer) { clearTimeout(kexTimer); kexTimer = 0; }
     }
 
+    // ---- PIN-free (owner) handshake — the browser mirror of the Go path ------
+    // If this browser has an owner key (minted via "Own this machine"), we try a
+    // mutually-authenticated connect first: prove our owner key, verify the
+    // machine's identity against the key we pinned on first connect, and receive
+    // the session key — no PIN. Falls back to the PIN handshake if the machine
+    // doesn't recognise us. Must byte-match internal/crypto/owner.go.
+    const OWNER_TIMEOUT_MS = 4000;
+    let ownerTimer = 0;
+    const ownerAttempts = new Map();
+
+    async function loadDeviceKeyPair() {
+      try {
+        const db = await openOwnDB();
+        const rec = await idbGet(db, 'device');
+        if (!rec || !rec.privateKey || !rec.publicKey) return null;
+        const pubRaw = new Uint8Array(await crypto.subtle.exportKey('raw', rec.publicKey));
+        return { privateKey: rec.privateKey, pubRaw };
+      } catch (_) { return null; }
+    }
+    // SHA-256 over length-prefixed [tag, sessionID, ...fields] — matches Go's
+    // ownerHash (4-byte big-endian length before each field).
+    async function ownerTranscript(tag, sid, fields) {
+      const enc = new TextEncoder();
+      const parts = [enc.encode(tag), enc.encode(sid), ...fields];
+      let total = 0; for (const p of parts) total += 4 + p.length;
+      const buf = new Uint8Array(total); let o = 0;
+      for (const p of parts) {
+        buf[o++] = (p.length >>> 24) & 0xff; buf[o++] = (p.length >>> 16) & 0xff;
+        buf[o++] = (p.length >>> 8) & 0xff; buf[o++] = p.length & 0xff;
+        buf.set(p, o); o += p.length;
+      }
+      return new Uint8Array(await crypto.subtle.digest('SHA-256', buf));
+    }
+    async function getPinnedMachine(sid) {
+      // undefined → null for a genuine not-found; a real read error PROPAGATES so
+      // completeOwner fails closed (we can't verify the machine identity) rather
+      // than silently skipping the trust-on-first-use check — matches the Go side.
+      const db = await openOwnDB();
+      return (await idbGet(db, 'mach:' + sid)) || null;
+    }
+    async function pinMachine(sid, pubB64) {
+      try { const db = await openOwnDB(); await idbPut(db, 'mach:' + sid, pubB64); } catch (_) {}
+    }
+    // Have we ever completed an owner connect to this machine? (drives the
+    // Machines list's owned-only "+".)
+    async function isOwnedMachine(sid) { try { return (await getPinnedMachine(sid)) !== null; } catch (_) { return false; } }
+
+    async function sendOwnerInit() {
+      if (!ws || ws.readyState !== WebSocket.OPEN) return false;
+      if (cryptoKey || kexInFlight) return false;
+      const dk = await loadDeviceKeyPair();
+      if (!dk) return false; // no owner key → can't try PIN-free
+      kexInFlight = true;
+      try {
+        const eph = await newEphemeralX25519();
+        const viewerEph = eph.pub;
+        const exIDBytes = crypto.getRandomValues(new Uint8Array(16));
+        const exID = Array.from(exIDBytes).map(b => b.toString(16).padStart(2, '0')).join('');
+        const tr = await ownerTranscript('reminal-owner-cli-v1', sessionId, [viewerEph, dk.pubRaw]);
+        const sig = new Uint8Array(await crypto.subtle.sign({ name: 'Ed25519' }, dk.privateKey, tr));
+        ownerAttempts.set(exID, { eph, exIDBytes, viewerEph, devicePubRaw: dk.pubRaw });
+        dbg('▶ own_init sent ex=' + exID.slice(0, 6));
+        ws.send(JSON.stringify({
+          type: 'own_init', ex_id: exID,
+          data: u8ToBase64(viewerEph),
+          device_pub: u8ToBase64(dk.pubRaw),
+          device_sig: u8ToBase64(sig),
+        }));
+        if (ownerTimer) clearTimeout(ownerTimer);
+        ownerTimer = setTimeout(() => {
+          ownerTimer = 0;
+          if (cryptoKey) return;
+          ownerAttempts.clear();
+          dbg('owner handshake timed out — falling back to PIN');
+          if (pinValue) sendKexInit().catch(() => {});
+          else setStatus('This device isn’t an owner of this machine — a PIN is required', 'error');
+        }, OWNER_TIMEOUT_MS);
+        return true;
+      } finally { kexInFlight = false; }
+    }
+
+    async function completeOwner(msg) {
+      const att = ownerAttempts.get(msg.ex_id);
+      if (!att || cryptoKey) return;
+      const agentEph = base64ToU8(msg.data || '');
+      const machinePub = base64ToU8(msg.machine_pub || '');
+      const machineSig = base64ToU8(msg.machine_sig || '');
+      if (agentEph.length !== 32 || machinePub.length !== 32) throw new Error('bad key length');
+      // 1. Verify the machine's signature over both ephemerals + both identities.
+      const tr = await ownerTranscript('reminal-owner-srv-v1', sessionId, [att.viewerEph, agentEph, att.devicePubRaw, machinePub]);
+      const macKey = await crypto.subtle.importKey('raw', machinePub, { name: 'Ed25519' }, false, ['verify']);
+      if (!(await crypto.subtle.verify({ name: 'Ed25519' }, macKey, machineSig, tr))) {
+        throw new Error('machine signature invalid — refusing (possible relay tampering)');
+      }
+      // 2. Trust-on-first-use: the machine key must match what we pinned before.
+      const machineB64 = u8ToBase64(machinePub);
+      const pinned = await getPinnedMachine(sessionId);
+      if (pinned && pinned !== machineB64) throw new Error('this machine’s identity changed since first connect — refusing');
+      if (!pinned) await pinMachine(sessionId, machineB64);
+      // 3. Same wrapped-session-key path as the PIN handshake.
+      const shared = await att.eph.deriveShared(agentEph);
+      const sharedKey = await crypto.subtle.importKey('raw', shared, 'HKDF', false, ['deriveBits']);
+      const wrapKeyBits = await crypto.subtle.deriveBits(
+        { name: 'HKDF', hash: 'SHA-256', salt: att.exIDBytes, info: new TextEncoder().encode('reminal-wrap-v2') },
+        sharedKey, 256);
+      const wrapKey = await crypto.subtle.importKey('raw', wrapKeyBits, { name: 'AES-GCM' }, false, ['decrypt']);
+      const wrapped = base64ToU8(msg.wrap || '');
+      if (wrapped.length < 12 + 16) throw new Error('wrap too short');
+      const sessionKeyRaw = new Uint8Array(await crypto.subtle.decrypt(
+        { name: 'AES-GCM', iv: wrapped.slice(0, 12) }, wrapKey, wrapped.slice(12)));
+      cryptoKey = await crypto.subtle.importKey('raw', sessionKeyRaw, { name: 'AES-GCM' }, false, ['encrypt', 'decrypt']);
+      dbg('✓ owner handshake complete — PIN-free');
+      ownerAttempts.clear();
+      if (ownerTimer) { clearTimeout(ownerTimer); ownerTimer = 0; }
+      // We just proved ownership of this machine — remember it (keyed by machine
+      // key, not session) so the Machines panel can list it and reach it later.
+      try { await recordOwnedMachineWeb(machineB64); } catch (_) {}
+      // We're connected PIN-free → we own this machine; hide the enroll offer.
+      iOwnThisMachine = true;
+      if (typeof renderHost === 'function') renderHost();
+    }
+
+    // startHandshake tries the owner path first (if this browser has a key),
+    // else the PIN path.
+    async function startHandshake() {
+      if (cryptoKey) return;
+      const tried = await sendOwnerInit();
+      if (!tried) await sendKexInit();
+    }
+
+    // ===== Machines panel: list every session across the machines you own =====
+    //
+    // Owned machines are kept in IndexedDB keyed by MACHINE key (base64, url-safe
+    // no pad — matches Go's owned_machines.json), recorded the first time this
+    // browser owner-connects. To list a machine's live sessions we reach its
+    // owner-derived directory channel: derive the channel id from the machine
+    // key, prove ownership with the same signed handshake used for a PIN-free
+    // connect, then dir_query and decrypt the reply — the relay only ever sees
+    // opaque frames. Mirrors internal/client/directoryquery.go.
+
+    async function loadOwnedMachines() {
+      try { const db = await openOwnDB(); return (await idbGet(db, 'owned-machines')) || {}; }
+      catch (_) { return {}; }
+    }
+    async function saveOwnedMachines(obj) {
+      try { const db = await openOwnDB(); await idbPut(db, 'owned-machines', obj); } catch (_) {}
+    }
+    // Serialize load→mutate→save so concurrent mutations (several fills auto-naming
+    // at once, a forget racing a rename, etc.) can't clobber each other — the same
+    // lost-update hazard the Go tombstone store has. `mutate(store)` edits in place;
+    // return false to skip the save. Resolves after the save.
+    let _omChain = Promise.resolve();
+    function withOwnedMachines(mutate) {
+      const run = _omChain.then(async () => {
+        const store = await loadOwnedMachines();
+        const skip = await mutate(store);
+        if (skip !== false) await saveOwnedMachines(store);
+      });
+      _omChain = run.catch(() => {}); // keep the chain alive on error
+      return run;
+    }
+    async function recordOwnedMachineWeb(machineB64) {
+      await withOwnedMachines(m => {
+        const now = Date.now();
+        if (!m[machineB64]) m[machineB64] = { firstOwned: now };
+        m[machineB64].lastSeen = now;
+      });
+      renderMachines();
+    }
+    async function renameOwnedMachineWeb(machineB64, name) {
+      await withOwnedMachines(m => { if (!m[machineB64]) return false; m[machineB64].name = name; });
+      renderMachines();
+    }
+    async function forgetOwnedMachineWeb(machineB64) {
+      await withOwnedMachines(m => { delete m[machineB64]; });
+      renderMachines();
+    }
+
+    // Toggle a machine's session list collapsed/expanded (persisted). Flips the
+    // DOM in place — no re-query — so it's instant.
+    async function toggleMachineCollapse(b64) {
+      let collapsed = false;
+      await withOwnedMachines(m => {
+        if (!m[b64]) return false;
+        m[b64].collapsed = !m[b64].collapsed;
+        collapsed = m[b64].collapsed;
+      });
+      const box = document.querySelector('.machine-box[data-key="' + cssEscape(b64) + '"]');
+      if (box) {
+        box.querySelector('.machine-sessions')?.classList.toggle('collapsed', collapsed);
+        const c = box.querySelector('.machine-caret');
+        if (c) c.textContent = collapsed ? '▸' : '▾';
+      }
+    }
+
+    // Crockford-ish alphabet + 26-char length, matching crypto.DeriveDirectoryID.
+    const DIR_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+    async function deriveDirectoryID(machinePubU8) {
+      const tag = new TextEncoder().encode('reminal-directory-v1:');
+      const buf = new Uint8Array(tag.length + machinePubU8.length);
+      buf.set(tag); buf.set(machinePubU8, tag.length);
+      const h = new Uint8Array(await crypto.subtle.digest('SHA-256', buf));
+      let id = '';
+      for (let i = 0; i < 26; i++) id += DIR_ALPHABET[h[i % h.length] % DIR_ALPHABET.length];
+      return id;
+    }
+
+    // queryDirectory reaches a machine's directory channel and either lists its
+    // sessions (default) or spawns a new one (opts.spawn). Resolves with the
+    // decrypted DirResponse {hostname, sessions} or, when spawning, {id, pin}.
+    async function queryDirectory(machinePubU8, opts) {
+      opts = opts || {};
+      const dk = await loadDeviceKeyPair();
+      if (!dk) throw new Error('this device has no owner key');
+      const machineB64Cmp = u8ToBase64(machinePubU8);
+      const dirID = await deriveDirectoryID(machinePubU8);
+      const url = relayURL(dirID);
+      return await new Promise((resolve, reject) => {
+        let settled = false, state = 'auth', att = null, box = null;
+        const sock = new WebSocket(url);
+        const done = (err, val) => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timer);
+          try { sock.close(); } catch (_) {}
+          if (err) reject(err); else resolve(val);
+        };
+        const timer = setTimeout(() => done(new Error('timeout')), opts.timeout || 6000);
+        sock.onerror = () => done(new Error('unreachable'));
+        sock.onclose = () => done(new Error('unreachable'));
+        sock.onopen = () => sock.send(JSON.stringify({ type: 'auth' }));
+        sock.onmessage = async (ev) => {
+          let msg; try { msg = JSON.parse(ev.data); } catch (_) { return; }
+          try {
+            if (msg.type === 'error') return done(new Error('unreachable'));
+            if (state === 'auth') {
+              if (msg.type !== 'auth_ok') return;
+              const eph = await newEphemeralX25519();
+              const exIDBytes = crypto.getRandomValues(new Uint8Array(16));
+              const exID = Array.from(exIDBytes).map(b => b.toString(16).padStart(2, '0')).join('');
+              const tr = await ownerTranscript('reminal-owner-cli-v1', dirID, [eph.pub, dk.pubRaw]);
+              const sig = new Uint8Array(await crypto.subtle.sign({ name: 'Ed25519' }, dk.privateKey, tr));
+              att = { eph, exIDBytes, exID, viewerEph: eph.pub, devicePubRaw: dk.pubRaw };
+              sock.send(JSON.stringify({ type: 'own_init', ex_id: exID, data: u8ToBase64(eph.pub), device_pub: u8ToBase64(dk.pubRaw), device_sig: u8ToBase64(sig) }));
+              state = 'own';
+              return;
+            }
+            if (state === 'own') {
+              if (msg.type !== 'own_resp' || msg.ex_id !== att.exID) return;
+              const agentEph = base64ToU8(msg.data || '');
+              const machinePub = base64ToU8(msg.machine_pub || '');
+              const machineSig = base64ToU8(msg.machine_sig || '');
+              if (agentEph.length !== 32 || machinePub.length !== 32) return done(new Error('bad key length'));
+              // Must be the machine we asked for, and its signature must verify.
+              if (u8ToBase64(machinePub) !== machineB64Cmp) return done(new Error('unexpected machine identity'));
+              const tr = await ownerTranscript('reminal-owner-srv-v1', dirID, [att.viewerEph, agentEph, att.devicePubRaw, machinePub]);
+              const macKey = await crypto.subtle.importKey('raw', machinePub, { name: 'Ed25519' }, false, ['verify']);
+              if (!(await crypto.subtle.verify({ name: 'Ed25519' }, macKey, machineSig, tr))) return done(new Error('machine signature invalid'));
+              const shared = await att.eph.deriveShared(agentEph);
+              const sharedKey = await crypto.subtle.importKey('raw', shared, 'HKDF', false, ['deriveBits']);
+              const wrapBits = await crypto.subtle.deriveBits({ name: 'HKDF', hash: 'SHA-256', salt: att.exIDBytes, info: new TextEncoder().encode('reminal-wrap-v2') }, sharedKey, 256);
+              const wrapKey = await crypto.subtle.importKey('raw', wrapBits, { name: 'AES-GCM' }, false, ['decrypt']);
+              const wrapped = base64ToU8(msg.wrap || '');
+              if (wrapped.length < 28) return done(new Error('wrap too short'));
+              const skRaw = new Uint8Array(await crypto.subtle.decrypt({ name: 'AES-GCM', iv: wrapped.slice(0, 12) }, wrapKey, wrapped.slice(12)));
+              box = await crypto.subtle.importKey('raw', skRaw, { name: 'AES-GCM' }, false, ['encrypt', 'decrypt']);
+              if (opts.spawn) {
+                att.reqId = Math.random().toString(36).slice(2);
+                const enc = await encrypt(box, JSON.stringify({ name: opts.spawnName || '', req_id: att.reqId }));
+                sock.send(JSON.stringify({ type: 'new_session', data: enc }));
+                state = 'spawn';
+              } else if (opts.rename) {
+                att.reqId = Math.random().toString(36).slice(2);
+                const enc = await encrypt(box, JSON.stringify({ id: opts.rename.id, name: opts.rename.name, req_id: att.reqId }));
+                sock.send(JSON.stringify({ type: 'dir_rename', data: enc }));
+                state = 'rename';
+              } else if (opts.revokeSelf) {
+                att.reqId = Math.random().toString(36).slice(2);
+                // Prove this is a SELF-revoke: sign (machineKey, deviceKey) with our
+                // device key. Matches Go's RevokeSelfTranscript (sessionID = "").
+                const tr = await ownerTranscript('reminal-revoke-self-v1', '', [machinePubU8, dk.pubRaw]);
+                const sig = new Uint8Array(await crypto.subtle.sign({ name: 'Ed25519' }, dk.privateKey, tr));
+                const enc = await encrypt(box, JSON.stringify({ device_pub: u8ToBase64(dk.pubRaw), sig: u8ToBase64(sig), req_id: att.reqId }));
+                sock.send(JSON.stringify({ type: 'dir_revoke_self', data: enc }));
+                state = 'revoke';
+              } else if (opts.kill) {
+                att.reqId = Math.random().toString(36).slice(2);
+                const enc = await encrypt(box, JSON.stringify({ id: opts.kill, req_id: att.reqId }));
+                sock.send(JSON.stringify({ type: 'dir_kill', data: enc }));
+                state = 'kill';
+              } else {
+                sock.send(JSON.stringify({ type: 'dir_query' }));
+                state = 'query';
+              }
+              return;
+            }
+            if (state === 'query') {
+              if (msg.type !== 'dir_resp') return;
+              const pt = await decrypt(box, msg.data || '');
+              return done(null, JSON.parse(new TextDecoder().decode(pt)));
+            }
+            if (state === 'spawn') {
+              if (msg.type !== 'new_session') return;
+              const pt = await decrypt(box, msg.data || '');
+              const r = JSON.parse(new TextDecoder().decode(pt));
+              if (att.reqId && r.req_id && r.req_id !== att.reqId) return; // another owner's reply
+              if (r.error) return done(new Error(r.error));
+              return done(null, r);
+            }
+            if (state === 'rename') {
+              if (msg.type !== 'dir_rename') return;
+              const pt = await decrypt(box, msg.data || '');
+              const r = JSON.parse(new TextDecoder().decode(pt));
+              if (att.reqId && r.req_id && r.req_id !== att.reqId) return;
+              if (r.error) return done(new Error(r.error));
+              return done(null, r);
+            }
+            if (state === 'revoke') {
+              if (msg.type !== 'dir_revoke_self') return;
+              const pt = await decrypt(box, msg.data || '');
+              const r = JSON.parse(new TextDecoder().decode(pt));
+              if (att.reqId && r.req_id && r.req_id !== att.reqId) return;
+              if (r.error) return done(new Error(r.error));
+              return done(null, r);
+            }
+            if (state === 'kill') {
+              if (msg.type !== 'dir_kill') return;
+              const pt = await decrypt(box, msg.data || '');
+              const r = JSON.parse(new TextDecoder().decode(pt));
+              if (att.reqId && r.req_id && r.req_id !== att.reqId) return;
+              if (r.error) return done(new Error(r.error));
+              return done(null, r);
+            }
+          } catch (e) { done(e); }
+        };
+      });
+    }
+
+    // renderMachines paints the "Machines you own" section, then reaches each
+    // machine's directory in parallel and fills in its live sessions as replies
+    // land. A machine that doesn't answer is shown offline.
+    let machinesRefreshing = false;
+    let ownedSessionIds = new Set(); // session ids currently shown under owned-machine cards
+    async function renderMachines() {
+      const root = document.getElementById('machines-list');
+      if (!root) return;
+      const store = await loadOwnedMachines();
+      const keys = Object.keys(store).sort((a, b) => (store[b].lastSeen || 0) - (store[a].lastSeen || 0));
+      if (keys.length === 0) {
+        root.innerHTML = '<div class="recents-empty">This device isn\'t an owner of any other machines yet — owner-connect to one and it shows up here.</div>';
+        return;
+      }
+      // A refresh is already in flight painting the current DOM. Bail BEFORE
+      // rebuilding — rebuilding here (then skipping fills via the guard) would
+      // strand the visible boxes on "checking…" while the in-flight fills wrote
+      // to the now-detached ones. Rapid open/close of the panel hits this.
+      if (machinesRefreshing) return;
+      // Complete any queued self-revokes for machines that are now reachable.
+      retryPendingRevokes();
+      root.innerHTML = '';
+      for (const b64 of keys) {
+        const rec = store[b64];
+        const box = document.createElement('div');
+        box.className = 'machine-box' + (rec.pendingRevoke ? ' is-pending' : '');
+        box.dataset.key = b64;
+
+        const head = document.createElement('div');
+        head.className = 'machine-head';
+        const nameEl = document.createElement('span');
+        nameEl.className = 'machine-name';
+        nameEl.textContent = rec.name || 'machine ' + b64.slice(0, 6) + '…';
+        const dot = document.createElement('span');
+        dot.className = 'machine-dot checking';
+        dot.title = 'checking…';
+        const spacer = document.createElement('span');
+        spacer.style.flex = '1';
+        if (rec.pendingRevoke) {
+          const pend = document.createElement('span');
+          pend.className = 'machine-pending';
+          pend.textContent = 'removing when online…';
+          head.appendChild(dot); head.appendChild(nameEl); head.appendChild(pend); head.appendChild(spacer);
+          const sessions = document.createElement('div');
+          sessions.className = 'machine-sessions';
+          box.appendChild(head); box.appendChild(sessions);
+          root.appendChild(box);
+          continue; // no actions/fill for a machine we're removing
+        }
+        const addBtn = document.createElement('button');
+        addBtn.className = 'machine-btn';
+        addBtn.title = 'Start a new session on this machine';
+        addBtn.textContent = '+';
+        addBtn.addEventListener('click', (ev) => { ev.stopPropagation(); spawnOnMachine(b64, nameEl.textContent); });
+        const renameBtn = document.createElement('button');
+        renameBtn.className = 'machine-btn';
+        renameBtn.title = 'Rename this machine';
+        renameBtn.textContent = '✎';
+        renameBtn.addEventListener('click', (ev) => {
+          ev.stopPropagation();
+          const next = prompt('Name for this machine:', rec.name || '');
+          if (next !== null) renameOwnedMachineWeb(b64, next.trim());
+        });
+        const forgetBtn = document.createElement('button');
+        forgetBtn.className = 'machine-btn';
+        forgetBtn.title = 'Remove this machine from your list';
+        forgetBtn.textContent = '✕';
+        forgetBtn.addEventListener('click', (ev) => { ev.stopPropagation(); forgetMachine(b64, nameEl.textContent); });
+        // Collapsible: a caret + a live session count; clicking the header (not a
+        // button) toggles the session list so you're not always staring at every
+        // instance. Collapsed state is remembered per machine.
+        const caret = document.createElement('span');
+        caret.className = 'machine-caret';
+        caret.textContent = rec.collapsed ? '▸' : '▾';
+        const count = document.createElement('span');
+        count.className = 'machine-count';
+        head.style.cursor = 'pointer';
+        head.title = 'Show/hide sessions';
+        head.addEventListener('click', () => toggleMachineCollapse(b64));
+        head.appendChild(caret);
+        head.appendChild(dot);
+        head.appendChild(nameEl);
+        head.appendChild(count);
+        head.appendChild(spacer);
+        head.appendChild(addBtn);
+        head.appendChild(renameBtn);
+        head.appendChild(forgetBtn);
+
+        const sessions = document.createElement('div');
+        sessions.className = 'machine-sessions' + (rec.collapsed ? ' collapsed' : '');
+        sessions.innerHTML = '<div class="machine-sub">checking…</div>';
+
+        box.appendChild(head);
+        box.appendChild(sessions);
+        root.appendChild(box);
+      }
+      machinesRefreshing = true;
+      ownedSessionIds = new Set(); // rebuilt as each machine's sessions come in
+      try {
+        // Machines pending removal are handled by retryPendingRevokes, not filled.
+        await Promise.all(keys.filter(b64 => !store[b64].pendingRevoke).map(b64 => fillMachineSessions(b64, store[b64])));
+      } finally { machinesRefreshing = false; }
+      // Now that we know which sessions live under owned machines, re-render
+      // Recents so it drops the duplicates (e.g. the current session shown in a
+      // card no longer also appears in the Recent list below).
+      renderRecents();
+    }
+
+    async function fillMachineSessions(b64, rec) {
+      const box = document.querySelector('.machine-box[data-key="' + cssEscape(b64) + '"]');
+      if (!box) return;
+      const dot = box.querySelector('.machine-dot');
+      const sessions = box.querySelector('.machine-sessions');
+      const countEl = box.querySelector('.machine-count');
+      let resp;
+      try {
+        resp = await queryDirectory(base64ToU8(b64URLToStd(b64)));
+        // The reply comes from a remote machine — validate its shape before
+        // trusting it. A malformed/non-object payload (buggy or compromised host)
+        // is treated as offline rather than throwing out of the fill (which would
+        // strand the box on "checking…" and raise an unhandled rejection).
+        if (!resp || typeof resp !== 'object') throw new Error('malformed directory reply');
+      } catch (_) {
+        dot.className = 'machine-dot offline';
+        dot.title = 'offline';
+        if (countEl) countEl.textContent = '';
+        sessions.innerHTML = '<div class="machine-sub">offline</div>';
+        return;
+      }
+      dot.className = 'machine-dot online';
+      dot.title = 'online';
+      // Auto-name an unnamed machine from its reported hostname. Persist WITHOUT
+      // re-rendering: we're mid-fill inside renderMachines's Promise.all, and a
+      // renderMachines() here would rebuild the DOM out from under us and — via
+      // the refresh guard — skip the remaining fills, stranding boxes on
+      // "checking…". Just update this label in place and save quietly.
+      if (!rec.name && resp.hostname) {
+        const nameEl = box.querySelector('.machine-name');
+        if (nameEl) nameEl.textContent = resp.hostname;
+        // Serialized so parallel fills auto-naming different machines don't clobber
+        // each other; re-check the name inside the lock (someone may have set it).
+        await withOwnedMachines(m => { if (m[b64] && !m[b64].name) m[b64].name = resp.hostname; else return false; });
+      }
+      const list = (resp.sessions || []);
+      if (countEl) countEl.textContent = list.length ? '· ' + list.length : '';
+      if (list.length === 0) {
+        sessions.innerHTML = '<div class="machine-sub">no sessions running</div>';
+        return;
+      }
+      list.sort((a, b) => (a.kind === 'port' ? 1 : 0) - (b.kind === 'port' ? 1 : 0) || (a.idle_secs || 0) - (b.idle_secs || 0));
+      sessions.innerHTML = '';
+      for (const s of list) {
+        // A shell session shown under its machine card is redundant in Recents —
+        // record its id so renderRecents can skip it (ports aren't in Recents).
+        if (s.kind !== 'port') ownedSessionIds.add(s.id);
+        const isCurrent = !!sessionId && s.id === sessionId;
+        const row = document.createElement('div');
+        row.className = 'machine-session' + (isCurrent ? ' is-current' : '');
+        const label = document.createElement('span');
+        label.className = 'ms-label';
+        label.textContent = sessionLabelWeb(s);
+        const meta = document.createElement('span');
+        meta.className = 'ms-meta';
+        // Always surface the reminal id (it's how you identify/connect to a
+        // session), then viewers/idle — or "current" for the one you're viewing.
+        const bits = [s.id];
+        const extra = isCurrent ? 'current' : sessionMetaWeb(s);
+        if (extra) bits.push(extra);
+        meta.textContent = bits.join(' · ');
+        row.appendChild(label);
+        row.appendChild(meta);
+        if (s.kind !== 'port') {
+          row.title = isCurrent ? "The session you're viewing" : 'Connect (no PIN — you own this machine)';
+          row.addEventListener('click', () => connectOwned(s.id));
+          const ren = document.createElement('button');
+          ren.className = 'ms-btn';
+          ren.title = 'Rename this session';
+          ren.textContent = '✎';
+          ren.addEventListener('click', (ev) => { ev.stopPropagation(); renameSessionOnMachine(b64, s.id, s.name || ''); });
+          row.appendChild(ren);
+        } else {
+          row.classList.add('is-port');
+          row.title = 'Port forward';
+        }
+        // Kill applies to every reminal instance (shells and port forwards).
+        const kill = document.createElement('button');
+        kill.className = 'ms-btn ms-kill';
+        kill.title = 'Kill this session';
+        kill.textContent = '✕';
+        kill.addEventListener('click', (ev) => { ev.stopPropagation(); killSessionOnMachine(b64, s.id, s.name || (s.kind === 'port' ? 'port :' + s.port : '')); });
+        row.appendChild(kill);
+        sessions.appendChild(row);
+      }
+    }
+
+    function sessionLabelWeb(s) {
+      if (s.kind === 'port') return 'port :' + (s.port || '?');
+      return s.name || s.title || s.cwd || (s.headless ? 'background shell' : 'shell');
+    }
+    function sessionMetaWeb(s) {
+      const parts = [];
+      if (s.viewers > 0) parts.push(s.viewers + (s.viewers === 1 ? ' viewer' : ' viewers'));
+      if (s.idle_secs > 0) parts.push('idle ' + fmtShort(s.idle_secs));
+      return parts.join(' · ');
+    }
+    function fmtShort(secs) {
+      if (secs < 60) return secs + 's';
+      if (secs < 3600) return Math.floor(secs / 60) + 'm';
+      if (secs < 86400) return Math.floor(secs / 3600) + 'h';
+      return Math.floor(secs / 86400) + 'd';
+    }
+    // Owned machine keys are stored url-safe (no pad); the on-wire base64 the
+    // handshake uses is standard. Convert for base64ToU8.
+    function b64URLToStd(s) {
+      let t = s.replace(/-/g, '+').replace(/_/g, '/');
+      while (t.length % 4) t += '=';
+      return t;
+    }
+    function cssEscape(s) { return (window.CSS && CSS.escape) ? CSS.escape(s) : s.replace(/["\\]/g, '\\$&'); }
+
+    // Connect to an owned machine's session with no PIN (owner path).
+    function connectOwned(id) {
+      sessionInput.value = id;
+      pinInput.value = '';
+      const rec = document.getElementById('recents'); if (rec) rec.open = false;
+      if (sessionId && sessionId !== id.toUpperCase()) userDisconnect();
+      startConnect();
+    }
+
+    // Spawn a new session on an owned machine, then connect to it.
+    async function spawnOnMachine(b64, name) {
+      try {
+        setStatus('Starting a session on ' + name + '…', 'info');
+        const r = await queryDirectory(base64ToU8(b64URLToStd(b64)), { spawn: true, spawnName: '' });
+        if (r && r.id) {
+          // Remember the PIN so the connect can fall back if the owner path
+          // hiccups, then connect (owner path needs no PIN).
+          if (r.pin) saveCred(r.id, r.pin);
+          connectOwned(r.id);
+        } else {
+          setStatus('Could not start a session on ' + name, 'error');
+        }
+      } catch (e) {
+        setStatus('Could not reach ' + name + ' to start a session', 'error');
+      }
+    }
+
+    // Rename a live session ON an owned machine — routed through its directory
+    // host to the session's control socket, so the new name is real (persists and
+    // shows everywhere), not just a local nickname.
+    async function renameSessionOnMachine(b64, id, currentName) {
+      const next = prompt('Rename session ' + id + ':', currentName || '');
+      if (next === null) return;
+      const name = next.trim();
+      if (!name) return;
+      try {
+        await queryDirectory(base64ToU8(b64URLToStd(b64)), { rename: { id, name } });
+        setStatus('Renamed ' + id + ' → “' + name + '”', 'info');
+        renderMachines(); // re-query so the new name shows
+      } catch (e) {
+        setStatus('Could not rename ' + id + ' (' + (e.message || 'error') + ')', 'error');
+      }
+    }
+
+    // Kill a live session ON an owned machine — terminates it (shell + anything
+    // running in it). Confirmed, since it's irreversible.
+    async function killSessionOnMachine(b64, id, label) {
+      if (!confirm('Kill session ' + id + (label ? ' (' + label + ')' : '') + ' on this machine?\n\n' +
+          'The shell and anything running in it stop immediately. This is irreversible.')) return;
+      try {
+        await queryDirectory(base64ToU8(b64URLToStd(b64)), { kill: id });
+        setStatus('Killed ' + id, 'info');
+        renderMachines();
+      } catch (e) {
+        setStatus('Could not kill ' + id + ' (' + (e.message || 'error') + ')', 'error');
+      }
+    }
+
+    // Forget an owned machine — removes it from THIS device's Machines list. It
+    // reappears if you owner-connect to it again; to fully revoke this device's
+    // ownership, run `reminal owners revoke` on that machine.
+    async function forgetMachine(b64, name) {
+      if (!confirm('Remove “' + name + '” and revoke this device\'s PIN-free access to it?\n\n' +
+          'The machine drops this device as an owner. If it\'s offline now, that happens the next time it\'s reachable. (You can re-own it later by enrolling again.)')) return;
+      setStatus('Revoking this device on ' + name + '…', 'info');
+      if (await tryRevokeSelf(b64)) {
+        await forgetOwnedMachineWeb(b64);
+        setStatus('Removed “' + name + '” and revoked this device on it', 'info');
+      } else {
+        // Machine unreachable — queue the revoke; retryPendingRevokes (run on
+        // every panel open) completes it the next time the machine is online.
+        await withOwnedMachines(m => { if (m[b64]) m[b64].pendingRevoke = true; else return false; });
+        renderMachines();
+        setStatus('“' + name + '” is offline — it\'ll be revoked and removed when it\'s next reachable', 'info');
+      }
+    }
+
+    // Ask the machine to revoke THIS device's ownership (self-revoke). Resolves
+    // true only if the machine acked; false if unreachable/failed.
+    async function tryRevokeSelf(b64) {
+      try {
+        const r = await queryDirectory(base64ToU8(b64URLToStd(b64)), { revokeSelf: true });
+        return !!(r && r.ok);
+      } catch (_) { return false; }
+    }
+
+    // Complete any queued self-revokes whose machine is now reachable. Fire-and-
+    // forget from renderMachines so opening the panel drains the queue.
+    async function retryPendingRevokes() {
+      let store;
+      try { store = await loadOwnedMachines(); } catch (_) { return; }
+      for (const b64 of Object.keys(store)) {
+        if (!store[b64].pendingRevoke) continue;
+        if (await tryRevokeSelf(b64)) await forgetOwnedMachineWeb(b64);
+      }
+    }
+
     // startSessionFlow runs the one-time "hello" line plus the
     // resume/resize handshake the agent needs to start streaming. It's
     // gated on BOTH cryptoKey (EKE finished) and agentLive (the relay
@@ -2185,8 +3021,14 @@
     async function startConnect() {
       const s = sessionInput.value.trim().toUpperCase();
       const p = pinInput.value.trim();
-      if (!s || !p) { setStatus('Session and PIN required', 'error'); return; }
-      if (!/^\d{6,8}$/.test(p)) { setStatus('PIN must be 6–8 digits', 'error'); return; }
+      if (!s) { setStatus('Session required', 'error'); return; }
+      if (!p) {
+        // PIN-free is only possible if this browser has an owner key to try;
+        // otherwise a PIN is required.
+        if (!(await loadDeviceKeyPair())) { setStatus('PIN required', 'error'); pinInput.focus(); return; }
+      } else if (!/^\d{6,8}$/.test(p)) {
+        setStatus('PIN must be 6–8 digits', 'error'); return;
+      }
 
       manualClose = false;
       fatal = false;
@@ -2239,6 +3081,15 @@
       kexAttempts.clear();
       kexExID = '';
       kexInFlight = false;
+      // Owner-handshake state resets the same way, so a reconnect never carries a
+      // stale attempt or a live timeout from the previous socket.
+      ownerAttempts.clear();
+      if (ownerTimer) { clearTimeout(ownerTimer); ownerTimer = 0; }
+      // Re-evaluate ownership for this session's machine: false until proven by an
+      // owner connect, but prime it from the pin store so a machine we already own
+      // hides the enroll offer immediately instead of flashing it.
+      iOwnThisMachine = false;
+      isOwnedMachine(sessionId).then(v => { if (v && !iOwnThisMachine) { iOwnThisMachine = true; if (typeof renderHost === 'function') renderHost(); } }).catch(() => {});
       // A new socket means a fresh session key; tear down any peer connection so
       // it renegotiates cleanly (the agent may be a different process now). Clear
       // the cooldown so P2P is retried immediately — the network may have changed.
@@ -2352,12 +3203,23 @@
           // relay drops our kex_init; the next agent_online event
           // re-sends it (see below).
           try {
-            await sendKexInit();
+            await startHandshake();
           } catch (e) {
             setStatus('Handshake failed: ' + e.message, 'error');
             fatal = true;
             try { ws.close(); } catch (_) {}
           }
+          break;
+        case 'own_resp':
+          try {
+            await completeOwner(msg);
+          } catch (e) {
+            setStatus('Owner connect failed: ' + e.message, 'error');
+            fatal = true;
+            try { ws.close(); } catch (_) {}
+            break;
+          }
+          startSessionFlow();
           break;
         case 'kex_resp':
           try {
@@ -2407,10 +3269,10 @@
               // handshake — the whole point of the multi-attempt fix.
               cryptoKey = null;
               retryWebRTC('agent reattach', 0); // renegotiate P2P with the (possibly new) agent
-              try { await sendKexInit(); } catch (_) {}
+              try { await startHandshake(); } catch (_) {}
             } else if (!cryptoKey && kexAttempts.size === 0) {
               // First-ever connect on this WS — initiate the EKE.
-              try { await sendKexInit(); } catch (_) {}
+              try { await startHandshake(); } catch (_) {}
             }
             startSessionFlow();
           }
@@ -4105,6 +4967,14 @@
     // Populate the Recent dropdown on load so the user sees their saved
     // sessions even before clicking it.
     renderRecents();
+    renderMachines();
+
+    // Re-probe every owned machine's liveness each time the Machines panel opens,
+    // so the dots and session lists are fresh without polling in the background.
+    (function () {
+      const rec = document.getElementById('recents');
+      if (rec) rec.addEventListener('toggle', () => { if (rec.open) renderMachines(); });
+    })();
 
     // Keep Recent live across tabs/windows: when another same-origin document
     // (e.g. a session link opened in a browser window) writes the history,
@@ -4160,6 +5030,31 @@
     // "+ New session" button lives inside the (re-rendered) host panel, so bind
     // it by delegation. Asks the host to spawn a headless reminal, then connects.
     document.getElementById('host-list').addEventListener('click', (e) => {
+      // Every branch below re-renders the panel (renderHost), which detaches the
+      // clicked element. The document-level outside-click closer then sees
+      // host.contains(e.target)===false and closes the dropdown. Stop the event
+      // here so an in-panel control click never reaches that closer.
+      if (e.target.closest('.own-copy, .own-reveal, .host-own, .host-new, .host-desktop')) {
+        e.stopPropagation();
+      }
+      if (e.target.closest('.own-copy')) {
+        navigator.clipboard.writeText('sudo reminal add owner ' + ownIdShown)
+          .then(() => { ownCopied = true; renderHost(); setTimeout(() => { ownCopied = false; renderHost(); }, 1200); })
+          .catch(() => {});
+        return;
+      }
+      if (e.target.closest('.own-reveal')) { ownRevealed = !ownRevealed; renderHost(); return; }
+      if (e.target.closest('.host-own')) {
+        ownErr = '';
+        ownDeviceId()
+          .then((id) => { ownIdShown = id; renderHost(); refreshOwnFingerprint(); })
+          .catch(() => {
+            ownErr = "This browser can't create a device key (needs Ed25519 support). Use the CLI: reminal own";
+            renderHost();
+          });
+        return;
+      }
+      // .host-own reuses .host-desktop styling; check it BEFORE .host-desktop.
       if (e.target.closest('.host-desktop')) { openDesktopPanes(); return; }
       if (!e.target.closest('.host-new')) return;
       if (creatingSession) return;
@@ -5427,12 +6322,18 @@
       if (appsDetails.open) requestApps();
     });
 
-    // If the QR code provided both session and PIN, just connect.
+    // If the QR code provided both session and PIN, just connect. If only a
+    // session is given, connect PIN-free when this browser is a potential owner
+    // (the owner handshake runs first and falls back to a PIN prompt if the
+    // machine doesn't recognise it); otherwise wait for the PIN.
     if (initialSession && initialPin) {
       startConnect();
     } else if (initialSession) {
-      pinInput.focus();
+      loadDeviceKeyPair().then(dk => { if (dk) startConnect(); else pinInput.focus(); });
     }
+    // Compute this browser's device fingerprint for the Host panel (no-op → null
+    // if there's no device key yet).
+    refreshOwnFingerprint();
 
     // If the page is closed/refreshed, close the WS cleanly.
     window.addEventListener('beforeunload', () => {

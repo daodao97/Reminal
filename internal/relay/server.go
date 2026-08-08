@@ -162,6 +162,9 @@ func (s *Server) handleSessionConn(sessionID string, role protocol.Role, conn *w
 		switch msg.Type {
 		case protocol.TypeData, protocol.TypeResize, protocol.TypeResume,
 			protocol.TypeKexInit, protocol.TypeKexResp,
+			protocol.TypeOwnerInit, protocol.TypeOwnerResp,
+			protocol.TypeDirQuery, protocol.TypeDirResp, protocol.TypeDirRename,
+			protocol.TypeDirRevokeSelf, protocol.TypeDirKill,
 			protocol.TypeWindowList, protocol.TypeWindowCtl,
 			protocol.TypeWindowFrame, protocol.TypeWindowInput,
 			protocol.TypeWindowAck,
@@ -317,7 +320,10 @@ func (s *Server) handleLegacyConn(conn *websocket.Conn) {
 			s.broadcastViewers(sessionID, protocol.Message{Type: protocol.TypeConnected})
 
 		case protocol.TypeData, protocol.TypeResize, protocol.TypeResume,
-			protocol.TypeKexInit, protocol.TypeKexResp:
+			protocol.TypeKexInit, protocol.TypeKexResp,
+			protocol.TypeOwnerInit, protocol.TypeOwnerResp,
+			protocol.TypeDirQuery, protocol.TypeDirResp, protocol.TypeDirRename,
+			protocol.TypeDirRevokeSelf, protocol.TypeDirKill:
 			if !registered {
 				continue
 			}
