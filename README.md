@@ -80,6 +80,10 @@ The PIN is perfect for handing a session to someone else. For your *own* laptop,
 
 Then `reminal machines` becomes your fleet dashboard — every machine you own and every live session on it, what's running, who's watching, how long it's been idle, in one list. The web viewer's **Machines panel** shows the same, and lets you jump in, rename, spawn, or kill a session on any box straight from the browser.
 
+<div align="center">
+<img src="docs/own.gif" alt="On your device, reminal own prints its owner id; you paste sudo reminal add owner <id> on the machine once and it says Added owner; from then on reminal machines lists every machine you own with its live sessions, all online, no PIN" width="900">
+</div>
+
 ---
 
 ## Share a local port with the world
