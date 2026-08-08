@@ -72,16 +72,14 @@ Hand the session ID and PIN to an agent and it connects like any other viewer �
 
 ---
 
-## Own a machine once — then skip the PIN
+## Own your machines. Watch them all.
 
-The PIN is perfect for handing a session to someone else. For your *own* laptop, phone, and servers, typing it every time is friction.
+The moment your work spans more than one machine — a rack of servers, or agents let loose on several boxes at once — the hard part isn't starting it, it's *seeing* it. `reminal machines` is one live view of everything you own: every machine, every terminal on it, what's running right now, who's watching, how long it's been idle. An agent running a test suite on your laptop, patching a CVE on a cloud VM, and rotating backups on the Mac mini — or just your own sessions — all at a glance. It's on the CLI and in the web **Machines panel**, where you can jump into any session, rename it, spawn a new one, or kill it on any box.
 
-**Enroll a device as an owner** — `reminal own` prints its id, you paste `sudo reminal add owner <id>` on each machine once — and from then on that device connects to any of the machine's sessions with no PIN at all. The trust is a per-device key: revoke one device without touching the others (or self-revoke from any browser), all gated behind `sudo` to enroll. The relay still only ever sees ciphertext.
-
-Then `reminal machines` becomes your fleet dashboard — every machine you own and every live session on it, what's running, who's watching, how long it's been idle, in one list. The web viewer's **Machines panel** shows the same, and lets you jump in, rename, spawn, or kill a session on any box straight from the browser.
+That single pane works because you *own* the machines. Enroll a device once — `reminal own` prints its id, you paste `sudo reminal add owner <id>` on each machine — and from then on it reaches every session with **no PIN**. The trust is a per-device key: revocable one at a time, `sudo`-gated to grant, and the relay still only ever sees ciphertext.
 
 <div align="center">
-<img src="docs/own.gif" alt="On your device, reminal own prints its owner id; you paste sudo reminal add owner <id> on the machine once and it says Added owner; from then on reminal machines lists every machine you own with its live sessions, all online, no PIN" width="900">
+<img src="docs/own.gif" alt="A live 'reminal machines' view of a fleet you own — studio-mac, aws-eu-1 and mini-01, all online — each showing its sessions: agents running a test suite, patching a CVE and rotating backups, alongside ordinary sessions like api-prod, worker and grafana, with live indicators and viewer counts" width="900">
 </div>
 
 ---

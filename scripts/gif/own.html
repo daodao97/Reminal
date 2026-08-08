@@ -1,0 +1,116 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><style>
+  *{margin:0;padding:0;box-sizing:border-box;}
+  html,body{background:#04060a;}
+  #stage{position:relative;width:1120px;height:650px;overflow:hidden;
+    font-family:-apple-system,'SF Pro Display',Helvetica,Arial,sans-serif;
+    background:radial-gradient(1000px 720px at 50% 30%,#141d2b 0%,#0a1019 54%,#05070c 100%);}
+  .dots{position:absolute;inset:0;background-image:radial-gradient(rgba(120,150,190,.05) 1px,transparent 1px);background-size:26px 26px;opacity:.5;}
+  #floor{position:absolute;left:0;right:0;top:150px;height:300px;opacity:.28;}
+
+  .head{position:absolute;left:0;right:0;top:30px;text-align:center;z-index:20;}
+  .head .t{font-size:31px;font-weight:800;color:#eef3fb;letter-spacing:-.5px;}
+  .head .t .a{color:#5b9dff;}
+  .head .s{margin-top:9px;font-size:15px;color:#8090a6;font-weight:500;}
+
+  /* the fleet / mission-control window */
+  .bw{position:absolute;border-radius:14px;overflow:hidden;background:#0b1019;
+    border:1px solid #24304a;box-shadow:0 40px 72px rgba(0,0,0,.62), 0 0 0 1px rgba(91,157,255,.10);z-index:12;}
+  .bt{height:34px;display:flex;align-items:center;gap:9px;padding:0 14px;background:#111725;border-bottom:1px solid #1c2434;}
+  .bt .lg{display:flex;gap:6px;}
+  .bt .lg i{width:8px;height:8px;border-radius:50%;background:#2b3446;}
+  .bt .ti{flex:1;text-align:center;font-size:12px;color:#8494ad;font-weight:600;letter-spacing:.2px;}
+  .bt .ti b{color:#cdd8ea;}
+
+  .fleet{padding:15px 20px 6px;}
+  .ftop{display:flex;align-items:center;justify-content:space-between;margin-bottom:13px;padding:0 2px;}
+  .ftop .h{font-size:15px;font-weight:800;color:#eef3fb;letter-spacing:-.2px;}
+  .ftop .m{font-size:12px;color:#7b8aa2;font-family:ui-monospace,'SF Mono',Menlo,monospace;}
+  .ftop .m .g{color:#45d69a;font-weight:700;}
+
+  .mrow{margin-bottom:12px;}
+  .mrow .mh{display:flex;align-items:center;gap:9px;margin-bottom:6px;padding:0 2px;}
+  .mrow .mh .led{width:7px;height:7px;border-radius:50%;background:#45d69a;box-shadow:0 0 9px rgba(69,214,154,.8);}
+  .mrow .mh .nm{font-size:13.5px;font-weight:800;color:#e7edf6;letter-spacing:-.2px;}
+  .mrow .mh .os{font-size:11px;color:#63718c;font-family:ui-monospace,'SF Mono',Menlo,monospace;}
+
+  .srow{display:flex;align-items:center;gap:12px;padding:6px 12px;border-radius:9px;margin-left:18px;
+    font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:12px;line-height:1.2;}
+  .srow + .srow{margin-top:3px;}
+  .srow.agent{background:rgba(91,157,255,.08);box-shadow:inset 2px 0 0 #5b9dff;}
+  .srow .mk{width:12px;color:#5b9dff;font-weight:700;text-align:center;}
+  .srow .who{width:104px;color:#d3dcec;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+  .srow.agent .who{color:#9cc4ff;}
+  .srow .task{flex:1;color:#818ea6;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+  .srow .task .ok{color:#45d69a;font-weight:700;}
+  .srow .task .run{color:#c9d4e6;}
+  .srow .rt{flex:0 0 auto;display:flex;align-items:center;gap:6px;font-size:11px;}
+  .srow .rt .dot{width:6px;height:6px;border-radius:50%;background:#45d69a;box-shadow:0 0 7px rgba(69,214,154,.85);}
+  .srow .rt .live{color:#45d69a;font-weight:700;}
+  .srow .rt .watch{color:#7db4ff;}
+  .srow .rt .idle{color:#5f6b82;}
+</style></head>
+<body>
+<div id="stage">
+  <div class="dots"></div>
+  <svg id="floor" viewBox="0 0 1120 300" preserveAspectRatio="none">
+    <g stroke="#2b3a55" stroke-width="1" fill="none" opacity="0.5">
+      <line x1="560" y1="0" x2="120" y2="300"/><line x1="560" y1="0" x2="560" y2="300"/><line x1="560" y1="0" x2="1000" y2="300"/>
+      <line x1="140" y1="105" x2="980" y2="105"/><line x1="70" y1="200" x2="1050" y2="200"/><line x1="20" y1="290" x2="1100" y2="290"/>
+    </g>
+  </svg>
+
+  <div class="head">
+    <div class="t">Own your machines. <span class="a">Watch them all.</span></div>
+    <div class="s">one live view of every machine — see exactly what your agents (or your terminals) are doing, everywhere.</div>
+  </div>
+
+  <div class="bw" style="left:196px;top:158px;width:728px;height:452px;">
+    <div class="bt"><span class="lg"><i></i><i></i><i></i></span><span class="ti"><b>reminal machines</b> — your fleet, live</span></div>
+    <div class="bc"><div class="fleet">
+      <div class="ftop">
+        <div class="h">Machines you own</div>
+        <div class="m"><span class="g">3 online</span> · 6 sessions · <span class="g">live</span></div>
+      </div>
+
+      <div class="mrow" id="m0">
+        <div class="mh"><span class="led"></span><span class="nm">studio-mac</span><span class="os">MacBook · macOS</span></div>
+        <div class="srow agent"><span class="mk">▸</span><span class="who">claude</span><span class="task"><span class="run">running the test suite</span><span id="s0"></span></span><span class="rt"><span class="dot"></span><span class="live">live</span><span class="watch">· 2 watching</span></span></div>
+        <div class="srow"><span class="mk"></span><span class="who">api-prod</span><span class="task">serving :443 · 1.2k req/s</span><span class="rt"><span class="idle">idle 3m</span></span></div>
+      </div>
+
+      <div class="mrow" id="m1">
+        <div class="mh"><span class="led"></span><span class="nm">aws-eu-1</span><span class="os">Cloud VM · Ubuntu 22.04</span></div>
+        <div class="srow agent"><span class="mk">▸</span><span class="who">agent-7</span><span class="task"><span class="run">patching </span>CVE-2024-4471<span class="ok" id="s1"></span></span><span class="rt"><span class="dot"></span><span class="live">live</span></span></div>
+        <div class="srow"><span class="mk"></span><span class="who">worker</span><span class="task">draining queue · 240 jobs</span><span class="rt"><span class="idle">idle 1m</span></span></div>
+      </div>
+
+      <div class="mrow" id="m2">
+        <div class="mh"><span class="led"></span><span class="nm">mini-01</span><span class="os">Mac mini · macOS</span></div>
+        <div class="srow agent"><span class="mk">▸</span><span class="who">agent-3</span><span class="task">rotate nightly backups <span class="ok">✓ done</span></span><span class="rt"><span class="idle">2m ago</span></span></div>
+        <div class="srow"><span class="mk"></span><span class="who">grafana</span><span class="task">dashboards</span><span class="rt"><span class="idle">idle</span></span></div>
+      </div>
+    </div></div>
+  </div>
+</div>
+
+<script>
+const dots=document.querySelectorAll('.rt .dot, .mh .led');
+const s0=document.getElementById('s0'), s1=document.getElementById('s1');
+
+// The dashboard is shown in full from the first frame — only the small "live"
+// elements move, so nearly every frame is identical and the GIF stays tiny:
+// pulsing status dots, claude's streaming test count, and agent-7's patch
+// flipping to "applied". That's the whole story — a fleet, alive, at a glance.
+window.TOTAL = 42;
+window.render=function(t){
+  const pulse=0.5+0.5*Math.abs(Math.sin(t*0.2));
+  dots.forEach(d=>d.style.opacity=0.5+0.5*pulse);
+  const bars=Math.floor((t*0.9)%9);
+  s0.textContent = ' ' + '·'.repeat(bars) + ' 142 tests';
+  if(t > 20){ s1.textContent = ' ✓ applied'; s1.className='ok'; }
+  else { s1.textContent = ''; }
+};
+window.render(0);
+</script>
+</body></html>
