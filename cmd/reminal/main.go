@@ -28,7 +28,9 @@ import (
 )
 
 // version, buildDate, and commit are stamped at build time via
-//   -ldflags "-X main.version=… -X main.buildDate=… -X main.commit=…"
+//
+//	-ldflags "-X main.version=… -X main.buildDate=… -X main.commit=…"
+//
 // in scripts/build.sh and the release workflow. Dev builds keep their
 // placeholder values so the updater skips the upgrade prompt and version
 // --verbose still shows something readable.
@@ -148,15 +150,23 @@ func main() {
 			return
 		case "connect":
 			if len(os.Args) < 3 {
-				fmt.Fprintln(os.Stderr, "usage: reminal connect <session-id-or-url> [pin]")
+				fmt.Fprintln(os.Stderr, "usage: reminal connect <session-id-or-url> [pin] [--owner]")
 				os.Exit(1)
 			}
-			target := os.Args[2]
+			target := ""
 			pinArg := ""
-			if len(os.Args) > 3 {
-				pinArg = os.Args[3]
+			owner := false
+			for _, a := range os.Args[2:] {
+				switch {
+				case a == "--owner":
+					owner = true
+				case target == "":
+					target = a
+				case pinArg == "":
+					pinArg = a
+				}
 			}
-			if err := runConnect(target, pinArg); err != nil {
+			if err := runConnect(target, pinArg, owner); err != nil {
 				fmt.Fprintf(os.Stderr, "error: %v\n", err)
 				os.Exit(1)
 			}
@@ -390,6 +400,35 @@ func main() {
 				os.Exit(1)
 			}
 			return
+		case "own":
+			if err := runOwn(); err != nil {
+				fmt.Fprintf(os.Stderr, "error: %v\n", err)
+				os.Exit(1)
+			}
+			return
+		case "add":
+			if len(os.Args) >= 3 && os.Args[2] == "owner" {
+				if err := runAddOwner(os.Args[3:]); err != nil {
+					fmt.Fprintf(os.Stderr, "error: %v\n", err)
+					os.Exit(1)
+				}
+				return
+			}
+			fmt.Fprintln(os.Stderr, "usage: reminal add owner <id> [--label <name>]")
+			os.Exit(1)
+			return
+		case "owners":
+			if err := runOwners(os.Args[2:]); err != nil {
+				fmt.Fprintf(os.Stderr, "error: %v\n", err)
+				os.Exit(1)
+			}
+			return
+		case "machines":
+			if err := runMachines(os.Args[2:]); err != nil {
+				fmt.Fprintf(os.Stderr, "error: %v\n", err)
+				os.Exit(1)
+			}
+			return
 		case "help", "-h", "--help":
 			printHelp()
 			return
@@ -406,6 +445,7 @@ func main() {
 
 	connect := flag.String("connect", "", "session ID or full relay URL to connect to (URL may include #p=PIN)")
 	pin := flag.String("pin", "", "PIN for the remote session (prompted if omitted)")
+	ownerConnect := flag.Bool("owner", false, "connect PIN-free as an enrolled owner device")
 	verbose := flag.Bool("v", false, "verbose mode — append raw error detail to status lines (same as REMINAL_DEBUG=1)")
 	verboseLong := flag.Bool("verbose", false, "alias for -v")
 	name := flag.String("name", "", "human-friendly label for this session, shown in `reminal list` and usable in place of the ID")
@@ -474,7 +514,7 @@ func main() {
 	updater.CheckAndPromptOnStart(version)
 
 	if *connect != "" {
-		if err := runConnect(*connect, *pin); err != nil {
+		if err := runConnect(*connect, *pin, *ownerConnect); err != nil {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
 			os.Exit(1)
 		}
@@ -524,6 +564,10 @@ Usage:
   reminal connect <session-or-url> [pin]   Connect to a remote session (PIN prompted if omitted)
   reminal attach [id|name]                 Re-connect to a local agent as a viewer. No arg → interactive picker
   reminal rename [id|name] <new-name>      Rename a running session. Inside a session, just: reminal rename <new-name>
+  reminal own                              Print this device's owner id to paste into "reminal add owner" on a machine
+  reminal add owner <id> [--label <name>]  Enroll a device (by its owner id) as an owner of this machine
+  reminal owners [rename|revoke|restore …] List owner devices (marks self-revoked); rename/revoke/restore <id|label>
+  reminal machines [rename …]              List every machine you own + its live sessions; rename <id|name> <new-name>
   reminal stop [id|name|port] [-y]         Stop the reminal layer (kicks viewers / disables URL — your shell/server keeps running)
   reminal kill [id|name] [-y]              Fully terminate a shell session (irreversible — kills shell + disconnects viewers)
   reminal send <file>                      Push a file to every connected viewer (web client auto-downloads)
@@ -633,7 +677,8 @@ func runConnections() error {
 
 // runNotify fires a one-shot notification to every connected viewer. Useful
 // at the tail of a long pipeline so a phone-toting user gets pinged:
-//   $ make build && reminal notify "build done"
+//
+//	$ make build && reminal notify "build done"
 func runNotify(message string) error {
 	if strings.TrimSpace(message) == "" {
 		return errors.New("message required")
@@ -1262,16 +1307,31 @@ func runList(args []string) error {
 		return nil
 	}
 
-	// Pre-compute the name column width so rows line up. Unnamed sessions
-	// show a dim "—" so the column never collapses.
+	// Terminal width drives responsive truncation so rows never wrap. Fall back
+	// to 80 when stdout isn't a terminal (piped) — there, nothing wraps anyway.
+	width := 80
+	if w, _, err := term.GetSize(int(os.Stdout.Fd())); err == nil && w > 20 {
+		width = w
+	}
+
+	// Pre-compute the name column width so rows line up. Unnamed sessions show a
+	// dim "—" so the column never collapses. Cap it tighter on narrow terminals
+	// so the id/state columns still fit.
+	nameCap := 24
+	if width < 90 {
+		nameCap = 16
+	}
+	if width < 70 {
+		nameCap = 12
+	}
 	nameW := 4
 	for _, a := range rows {
-		if len(a.Name) > nameW {
-			nameW = len(a.Name)
+		if n := len([]rune(a.Name)); n > nameW {
+			nameW = n
 		}
 	}
-	if nameW > 24 {
-		nameW = 24
+	if nameW > nameCap {
+		nameW = nameCap
 	}
 
 	fmt.Printf("%d session(s):\n\n", len(rows))
@@ -1286,21 +1346,22 @@ func runList(args []string) error {
 			mode = "foreground"
 		}
 
-		name := a.Name
-		if name == "" {
-			name = "\x1b[2m—\x1b[0m"
-			// pad accounting for the invisible escape bytes
-			name += strings.Repeat(" ", max(0, nameW-1))
+		var name string
+		if a.Name == "" {
+			name = cDim("—") + strings.Repeat(" ", max(0, nameW-1))
 		} else {
-			if len(name) > nameW {
-				name = name[:nameW-1] + "…"
+			name = a.Name
+			if len([]rune(name)) > nameW {
+				name = string([]rune(name)[:nameW-1]) + "…"
 			}
 			name += strings.Repeat(" ", max(0, nameW-len([]rune(a.Name))))
 		}
 
 		// State column: who's watching / how idle. Ports have no viewer or
-		// activity concept, so they just show their mode.
+		// activity concept, so they just show their mode. Green highlights a
+		// session that's live (watched or the one you're in).
 		var state string
+		stateColor := cDim
 		switch {
 		case a.IsPort():
 			state = "up " + humanShort(now.Sub(a.StartedAt))
@@ -1310,38 +1371,49 @@ func runList(args []string) error {
 				noun = "viewers"
 			}
 			state = fmt.Sprintf("%d %s", a.Viewers, noun)
+			stateColor = cGreen
 		case a.ID == currentID:
 			// The shell we're typing in can't meaningfully be "idle" — its
 			// last PTY output is just whenever we last hit Enter. Show it as
 			// active so the [current] row never looks prunable.
 			state = "active"
+			stateColor = cGreen
 		default:
 			state = "idle " + humanShort(a.IdleFor(now))
 		}
 
-		// Identity tail: cwd (home-abbreviated) and the live title hint.
-		var tail string
-		if cwd := abbrevHome(a.Cwd); cwd != "" {
-			tail = "  \x1b[2m" + cwd + "\x1b[0m"
-		}
+		// Identity tail: cwd (home-abbreviated) + live title hint, TRUNCATED to
+		// whatever width is left so a long path never wraps onto the next line.
+		tailPlain := abbrevHome(a.Cwd)
 		if a.Title != "" {
-			t := a.Title
-			if len(t) > 40 {
-				t = t[:39] + "…"
+			// Title is sniffed from the PTY (a program could set escapes in it).
+			title := cleanTerm(a.Title)
+			if tailPlain != "" {
+				tailPlain += "  · " + title
+			} else {
+				tailPlain = "· " + title
 			}
-			tail += "  \x1b[2m· " + t + "\x1b[0m"
 		}
-
 		currentTag := ""
 		if a.ID == currentID {
-			currentTag = "  \x1b[1;32m[current]\x1b[0m"
+			currentTag = "  " + sgr("1;32", "[current]")
+		}
+		// Fixed prefix width up through the state column: 2 + name + 2 + id(8) +
+		// 2 + mode(10) + 1 + state(12). Reserve the current tag and a margin.
+		reserved := 2 + nameW + 2 + 8 + 2 + 10 + 1 + 12 + 2 + 1
+		if a.ID == currentID {
+			reserved += len("  [current]")
+		}
+		tail := ""
+		if budget := width - reserved; budget >= 6 && tailPlain != "" {
+			tail = "  " + cDim(truncate(tailPlain, budget))
 		}
 
-		fmt.Printf("  %s  \x1b[1m%s\x1b[0m  \x1b[2m%-10s %-12s\x1b[0m%s%s\n",
-			name, a.ID, mode, state, tail, currentTag)
+		fmt.Printf("  %s  %s  %s %s%s%s\n",
+			name, cBold(a.ID), padCol(mode, 10, cDim), padCol(state, 12, stateColor), tail, currentTag)
 		if verbose {
-			fmt.Printf("  %s  \x1b[2m%s  ·  PIN %s\x1b[0m\n",
-				strings.Repeat(" ", nameW), a.OpenURL, a.PIN)
+			fmt.Printf("  %s  %s\n",
+				strings.Repeat(" ", nameW), cDim(a.OpenURL+"  ·  PIN "+a.PIN))
 		}
 	}
 	fmt.Println()
@@ -1628,7 +1700,7 @@ func runPrune(idle time.Duration, yes bool) error {
 // interactive prompt. On wrong-PIN errors we re-prompt up to 3 times,
 // matching ssh's password-retry convention; the relay locks out after 5
 // total wrong attempts anyway, so the user can't burn through their budget.
-func runConnect(target, pinArg string) error {
+func runConnect(target, pinArg string, owner bool) error {
 	sessionID, urlPin := parseConnectTarget(target)
 	if sessionID == "" {
 		return errors.New("needs a session ID or a relay URL containing ?s=<ID>")
@@ -1655,6 +1727,27 @@ func runConnect(target, pinArg string) error {
 	resolvedPin := pinArg
 	if resolvedPin == "" {
 		resolvedPin = urlPin
+	}
+	// Try a PIN-free (owner) connect when EITHER --owner is forced, OR no PIN was
+	// supplied and this device has an owner identity. On success we're in with no
+	// PIN; if the machine doesn't recognise us (connected=false) and it wasn't
+	// forced, fall through to the PIN prompt. Auto-detect stays gated on "no PIN"
+	// so supplying a PIN skips the owner probe entirely — but an explicit --owner
+	// forces the owner path even alongside a stray PIN.
+	if owner || (resolvedPin == "" && client.HasDeviceKey()) {
+		connected, err := client.ConnectOwner(sessionID)
+		if err == nil {
+			return nil
+		}
+		if connected || owner {
+			return err // it did connect (then ended), or --owner was forced
+		}
+		// Only a "device not recognised" failure quietly falls back to a PIN. A
+		// hard refusal (bad machine signature / changed machine identity) is a
+		// security event — surface it instead of silently asking for a PIN.
+		if !errors.Is(err, client.ErrNotOwner) {
+			return err
+		}
 	}
 	const maxAttempts = 3
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
