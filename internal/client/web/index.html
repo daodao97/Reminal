@@ -584,7 +584,7 @@
        width (it was truncating early while empty space sat to its right). */
     .machine-title { flex: 1; min-width: 0; display: flex; align-items: baseline; gap: 6px; }
     .machine-name { font-size: 13px; font-weight: 600; color: #e6edf3; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
-    .machine-caret { font-size: 12px; color: #8b949e; flex: none; width: 12px; text-align: center; }
+    .machine-caret { display: inline-flex; align-items: center; justify-content: center; color: #8b949e; flex: none; width: 16px; }
     .machine-count { font-size: 11px; color: #8b949e; font-family: monospace; flex: none; }
     .machine-sessions.collapsed { display: none; }
     .machine-dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
@@ -603,10 +603,13 @@
     .machine-pending { font-size: 11px; color: #d29922; font-style: italic; margin-left: 6px; white-space: nowrap; }
     /* Subtle icon buttons in the header — explicitly styled to override the
        global green <button> default (which otherwise makes them big and green). */
+    /* All header controls are equal-size square buttons holding a same-size SVG
+       icon, so the caret / + / edit / kill read as one consistent set (Unicode
+       glyphs rendered at wildly different sizes otherwise). */
     .machine-btn {
+      display: inline-flex; align-items: center; justify-content: center;
       background: transparent; color: #8b949e; border: 1px solid transparent;
-      font-size: 13px; font-weight: 400; line-height: 1; padding: 4px 6px;
-      border-radius: 5px; cursor: pointer; flex: none;
+      width: 28px; height: 28px; padding: 0; border-radius: 6px; cursor: pointer; flex: none;
     }
     .machine-btn:hover { background: #21262d; color: #e6edf3; border-color: #30363d; }
     .machine-sessions { padding: 4px 0; }
@@ -632,8 +635,9 @@
     .machine-session .ms-meta { font-size: 11px; color: #7d8590; font-family: monospace; line-height: 1.35; word-break: break-word; }
     .machine-session .ms-actions { display: flex; gap: 2px; flex: none; align-self: center; }
     .machine-session .ms-btn {
+      display: inline-flex; align-items: center; justify-content: center;
       background: transparent; border: none; color: #6e7681; cursor: pointer;
-      font-size: 13px; padding: 5px 7px; flex: none; border-radius: 5px; line-height: 1;
+      width: 26px; height: 26px; padding: 0; flex: none; border-radius: 6px;
     }
     .machine-session .ms-btn:hover { background: #262c36; color: #e6edf3; }
     .machine-session .ms-kill:hover { background: rgba(248,81,73,0.15); color: #f85149; }
@@ -851,6 +855,9 @@
       <div style="color:#e6edf3; font-size:14px; font-weight:600;">Share this session</div>
       <div id="share-qr" style="background:#fff; padding:12px; border-radius:6px;"></div>
       <input id="share-url" readonly style="width:300px; max-width:80vw;">
+      <div id="share-note" style="display:none; color:#d29922; font-size:12px; text-align:center; max-width:300px; line-height:1.45;">
+        You're connected as an owner, so this link carries no PIN. Another owner of this machine joins with it directly; anyone else needs the session PIN — run <code>reminal info</code> on the host to get it.
+      </div>
       <div style="display:flex; gap:8px; flex-wrap:wrap; justify-content:center;">
         <button id="share-native" style="display:none; background:#1f6feb; border:1px solid #388bfd; border-radius:6px; color:#fff; padding:8px 14px; cursor:pointer;">Share via…</button>
         <button id="share-copy" style="background:#238636; border:1px solid #2ea043; border-radius:6px; color:#fff; padding:8px 14px; cursor:pointer;">Copy link</button>
@@ -2359,7 +2366,7 @@
       if (box) {
         box.querySelector('.machine-sessions')?.classList.toggle('collapsed', collapsed);
         const c = box.querySelector('.machine-caret');
-        if (c) c.textContent = collapsed ? '▸' : '▾';
+        if (c) c.innerHTML = mIcon(collapsed ? 'right' : 'down');
       }
     }
 
@@ -2513,6 +2520,18 @@
     // render bails instead of writing into the newly-rebuilt skeleton.
     let machinesGen = 0;
     let ownedSessionIds = new Set(); // session ids currently shown under owned-machine cards
+    // Consistent stroke icons for the Machines panel — the caret / + / edit /
+    // kill controls all render at the same visual size (Unicode glyphs don't).
+    const MICONS = {
+      down:  '<path d="M6 9l6 6 6-6"/>',
+      right: '<path d="M9 6l6 6-6 6"/>',
+      plus:  '<path d="M12 5v14M5 12h14"/>',
+      edit:  '<path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19.5 3 20.5l1-4z"/>',
+      x:     '<path d="M18 6 6 18M6 6l12 12"/>',
+    };
+    function mIcon(name) {
+      return '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' + (MICONS[name] || '') + '</svg>';
+    }
     async function renderMachines() {
       const root = document.getElementById('machines-list');
       if (!root) return;
@@ -2558,7 +2577,7 @@
           const forget = document.createElement('button');
           forget.className = 'machine-btn';
           forget.title = 'Stop waiting — forget this machine now';
-          forget.textContent = '✕';
+          forget.innerHTML = mIcon('x');
           forget.addEventListener('click', (ev) => { ev.stopPropagation(); forgetPendingMachine(b64, nameEl.textContent); });
           head.appendChild(dot); head.appendChild(nameEl); head.appendChild(pend); head.appendChild(spacer); head.appendChild(forget);
           const sessions = document.createElement('div');
@@ -2570,12 +2589,12 @@
         const addBtn = document.createElement('button');
         addBtn.className = 'machine-btn';
         addBtn.title = 'Start a new session on this machine';
-        addBtn.textContent = '+';
+        addBtn.innerHTML = mIcon('plus');
         addBtn.addEventListener('click', (ev) => { ev.stopPropagation(); spawnOnMachine(b64, nameEl.textContent); });
         const renameBtn = document.createElement('button');
         renameBtn.className = 'machine-btn';
         renameBtn.title = 'Rename this machine';
-        renameBtn.textContent = '✎';
+        renameBtn.innerHTML = mIcon('edit');
         renameBtn.addEventListener('click', (ev) => {
           ev.stopPropagation();
           const next = prompt('Name for this machine:', rec.name || '');
@@ -2584,14 +2603,14 @@
         const forgetBtn = document.createElement('button');
         forgetBtn.className = 'machine-btn';
         forgetBtn.title = 'Remove this machine from your list';
-        forgetBtn.textContent = '✕';
+        forgetBtn.innerHTML = mIcon('x');
         forgetBtn.addEventListener('click', (ev) => { ev.stopPropagation(); forgetMachine(b64, nameEl.textContent); });
         // Collapsible: a caret + a live session count; clicking the header (not a
         // button) toggles the session list so you're not always staring at every
         // instance. Collapsed state is remembered per machine.
         const caret = document.createElement('span');
         caret.className = 'machine-caret';
-        caret.textContent = rec.collapsed ? '▸' : '▾';
+        caret.innerHTML = mIcon(rec.collapsed ? 'right' : 'down');
         const count = document.createElement('span');
         count.className = 'machine-count';
         head.style.cursor = 'pointer';
@@ -2736,7 +2755,7 @@
           const ren = document.createElement('button');
           ren.className = 'ms-btn';
           ren.title = 'Rename this session';
-          ren.textContent = '✎';
+          ren.innerHTML = mIcon('edit');
           ren.addEventListener('click', (ev) => { ev.stopPropagation(); renameSessionOnMachine(b64, s.id, s.name || ''); });
           actions.appendChild(ren);
         } else {
@@ -2747,7 +2766,7 @@
         const kill = document.createElement('button');
         kill.className = 'ms-btn ms-kill';
         kill.title = 'Kill this session';
-        kill.textContent = '✕';
+        kill.innerHTML = mIcon('x');
         kill.addEventListener('click', (ev) => { ev.stopPropagation(); killSessionOnMachine(b64, s.id, s.name || (s.kind === 'port' ? 'port :' + s.port : '')); });
         actions.appendChild(kill);
         row.appendChild(actions);
@@ -4347,8 +4366,12 @@
     const shareQrEl = document.getElementById('share-qr');
     let shareQrCode = null;
     function openShare() {
-      if (!sessionId || !pinValue) return;
-      const joinURL = location.origin + '/?s=' + sessionId.toUpperCase() + '#p=' + pinValue;
+      if (!sessionId) return;
+      // Owner (PIN-free) connects have no PIN in the browser, so fall back to a
+      // PIN-less link rather than silently doing nothing. The link still joins
+      // other owners directly; a note explains the PIN caveat for everyone else.
+      const base = location.origin + '/?s=' + sessionId.toUpperCase();
+      const joinURL = pinValue ? base + '#p=' + pinValue : base;
       shareUrlInput.value = joinURL;
       shareQrEl.innerHTML = '';
       try {
@@ -4361,6 +4384,8 @@
       } catch (e) {
         shareQrEl.textContent = 'QR generation failed: ' + e;
       }
+      const note = document.getElementById('share-note');
+      if (note) note.style.display = pinValue ? 'none' : 'block';
       shareModal.style.display = 'flex';
     }
     function closeShare() {
