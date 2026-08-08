@@ -489,6 +489,12 @@
     .own-toggle { margin-top: 6px; text-align: center; }
     .own-reveal { font-size: 11px; color: #6b7890; cursor: pointer; border-bottom: 1px dashed #3a4252; }
     .own-reveal:hover { color: #8fbdff; }
+    /* Small green confirm shown after the enroll command — override the global
+       big-green <button> default. */
+    .own-done { font-size: 11px; font-weight: 400; line-height: 1; margin-left: 8px; padding: 4px 10px; border-radius: 5px; background: #238636; color: #fff; border: 1px solid #2ea043; cursor: pointer; }
+    .own-done:hover { background: #2ea043; }
+    .own-reenroll { font-size: 11px; color: #6b7890; cursor: pointer; border-bottom: 1px dashed #3a4252; margin-left: 6px; }
+    .own-reenroll:hover { color: #8fbdff; }
     .own-owned { margin-top: 8px; font-size: 12px; color: #3fb950; text-align: center; padding: 6px; }
     .own-fp { margin-top: 8px; font-size: 11px; color: #8b949e; text-align: center; }
     .own-fp code { background: #010409; border: 1px solid #21262d; border-radius: 4px; padding: 1px 6px; color: #c9d1d9; }
@@ -581,6 +587,13 @@
     .machine-dot.offline { background: #6e7681; }
     .machine-dot.checking { background: #d29922; animation: mdotpulse 1s ease-in-out infinite; }
     @keyframes mdotpulse { 0%,100% { opacity: 0.4; } 50% { opacity: 1; } }
+    /* A real spinner shown while a background refresh is in flight — so a cached
+       (instantly-painted) machine reads as "updating" rather than a static dot. */
+    .machine-dot.spin {
+      width: 10px; height: 10px; background: transparent; box-sizing: border-box;
+      border: 1.5px solid #30363d; border-top-color: #58a6ff;
+      animation: wpspin 0.7s linear infinite;
+    }
     .machine-box.is-pending { opacity: 0.6; }
     .machine-pending { font-size: 11px; color: #d29922; font-style: italic; margin-left: 6px; white-space: nowrap; }
     /* Subtle icon buttons in the header — explicitly styled to override the
@@ -1081,6 +1094,7 @@
     // the browser. Ownership isn't consumed for connect yet — this is the
     // enrollment surface.
     let ownIdShown = null;   // the rmnl_ id, once generated (persists across host re-renders)
+    let ownReenroll = false; // reveal the enroll command even when we think we already own it (ownership can be revoked host-side out of band)
     let ownCopied = false;
     let ownRevealed = false; // the raw id string is hidden by default (it's ugly)
     let ownErr = '';
@@ -1196,8 +1210,11 @@
       if (ownFp) html += '<div class="own-fp">This browser · <code>' + ownFp + '</code></div>';
       // Own this machine: hidden entirely once this device already owns it (a
       // PIN-free/owner connect proves ownership); otherwise offer to enroll.
-      if (iOwnThisMachine) {
-        html += '<div class="own-owned">✓ You own this machine</div>';
+      if (iOwnThisMachine && !ownReenroll) {
+        // Ownership lives on the host (/etc/reminal) and can be revoked there out
+        // of band, so always offer a way back in rather than dead-ending on a
+        // possibly-stale "you own this" (the browser only knows it once did).
+        html += '<div class="own-owned">✓ You own this machine <span class="own-reenroll">re-enroll?</span></div>';
       } else if (ownErr) {
         html += '<div class="own-box"><div class="own-label">' + ownErr + '</div></div>';
       } else if (ownIdShown) {
@@ -1210,8 +1227,13 @@
           html += '<div class="own-id"><code>' + cmd + '</code></div>';
         }
         html += '<div class="own-toggle"><span class="own-reveal">'
-          + (ownRevealed ? 'hide command' : 'show command') + '</span></div>';
-        html += '</div>';
+          + (ownRevealed ? 'hide command' : 'show command') + '</span>';
+        // Once they've seen or copied the command, a Done button re-checks and
+        // re-renders so they don't have to reload the page after running it.
+        if (ownRevealed || ownCopied) {
+          html += ' <button class="own-done">Done — I ran it</button>';
+        }
+        html += '</div></div>';
       } else {
         html += '<button class="host-desktop host-own">Own this machine</button>';
       }
@@ -2495,6 +2517,7 @@
       // Complete any queued self-revokes for machines that are now reachable.
       retryPendingRevokes();
       root.innerHTML = '';
+      ownedSessionIds = new Set(); // repopulated by the cached + fresh session renders below
       for (const b64 of keys) {
         const rec = store[b64];
         const box = document.createElement('div');
@@ -2507,15 +2530,23 @@
         nameEl.className = 'machine-name';
         nameEl.textContent = rec.name || 'machine ' + b64.slice(0, 6) + '…';
         const dot = document.createElement('span');
-        dot.className = 'machine-dot checking';
-        dot.title = 'checking…';
+        dot.className = 'machine-dot spin';
+        dot.title = 'refreshing…';
         const spacer = document.createElement('span');
         spacer.style.flex = '1';
         if (rec.pendingRevoke) {
           const pend = document.createElement('span');
           pend.className = 'machine-pending';
           pend.textContent = 'removing when online…';
-          head.appendChild(dot); head.appendChild(nameEl); head.appendChild(pend); head.appendChild(spacer);
+          // A queued self-revoke can wait forever if the machine never comes back
+          // (or was already revoked from a terminal). Let the user just drop it
+          // from this browser now instead of being stuck.
+          const forget = document.createElement('button');
+          forget.className = 'machine-btn';
+          forget.title = 'Stop waiting — forget this machine now';
+          forget.textContent = '✕';
+          forget.addEventListener('click', (ev) => { ev.stopPropagation(); forgetPendingMachine(b64, nameEl.textContent); });
+          head.appendChild(dot); head.appendChild(nameEl); head.appendChild(pend); head.appendChild(spacer); head.appendChild(forget);
           const sessions = document.createElement('div');
           sessions.className = 'machine-sessions';
           box.appendChild(head); box.appendChild(sessions);
@@ -2563,13 +2594,19 @@
 
         const sessions = document.createElement('div');
         sessions.className = 'machine-sessions' + (rec.collapsed ? ' collapsed' : '');
-        sessions.innerHTML = '<div class="machine-sub">checking…</div>';
-
         box.appendChild(head);
         box.appendChild(sessions);
         root.appendChild(box);
+        // Instant cached view: if we remember this machine's sessions from a
+        // previous refresh, paint them NOW (with the spinner still turning) so the
+        // panel is populated the moment it opens; the background fill updates them
+        // in place. First-ever open (no cache) shows a placeholder until it lands.
+        if (Array.isArray(rec.sessions)) {
+          renderMachineSessions(box, rec.sessions, b64);
+        } else {
+          sessions.innerHTML = '<div class="machine-sub">checking…</div>';
+        }
       }
-      ownedSessionIds = new Set(); // rebuilt as each machine's sessions come in
       // Fire the fills in the background — each box updates itself as its query
       // resolves, so one offline machine never blocks the others (or the panel).
       // Machines pending removal are handled by retryPendingRevokes, not filled.
@@ -2606,8 +2643,12 @@
       if (!ok) {
         dot.className = 'machine-dot offline';
         dot.title = 'offline';
-        if (countEl) countEl.textContent = '';
-        sessions.innerHTML = '<div class="machine-sub">offline</div>';
+        // Keep the last-known (cached) list visible so a transient blip doesn't
+        // blank the card; only show "offline" when there's nothing cached to show.
+        if (!Array.isArray(rec.sessions)) {
+          if (countEl) countEl.textContent = '';
+          sessions.innerHTML = '<div class="machine-sub">offline</div>';
+        }
         return;
       }
       dot.className = 'machine-dot online';
@@ -2625,14 +2666,28 @@
         await withOwnedMachines(m => { if (m[b64] && !m[b64].name) m[b64].name = resp.hostname; else return false; });
       }
       const list = (resp.sessions || []);
+      renderMachineSessions(box, list, b64);
+      // Remember this snapshot so the NEXT time the panel opens it paints these
+      // sessions instantly from cache while the fresh query runs in the background.
+      await withOwnedMachines(m => { if (!m[b64]) return false; m[b64].sessions = list; if (resp.hostname) m[b64].host = resp.hostname; });
+    }
+
+    // Render a machine's session list into its card. Shared by the instant cached
+    // paint (renderMachines, from rec.sessions) and the fresh list from a
+    // completed query (fillMachineSessions) so the two never drift.
+    function renderMachineSessions(box, list, b64) {
+      const sessions = box.querySelector('.machine-sessions');
+      const countEl = box.querySelector('.machine-count');
+      if (!sessions) return;
+      list = Array.isArray(list) ? list : [];
       if (countEl) countEl.textContent = list.length ? '· ' + list.length : '';
       if (list.length === 0) {
         sessions.innerHTML = '<div class="machine-sub">no sessions running</div>';
         return;
       }
-      list.sort((a, b) => (a.kind === 'port' ? 1 : 0) - (b.kind === 'port' ? 1 : 0) || (a.idle_secs || 0) - (b.idle_secs || 0));
+      const sorted = list.slice().sort((a, b) => (a.kind === 'port' ? 1 : 0) - (b.kind === 'port' ? 1 : 0) || (a.idle_secs || 0) - (b.idle_secs || 0));
       sessions.innerHTML = '';
-      for (const s of list) {
+      for (const s of sorted) {
         // A shell session shown under its machine card is redundant in Recents —
         // record its id so renderRecents can skip it (ports aren't in Recents).
         if (s.kind !== 'port') ownedSessionIds.add(s.id);
@@ -2776,6 +2831,16 @@
         renderMachines();
         setStatus('“' + name + '” is offline — it\'ll be revoked and removed when it\'s next reachable', 'info');
       }
+    }
+
+    // Drop a machine stuck in the "removing when online…" queue from this browser
+    // right now, without waiting for it to come back. The pending self-revoke is
+    // abandoned — if you still need to drop this device as an owner, do it on the
+    // machine itself (reminal owners revoke <id>).
+    async function forgetPendingMachine(b64, name) {
+      if (!confirm('Stop waiting and forget “' + name + '” now?\n\n' +
+          'It just disappears from this browser. The queued revoke is dropped — if you still need to remove this device as an owner, run “reminal owners revoke <id>” on the machine.')) return;
+      await forgetOwnedMachineWeb(b64);
     }
 
     // Ask the machine to revoke THIS device's ownership (self-revoke). Resolves
@@ -5045,7 +5110,7 @@
       // clicked element. The document-level outside-click closer then sees
       // host.contains(e.target)===false and closes the dropdown. Stop the event
       // here so an in-panel control click never reaches that closer.
-      if (e.target.closest('.own-copy, .own-reveal, .host-own, .host-new, .host-desktop')) {
+      if (e.target.closest('.own-copy, .own-reveal, .own-reenroll, .own-done, .host-own, .host-new, .host-desktop')) {
         e.stopPropagation();
       }
       if (e.target.closest('.own-copy')) {
@@ -5055,6 +5120,26 @@
         return;
       }
       if (e.target.closest('.own-reveal')) { ownRevealed = !ownRevealed; renderHost(); return; }
+      // Re-enroll: surface the command even though we think we already own this
+      // machine (ownership may have been revoked on the host). Loads the device
+      // id if needed, then shows the command.
+      if (e.target.closest('.own-reenroll')) {
+        ownReenroll = true; ownErr = '';
+        ownDeviceId()
+          .then((id) => { ownIdShown = id; ownRevealed = true; renderHost(); refreshOwnFingerprint(); })
+          .catch(() => { ownErr = "This browser can't create a device key. Use the CLI: reminal own"; renderHost(); });
+        return;
+      }
+      // Done: the user just ran the enroll command on the host. Record this
+      // machine as owned and refresh the panels in place — no page reload needed.
+      if (e.target.closest('.own-done')) {
+        getPinnedMachine(sessionId).then(async (b64) => {
+          if (b64) { try { await recordOwnedMachineWeb(b64); } catch (_) {} }
+          iOwnThisMachine = true; ownReenroll = false; ownRevealed = false; ownCopied = false;
+          renderHost();
+        }).catch(() => { iOwnThisMachine = true; ownReenroll = false; renderHost(); });
+        return;
+      }
       if (e.target.closest('.host-own')) {
         ownErr = '';
         ownDeviceId()
