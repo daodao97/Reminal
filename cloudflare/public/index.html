@@ -2859,6 +2859,12 @@
       try {
         await queryDirectory(base64ToU8(b64URLToStd(b64)), { kill: id });
         setStatus('Killed ' + id, 'info');
+        // Drop it from the cached list immediately so it disappears on success
+        // instead of lingering until a refresh; the background re-query confirms.
+        await withOwnedMachines(m => {
+          if (m[b64] && Array.isArray(m[b64].sessions)) { m[b64].sessions = m[b64].sessions.filter(s => s.id !== id); }
+          else { return false; }
+        });
         renderMachines();
       } catch (e) {
         setStatus('Could not kill ' + id + ' (' + (e.message || 'error') + ')', 'error');

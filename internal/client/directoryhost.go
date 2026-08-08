@@ -589,19 +589,24 @@ func killLocalSession(id string) error {
 			}
 			return fmt.Errorf("SIGTERM %d: %w", pid, err)
 		}
-		go func(pid int, sid string) {
+		// Drop the registry entry immediately so `reminal list` and the Machines
+		// panel stop showing it the moment the kill is acknowledged — not after
+		// the process finishes dying (which left a killed session lingering in
+		// the list until the next refresh). The goroutine below still escalates
+		// to SIGKILL if the shell ignores SIGTERM.
+		_ = session.ClearActive(a.ID)
+		go func(pid int) {
 			deadline := time.Now().Add(3 * time.Second)
 			for time.Now().Before(deadline) {
 				if syscall.Kill(pid, 0) != nil {
-					break
+					return
 				}
 				time.Sleep(100 * time.Millisecond)
 			}
 			if syscall.Kill(pid, 0) == nil {
 				_ = syscall.Kill(pid, syscall.SIGKILL)
 			}
-			_ = session.ClearActive(sid)
-		}(pid, a.ID)
+		}(pid)
 		return nil
 	}
 	return fmt.Errorf("session not found")
