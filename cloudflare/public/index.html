@@ -2520,6 +2520,11 @@
     // render bails instead of writing into the newly-rebuilt skeleton.
     let machinesGen = 0;
     let ownedSessionIds = new Set(); // session ids currently shown under owned-machine cards
+    // Sessions killed from the panel this page-load. They're filtered out of every
+    // render so a racing re-query, a cached snapshot, or a reconnect can't bring a
+    // killed session back into the list. Session ids are one-time (never reused),
+    // so keeping them filtered for the life of the page never hides a live session.
+    const killedSessionIds = new Set();
     // Consistent stroke icons for the Machines panel — the caret / + / edit /
     // kill controls all render at the same visual size (Unicode glyphs don't).
     const MICONS = {
@@ -2714,7 +2719,7 @@
       const sessions = box.querySelector('.machine-sessions');
       const countEl = box.querySelector('.machine-count');
       if (!sessions) return;
-      list = Array.isArray(list) ? list : [];
+      list = (Array.isArray(list) ? list : []).filter(s => !killedSessionIds.has(s.id));
       if (countEl) countEl.textContent = list.length ? '· ' + list.length : '';
       if (list.length === 0) {
         sessions.innerHTML = '<div class="machine-sub">no sessions running</div>';
@@ -2859,8 +2864,9 @@
       try {
         await queryDirectory(base64ToU8(b64URLToStd(b64)), { kill: id });
         setStatus('Killed ' + id, 'info');
-        // Drop it from the cached list immediately so it disappears on success
-        // instead of lingering until a refresh; the background re-query confirms.
+        // Remember it as killed so it stays out of the list through any racing
+        // re-query / cached snapshot / reconnect, and drop it from the cache now.
+        killedSessionIds.add(id);
         await withOwnedMachines(m => {
           if (m[b64] && Array.isArray(m[b64].sessions)) { m[b64].sessions = m[b64].sessions.filter(s => s.id !== id); }
           else { return false; }
