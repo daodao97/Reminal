@@ -46,6 +46,9 @@ func runAddOwner(args []string) error {
 	}
 
 	o, res, err := client.AddOwner(id, label)
+	if needsSudoRetry(err) {
+		return sudoReexec() // writing /etc/reminal needs root — re-run under sudo
+	}
 	if err != nil {
 		return err
 	}
@@ -123,6 +126,9 @@ func runOwners(args []string) error {
 			return fmt.Errorf("the new label can't be empty")
 		}
 		o, n, err := client.RenameOwner(target, newLabel)
+		if needsSudoRetry(err) {
+			return sudoReexec()
+		}
 		if err != nil {
 			return err
 		}
@@ -142,6 +148,9 @@ func runOwners(args []string) error {
 		}
 		target := args[1]
 		o, n, err := client.RemoveOwner(target)
+		if needsSudoRetry(err) {
+			return sudoReexec()
+		}
 		if err != nil {
 			return err
 		}
