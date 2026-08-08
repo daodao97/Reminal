@@ -2473,7 +2473,9 @@
     // renderMachines paints the "Machines you own" section, then reaches each
     // machine's directory in parallel and fills in its live sessions as replies
     // land. A machine that doesn't answer is shown offline.
-    let machinesRefreshing = false;
+    // Bumped on every renderMachines() so an in-flight fill from a superseded
+    // render bails instead of writing into the newly-rebuilt skeleton.
+    let machinesGen = 0;
     let ownedSessionIds = new Set(); // session ids currently shown under owned-machine cards
     async function renderMachines() {
       const root = document.getElementById('machines-list');
@@ -2484,11 +2486,12 @@
         root.innerHTML = '<div class="recents-empty">This device isn\'t an owner of any other machines yet — owner-connect to one and it shows up here.</div>';
         return;
       }
-      // A refresh is already in flight painting the current DOM. Bail BEFORE
-      // rebuilding — rebuilding here (then skipping fills via the guard) would
-      // strand the visible boxes on "checking…" while the in-flight fills wrote
-      // to the now-detached ones. Rapid open/close of the panel hits this.
-      if (machinesRefreshing) return;
+      // Always paint the cached skeleton (machine names + a pulsing "checking"
+      // dot) synchronously so opening the panel is NEVER blank — even while a
+      // previous refresh's fills are still in flight against an offline machine's
+      // timeout. Those older fills bail via the generation check below rather
+      // than writing into this freshly-rebuilt skeleton.
+      const gen = ++machinesGen;
       // Complete any queued self-revokes for machines that are now reachable.
       retryPendingRevokes();
       root.innerHTML = '';
@@ -2566,25 +2569,21 @@
         box.appendChild(sessions);
         root.appendChild(box);
       }
-      machinesRefreshing = true;
       ownedSessionIds = new Set(); // rebuilt as each machine's sessions come in
-      try {
-        // Machines pending removal are handled by retryPendingRevokes, not filled.
-        await Promise.all(keys.filter(b64 => !store[b64].pendingRevoke).map(b64 => fillMachineSessions(b64, store[b64])));
-      } finally { machinesRefreshing = false; }
+      // Fire the fills in the background — each box updates itself as its query
+      // resolves, so one offline machine never blocks the others (or the panel).
+      // Machines pending removal are handled by retryPendingRevokes, not filled.
+      await Promise.all(keys.filter(b64 => !store[b64].pendingRevoke).map(b64 => fillMachineSessions(b64, store[b64], gen)));
+      if (gen !== machinesGen) return; // a newer render superseded us
       // Now that we know which sessions live under owned machines, re-render
       // Recents so it drops the duplicates (e.g. the current session shown in a
       // card no longer also appears in the Recent list below).
       renderRecents();
     }
 
-    async function fillMachineSessions(b64, rec) {
-      const box = document.querySelector('.machine-box[data-key="' + cssEscape(b64) + '"]');
-      if (!box) return;
-      const dot = box.querySelector('.machine-dot');
-      const sessions = box.querySelector('.machine-sessions');
-      const countEl = box.querySelector('.machine-count');
+    async function fillMachineSessions(b64, rec, gen) {
       let resp;
+      let ok = true;
       try {
         resp = await queryDirectory(base64ToU8(b64URLToStd(b64)));
         // The reply comes from a remote machine — validate its shape before
@@ -2592,7 +2591,19 @@
         // is treated as offline rather than throwing out of the fill (which would
         // strand the box on "checking…" and raise an unhandled rejection).
         if (!resp || typeof resp !== 'object') throw new Error('malformed directory reply');
-      } catch (_) {
+      } catch (_) { ok = false; }
+      // A newer renderMachines() rebuilt the skeleton while we were querying —
+      // its own fills own the new boxes; ours would write into stale ones.
+      if (gen !== undefined && gen !== machinesGen) return;
+      // Re-select the box AFTER the await: the query took seconds, during which
+      // the panel may have been re-rendered, so the reference we'd have captured
+      // up front could be detached.
+      const box = document.querySelector('.machine-box[data-key="' + cssEscape(b64) + '"]');
+      if (!box) return;
+      const dot = box.querySelector('.machine-dot');
+      const sessions = box.querySelector('.machine-sessions');
+      const countEl = box.querySelector('.machine-count');
+      if (!ok) {
         dot.className = 'machine-dot offline';
         dot.title = 'offline';
         if (countEl) countEl.textContent = '';
@@ -2603,9 +2614,9 @@
       dot.title = 'online';
       // Auto-name an unnamed machine from its reported hostname. Persist WITHOUT
       // re-rendering: we're mid-fill inside renderMachines's Promise.all, and a
-      // renderMachines() here would rebuild the DOM out from under us and — via
-      // the refresh guard — skip the remaining fills, stranding boxes on
-      // "checking…". Just update this label in place and save quietly.
+      // renderMachines() here would tear down and rebuild every box (flicker) and
+      // needlessly re-query the other machines. Just update this label in place
+      // and save quietly.
       if (!rec.name && resp.hostname) {
         const nameEl = box.querySelector('.machine-name');
         if (nameEl) nameEl.textContent = resp.hostname;
