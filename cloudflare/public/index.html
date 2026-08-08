@@ -2741,8 +2741,16 @@
         // Always surface the reminal id (it's how you identify/connect to a
         // session), then viewers/idle — or "current" for the one you're viewing.
         const bits = [s.id];
-        const extra = isCurrent ? 'current' : sessionMetaWeb(s);
-        if (extra) bits.push(extra);
+        if (isCurrent) {
+          // The session you're viewing: keep the live viewer count visible (it
+          // includes you), just tagged "current" — idle is meaningless while
+          // you're actively connected, so drop it.
+          const vc = s.viewers > 0 ? s.viewers + (s.viewers === 1 ? ' viewer' : ' viewers') : '';
+          bits.push(['current', vc].filter(Boolean).join(' · '));
+        } else {
+          const extra = sessionMetaWeb(s);
+          if (extra) bits.push(extra);
+        }
         meta.textContent = bits.join(' · ');
         main.appendChild(label);
         main.appendChild(meta);
