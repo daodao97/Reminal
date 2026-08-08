@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 
@@ -42,6 +43,16 @@ func shellEnv(extra []string) []string {
 
 func Start(shell string, env ...string) (*Session, error) {
 	cmd := exec.Command(shell)
+	// Run it as a LOGIN shell — the mechanism login(1) and Terminal.app use:
+	// argv[0] prefixed with "-". A login shell sources the full profile chain
+	// (/etc/zprofile → path_helper, ~/.zprofile → `brew shellenv`, ~/.zshrc, …),
+	// so the session's PATH and environment match a freshly-opened terminal rather
+	// than whatever the spawning process happened to inherit. This is essential for
+	// sessions started by the background host, which runs under launchd/systemd
+	// with a bare PATH: a non-login shell there would be missing Homebrew, claude,
+	// and everything else set up in the login profile — the session wouldn't behave
+	// like a real terminal at all.
+	cmd.Args[0] = "-" + filepath.Base(shell)
 	cmd.Env = shellEnv(env)
 
 	ptmx, err := pty.Start(cmd)
