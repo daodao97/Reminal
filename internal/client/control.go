@@ -44,6 +44,38 @@ func controlSockPath(pid int) (string, error) {
 	return filepath.Join(home, ".reminal", fmt.Sprintf("agent-%d.sock", pid)), nil
 }
 
+// sendControlTo dials the control socket of the local agent with the given pid
+// and sends one newline-delimited command, returning the payload after "ok "
+// (or an error). Lets the directory host drive another local session on a remote
+// owner's behalf — e.g. renaming a session shown in the Machines panel.
+func sendControlTo(pid int, cmd string) (string, error) {
+	sock, err := controlSockPath(pid)
+	if err != nil {
+		return "", err
+	}
+	conn, err := net.Dial("unix", sock)
+	if err != nil {
+		return "", fmt.Errorf("connect to agent %d: %w", pid, err)
+	}
+	defer conn.Close()
+	if _, err := fmt.Fprintln(conn, cmd); err != nil {
+		return "", err
+	}
+	reply, err := bufio.NewReader(conn).ReadString('\n')
+	if err != nil {
+		return "", err
+	}
+	reply = strings.TrimRight(reply, "\r\n")
+	switch {
+	case reply == "ok":
+		return "", nil
+	case strings.HasPrefix(reply, "ok "):
+		return strings.TrimPrefix(reply, "ok "), nil
+	default:
+		return "", fmt.Errorf("agent: %s", strings.TrimSpace(strings.TrimPrefix(reply, "error:")))
+	}
+}
+
 // listenControl starts a Unix-socket listener that accepts simple
 // newline-delimited commands and dispatches them to handlers on the agent.
 // Returns a cleanup func that removes the socket file.

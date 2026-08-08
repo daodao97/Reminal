@@ -5,6 +5,7 @@ package client
 
 import (
 	"bytes"
+	"crypto/ed25519"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -49,6 +50,7 @@ type Viewer struct {
 
 	sessionID string
 	pin       string
+	owner     bool // connect PIN-free via this device's enrolled owner key
 	box       *crypto.Box
 
 	// pendingDownloads buffers in-flight chunked downloads (from a host
@@ -89,6 +91,33 @@ func Connect(sessionID, pin string) error {
 		return err
 	}
 	return v.Run()
+}
+
+// NewOwnerViewer builds a viewer that connects PIN-free, authenticating with
+// this device's enrolled owner key instead of a PIN.
+func NewOwnerViewer(sessionID string) (*Viewer, error) {
+	sessionID = strings.ToUpper(strings.TrimSpace(sessionID))
+	if sessionID == "" {
+		return nil, fmt.Errorf("session ID required")
+	}
+	return &Viewer{
+		sessionID:        sessionID,
+		owner:            true,
+		pendingDownloads: make(map[string]*pendingDownload),
+	}, nil
+}
+
+// ConnectOwner connects to a session PIN-free as an enrolled owner device. The
+// returned bool reports whether a session was ever established — so the caller
+// can tell "the machine doesn't recognise this device" (connected=false, fall
+// back to a PIN) from "connected fine, then the session ended" (connected=true).
+func ConnectOwner(sessionID string) (connected bool, err error) {
+	v, err := NewOwnerViewer(sessionID)
+	if err != nil {
+		return false, err
+	}
+	err = v.Run()
+	return !v.connectTime.IsZero(), err
 }
 
 func (v *Viewer) Run() error {
@@ -273,7 +302,11 @@ func (v *Viewer) runConnection(stdinCh <-chan []byte, winCh <-chan os.Signal, in
 		return &fatalErr{err: err}
 	}
 
-	if err := v.negotiateSessionKey(conn); err != nil {
+	negotiate := v.negotiateSessionKey
+	if v.owner {
+		negotiate = v.negotiateSessionKeyOwner
+	}
+	if err := negotiate(conn); err != nil {
 		// EKE failures are fatal when the cause is "wrong PIN" (the
 		// AES-GCM unwrap tag rejects). For network/transient failures
 		// we'd ideally reconnect, but since we can't tell them apart
@@ -375,6 +408,18 @@ func (v *Viewer) runConnection(stdinCh <-chan []byte, winCh <-chan os.Signal, in
 // handshake doesn't pin a user-visible terminal forever.
 const kexTimeout = 15 * time.Second
 
+// ownerKexTimeout is short: a successful owner handshake completes in
+// milliseconds, so if the agent hasn't answered by now this device isn't
+// enrolled — return quickly so the caller can fall back to a PIN prompt.
+const ownerKexTimeout = 4 * time.Second
+
+// ErrNotOwner means the agent didn't complete an owner handshake — the device
+// isn't recognised (or the agent is offline). It's the ONLY owner-connect
+// failure the caller may quietly fall back to a PIN for; every other failure
+// (a bad machine signature, a changed machine identity) is a security event
+// that must be surfaced, not downgraded.
+var ErrNotOwner = errors.New("this device isn't a recognised owner of the machine")
+
 // negotiateSessionKey runs the v2 PIN-authenticated X25519 handshake.
 // Replaces the deterministic deriveKey(sessionID, pin) used in v1,
 // which gave a relay-recorded ciphertext frame only ~20 bits of
@@ -465,6 +510,124 @@ func (v *Viewer) negotiateSessionKey(conn *websocket.Conn) error {
 			// signals the post-EKE setup re-derives (sendResume +
 			// sendResizeNow re-publish viewport, agentLive starts
 			// optimistically), so dropping them here is safe.
+		}
+	}
+}
+
+// negotiateSessionKeyOwner runs the PIN-free (owner) handshake: this device
+// proves its enrolled owner key, verifies the machine's identity against the key
+// it pinned on first connect (trust-on-first-use), and receives the session key.
+// See internal/crypto/owner.go.
+func (v *Viewer) negotiateSessionKeyOwner(conn *websocket.Conn) error {
+	deviceKey, err := loadOrCreateDeviceKey()
+	if err != nil {
+		return fmt.Errorf("owner: device key: %w", err)
+	}
+	devicePub := deviceKey.Public().(ed25519.PublicKey)
+	eph, err := crypto.NewEphemeralKey()
+	if err != nil {
+		return fmt.Errorf("owner: keygen: %w", err)
+	}
+	exIDHex, exID, err := crypto.NewExID()
+	if err != nil {
+		return fmt.Errorf("owner: ex_id: %w", err)
+	}
+	viewerEph := eph.PublicKey().Bytes()
+	deviceSig := crypto.SignOwner(deviceKey, crypto.OwnerClientTranscript(v.sessionID, viewerEph, devicePub))
+	if err := v.writeMsg(conn, protocol.Message{
+		Type:      protocol.TypeOwnerInit,
+		ExID:      exIDHex,
+		Data:      base64.StdEncoding.EncodeToString(viewerEph),
+		DevicePub: base64.StdEncoding.EncodeToString(devicePub),
+		DeviceSig: base64.StdEncoding.EncodeToString(deviceSig),
+	}); err != nil {
+		return fmt.Errorf("owner: send: %w", err)
+	}
+
+	deadline := time.Now().Add(ownerKexTimeout)
+	for {
+		_ = conn.SetReadDeadline(deadline)
+		_, raw, err := conn.ReadMessage()
+		if err != nil {
+			// No own_resp before the deadline: the agent silently refused an
+			// unenrolled device, or it's offline. Report ErrNotOwner so the
+			// caller can fall back to a PIN — as opposed to a hard refusal
+			// below (bad machine signature / changed identity), which is a
+			// security event that must surface, never downgrade to a PIN.
+			return ErrNotOwner
+		}
+		var msg protocol.Message
+		if err := json.Unmarshal(raw, &msg); err != nil {
+			continue
+		}
+		switch msg.Type {
+		case protocol.TypeError:
+			return fmt.Errorf("%s", msg.Error)
+		case protocol.TypeOwnerResp:
+			if msg.ExID != exIDHex {
+				continue // another viewer's handshake
+			}
+			agentEph, err := base64.StdEncoding.DecodeString(msg.Data)
+			if err != nil || len(agentEph) != crypto.PubKeyBytes {
+				return fmt.Errorf("owner: bad agent key encoding")
+			}
+			machinePub, err := base64.StdEncoding.DecodeString(msg.MachinePub)
+			if err != nil || len(machinePub) != ed25519.PublicKeySize {
+				return fmt.Errorf("owner: bad machine key encoding")
+			}
+			machineSig, err := base64.StdEncoding.DecodeString(msg.MachineSig)
+			if err != nil {
+				return fmt.Errorf("owner: bad machine sig encoding")
+			}
+			// Mutual auth: the machine must sign the transcript binding both
+			// ephemerals and both identities.
+			if !crypto.VerifyOwner(ed25519.PublicKey(machinePub),
+				crypto.OwnerServerTranscript(v.sessionID, viewerEph, agentEph, devicePub, machinePub), machineSig) {
+				return fmt.Errorf("owner: machine signature invalid — refusing (possible relay tampering)")
+			}
+			// Trust-on-first-use. A read failure means we can't verify the
+			// identity → refuse. A mismatch means a possible impostor → refuse. A
+			// first-time key is pinned now, but that write is BEST-EFFORT — the
+			// machine signature already verified above, so failing to persist the
+			// cache must not abort an otherwise-authenticated connection.
+			pinned, known, perr := PinnedMachineKey(v.sessionID)
+			if perr != nil {
+				return fmt.Errorf("owner: can't read pinned machine key: %w", perr)
+			}
+			if known && !bytes.Equal(pinned, machinePub) {
+				return fmt.Errorf("owner: this machine's identity changed since you first connected — refusing (possible impersonation). If you re-provisioned this machine, remove it from ~/.reminal/known_machines.json and reconnect")
+			}
+			if !known {
+				_, _ = RecordMachineKey(v.sessionID, machinePub) // best-effort pin
+			}
+			// This device just proved it owns this machine, so note it (or refresh
+			// LastSeen) for `reminal machines`. Best-effort — never fail an
+			// authenticated connection over a bookkeeping write.
+			_ = RecordOwnedMachine(machinePub)
+			peerKey, err := crypto.PeerPublicKey(agentEph)
+			if err != nil {
+				return fmt.Errorf("owner: invalid agent key")
+			}
+			shared, err := eph.ECDH(peerKey)
+			if err != nil {
+				return fmt.Errorf("owner: ecdh: %w", err)
+			}
+			wrapped, err := base64.StdEncoding.DecodeString(msg.Wrap)
+			if err != nil {
+				return fmt.Errorf("owner: bad wrap encoding")
+			}
+			sessionKey, err := crypto.UnwrapSessionKey(shared, exID, wrapped)
+			if err != nil {
+				return fmt.Errorf("owner: session key unwrap failed")
+			}
+			box, err := crypto.NewBox(sessionKey)
+			if err != nil {
+				return fmt.Errorf("owner: box: %w", err)
+			}
+			v.box = box
+			_ = conn.SetReadDeadline(time.Time{})
+			return nil
+		default:
 		}
 	}
 }

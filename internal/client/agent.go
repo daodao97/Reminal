@@ -5,6 +5,7 @@ package client
 
 import (
 	"bytes"
+	"crypto/ed25519"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -590,6 +591,12 @@ func (a *Agent) Run() error {
 	// survive "unplug everything and shut the lid". Gated at runtime by the
 	// closed-lid setting, which it re-reads every poll.
 	go a.vdisplayLoop(shellExit)
+
+	// Serve this machine's owner-derived directory channel so owners can list
+	// every session across the machines they own (`reminal machines`). No-op
+	// unless the machine has owners enrolled; the relay elects one host per
+	// machine across all its sessions, so running it on every agent is safe.
+	go runDirectoryHost(shellExit)
 
 	// Trap SIGINT/SIGTERM so the process exits via the normal return path
 	// (defers fire: ClearActive, exit summary, keepawake stop). Default Go
@@ -2089,6 +2096,12 @@ func (a *Agent) runReader(conn *websocket.Conn, cursorCh chan uint64) error {
 			// only that viewer's ephemeral private key can unwrap the
 			// session key inside).
 			a.handleKexInit(conn, msg.ExID, msg.Data)
+		case protocol.TypeOwnerInit:
+			// An enrolled device is connecting PIN-free. handleOwnerInit
+			// verifies its owner signature, checks it's in owners.json, and
+			// replies with a TypeOwnerResp carrying the machine signature +
+			// wrapped session key — only if the device checks out.
+			a.handleOwnerInit(conn, msg)
 		case protocol.TypeUpload:
 			a.handleUpload(msg.Data)
 		case protocol.TypeWindowList:
@@ -2357,6 +2370,76 @@ func (a *Agent) handleKexInit(conn *websocket.Conn, exIDHex, dataB64 string) {
 		ExID: exIDHex,
 		Data: base64.StdEncoding.EncodeToString(blindedAgent),
 		Wrap: base64.StdEncoding.EncodeToString(wrapped),
+	})
+}
+
+// handleOwnerInit completes one PIN-free (owner) handshake for an enrolled
+// device. Like handleKexInit it's silent on every failure — a device that isn't
+// enrolled, or a forged signature, simply gets no reply and times out. The
+// session key is wrapped and sent ONLY after the device signature verifies and
+// the device is confirmed in owners.json.
+func (a *Agent) handleOwnerInit(conn *websocket.Conn, msg protocol.Message) {
+	if !a.allowKex(time.Now()) {
+		return
+	}
+	exID, err := crypto.ParseExID(msg.ExID)
+	if err != nil {
+		return
+	}
+	viewerEph, err := base64.StdEncoding.DecodeString(msg.Data)
+	if err != nil || len(viewerEph) != crypto.PubKeyBytes {
+		return
+	}
+	devicePub, err := base64.StdEncoding.DecodeString(msg.DevicePub)
+	if err != nil || len(devicePub) != ed25519.PublicKeySize {
+		return
+	}
+	deviceSig, err := base64.StdEncoding.DecodeString(msg.DeviceSig)
+	if err != nil {
+		return
+	}
+	// 1. Prove the sender controls this device key for THIS exchange.
+	if !crypto.VerifyOwner(devicePub, crypto.OwnerClientTranscript(a.sessionID, viewerEph, devicePub), deviceSig) {
+		return
+	}
+	// 2. And that the device is enrolled as an owner of this machine.
+	if ok, err := IsOwner(devicePub); err != nil || !ok {
+		return
+	}
+	// 3. Complete the ECDH.
+	peerKey, err := crypto.PeerPublicKey(viewerEph)
+	if err != nil {
+		return
+	}
+	eph, err := crypto.NewEphemeralKey()
+	if err != nil {
+		return
+	}
+	shared, err := eph.ECDH(peerKey)
+	if err != nil {
+		return
+	}
+	agentEph := eph.PublicKey().Bytes()
+	// 4. Sign the server transcript with the machine identity key so the device
+	//    can confirm it's the real host (verified against its pinned copy).
+	machineKey, err := loadOrCreateMachineKey()
+	if err != nil {
+		return
+	}
+	machinePub := machineKey.Public().(ed25519.PublicKey)
+	machineSig := crypto.SignOwner(machineKey, crypto.OwnerServerTranscript(a.sessionID, viewerEph, agentEph, devicePub, machinePub))
+	// 5. Deliver the session key (same one every viewer shares).
+	wrapped, err := crypto.WrapSessionKey(shared, exID, a.sessionKey)
+	if err != nil {
+		return
+	}
+	_ = a.writeMsg(conn, protocol.Message{
+		Type:       protocol.TypeOwnerResp,
+		ExID:       msg.ExID,
+		Data:       base64.StdEncoding.EncodeToString(agentEph),
+		MachinePub: base64.StdEncoding.EncodeToString(machinePub),
+		MachineSig: base64.StdEncoding.EncodeToString(machineSig),
+		Wrap:       base64.StdEncoding.EncodeToString(wrapped),
 	})
 }
 

@@ -158,6 +158,12 @@ func (t *Tunnel) Run() error {
 		}
 	}()
 
+	// Serve this machine's owner-derived directory channel too, so a machine
+	// that's running ONLY a port forward (no shell session) is still visible and
+	// reachable in `reminal machines`. No-op unless the machine has owners; the
+	// relay elects a single host across all of the machine's sessions.
+	go runDirectoryHost(stop)
+
 	backoff := initialBackoff
 	for {
 		select {
