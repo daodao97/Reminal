@@ -552,78 +552,147 @@ func main() {
 	}
 }
 
+type helpRow struct{ cmd, desc string }
+
+// printHelp renders the CLI help styled and reflowed to the terminal width: a
+// two-column command/description table when there's room, or the description
+// stacked under each command on narrow terminals — so it never wraps into an
+// unreadable jumble in an 80- or 40-column window. Piped (non-TTY) output is
+// plain text at an 80-column assumption.
 func printHelp() {
-	fmt.Print(`reminal — remote terminal access from any browser or terminal
+	w := helpWidth()
+	tag := wrapText("reminal — remote terminal access from any browser or terminal", w)
+	fmt.Println(cBold("reminal") + cDim(strings.TrimPrefix(tag[0], "reminal")))
+	for _, ln := range tag[1:] {
+		fmt.Println(cDim(ln))
+	}
+	fmt.Println()
 
-Usage:
-  reminal [--name <name>]                  Share this terminal (works out of the box)
-  reminal new [name] [--name <name>]       Spawn a fresh background session (detached — survives this terminal closing)
-  reminal expose <port> [--public]         Forward a local HTTP port to a public URL (PIN-protected by default)
-  reminal list [filter] [--idle|--viewers|--headless] [-v]   List sessions (recent-first); filter by id/name/cwd/title
-  reminal prune [dur] [-y]                 Kill idle, unwatched shell sessions (default idle ≥ 30m; dur e.g. 12h, 1d, 2w)
-  reminal connect <session-or-url> [pin]   Connect to a remote session (PIN prompted if omitted)
-  reminal attach [id|name]                 Re-connect to a local agent as a viewer. No arg → interactive picker
-  reminal rename [id|name] <new-name>      Rename a running session. Inside a session, just: reminal rename <new-name>
-  reminal own                              Print this device's owner id to paste into "reminal add owner" on a machine
-  reminal add owner <id> [--label <name>]  Enroll a device (by its owner id) as an owner of this machine
-  reminal owners [rename|revoke|restore …] List owner devices (marks self-revoked); rename/revoke/restore <id|label>
-  reminal machines [rename …]              List every machine you own + its live sessions; rename <id|name> <new-name>
-  reminal stop [id|name|port] [-y]         Stop the reminal layer (kicks viewers / disables URL — your shell/server keeps running)
-  reminal kill [id|name] [-y]              Fully terminate a shell session (irreversible — kills shell + disconnects viewers)
-  reminal send <file>                      Push a file to every connected viewer (web client auto-downloads)
-  reminal copy [--ttl <dur>] [-f] <file>   Offer a file for pickup; prints a one-time code (detached by default; -f to stay in foreground)
-  reminal paste <code> [destination]       Fetch a file offered by 'reminal copy' on another terminal (default: .)
-  reminal notify <message>                 Push a notification to viewers (browser notification on web)
-  reminal connections                      List currently attached viewers with connect time
-  reminal info [id|name] [--all] [--qr]    Show connect details (ID/PIN/URL/QR). --all = every session at once; --json for scripts
-  reminal qr [id|name]                     Print just the join QR (defaults to the session you're in)
-  reminal doctor                           Self-diagnostic: version, relay reachability, terminal, shell
-  reminal settings                         Open the settings page (e.g. keep this Mac unlocked for remote control)
-  reminal completion <bash|zsh|fish>       Print shell completion script (source it in your shell rc)
-  reminal upgrade                          Upgrade to the latest release (download new binary)
-  reminal restart                          Hot-swap the running agent into the latest binary on disk (shell stays alive)
-  reminal relay [port]                     Start local relay server (dev only)
-  reminal version [--verbose]              Print version (--verbose adds build date / commit / go version)
-  reminal help                             Show this help
+	helpTable(w, "Commands", []helpRow{
+		{"reminal [--name <name>]", "Share this terminal (works out of the box)"},
+		{"reminal new [name]", "Spawn a detached background session (survives this terminal closing)"},
+		{"reminal expose <port> [--public]", "Forward a local HTTP port to a public URL (PIN-protected by default)"},
+		{"reminal list [filter] [-v]", "List sessions, recent-first; filter by id/name/cwd/title (--idle/--viewers/--headless)"},
+		{"reminal prune [dur] [-y]", "Kill idle, unwatched shell sessions (default idle 30m+; e.g. 12h, 1d, 2w)"},
+		{"reminal connect <session|url> [pin]", "Connect to a remote session (PIN prompted if omitted)"},
+		{"reminal attach [id|name]", "Re-connect to a local session as a viewer (no arg -> interactive picker)"},
+		{"reminal rename [id|name] <name>", "Rename a running session (inside one, just: reminal rename <name>)"},
+		{"reminal own", "Print this device's owner id to paste into 'add owner' on a machine"},
+		{"reminal add owner <id> [--label <n>]", "Enroll a device as an owner of this machine (needs sudo)"},
+		{"reminal owners [rename|revoke|restore]", "List and manage this machine's owner devices"},
+		{"reminal machines [rename <id> <name>]", "List every machine you own and its live sessions"},
+		{"reminal stop [id|name|port] [-y]", "Stop the reminal layer — your shell/server keeps running"},
+		{"reminal kill [id|name] [-y]", "Fully terminate a shell session (irreversible)"},
+		{"reminal send <file>", "Push a file to every connected viewer (web auto-downloads)"},
+		{"reminal copy [--ttl <dur>] [-f] <file>", "Offer a file for pickup elsewhere; prints a one-time code"},
+		{"reminal paste <code> [dest]", "Fetch a file offered by 'reminal copy' (default dest: .)"},
+		{"reminal notify <message>", "Push a notification to viewers (browser notification on web)"},
+		{"reminal connections", "List currently attached viewers with connect time"},
+		{"reminal info [id|name] [--qr|--json]", "Show connect details (ID/PIN/URL/QR)"},
+		{"reminal qr [id|name]", "Print just the join QR"},
+		{"reminal doctor", "Self-diagnostic: version, relay reachability, terminal, shell"},
+		{"reminal settings", "Open the settings page (e.g. keep this Mac unlocked)"},
+		{"reminal completion <bash|zsh|fish>", "Print a shell completion script"},
+		{"reminal upgrade", "Upgrade to the latest release"},
+		{"reminal restart [--all]", "Hot-swap the running agent(s) onto the latest binary"},
+		{"reminal version [--verbose]", "Print version (--verbose adds build date / commit)"},
+		{"reminal help", "Show this help"},
+	})
 
-  reminal --connect <session-or-url>       Long-form alias of "reminal connect ..."
+	helpTable(w, "Environment", []helpRow{
+		{"REMINAL_RELAY", "Override relay URL (default: hosted Cloudflare relay)"},
+		{"REMINAL_WEB", "Override web UI URL"},
+		{"REMINAL_LOCAL", "Set to 1 to use a localhost relay (with reminal relay)"},
+		{"REMINAL_NO_KEEP_AWAKE", "Set to 1 to let the host sleep while reminal runs"},
+		{"REMINAL_DEBUG", "Set to 1 to append raw error detail to status lines"},
+		{"SHELL", "Shell to run (default: $SHELL, then zsh / bash / sh)"},
+	})
 
-Security:
-  Each session requires a random 8-char ID + 6-digit PIN.
-  Terminal traffic is end-to-end encrypted — the relay cannot read it.
+	helpProse(w, "Security", "Each session needs a random 8-char id + 6-digit PIN, and terminal traffic is end-to-end encrypted — the relay can't read it. Inside a connect, local Ctrl+C goes to the remote shell; press Ctrl-] to disconnect the viewer cleanly (the host agent keeps running).")
+	helpProse(w, "Naming", "Name a session (reminal new deploy) and use the name anywhere an id works — attach / kill / stop accept an exact id, an exact name, a unique id prefix, or a unique substring of the name / cwd / title.")
 
-Inside reminal --connect:
-  Local Ctrl+C goes to the remote shell. To disconnect the viewer cleanly,
-  press Ctrl-] (the agent on the host keeps running for new viewers).
+	helpTable(w, "Examples", []helpRow{
+		{"reminal new deploy", "named background session"},
+		{"reminal attach deploy", "attach to it by name"},
+		{"reminal list ~/project", "filter by working directory"},
+		{"reminal connect ABC12345 482916", "connect with id + pin"},
+		{"reminal machines", "every machine you own, at a glance"},
+	})
 
-Environment:
-  REMINAL_RELAY          Override relay URL (default: hosted Cloudflare relay)
-  REMINAL_WEB            Override web UI URL
-  REMINAL_LOCAL          Set to 1 to use localhost relay (with reminal relay)
-  REMINAL_NO_KEEP_AWAKE  Set to 1 to let the host sleep while reminal runs
-  REMINAL_DEBUG          Set to 1 to append raw error detail to status lines
-  SHELL                  Shell to run (default: $SHELL, falls back to zsh / bash / sh)
+	fmt.Println(cDim("Bug reports + feature requests: https://github.com/harshalgajjar/Reminal/issues"))
+}
 
-Naming & resolution:
-  Name a session (reminal new deploy) and use the name anywhere an ID works:
-  attach / kill / stop accept an exact id, an exact name, a unique id prefix,
-  or a unique substring of the name / cwd / title.
+// helpWidth is the terminal width to reflow help to, or 80 when output isn't a
+// terminal (piped) or the size is unknown.
+func helpWidth() int {
+	if w, _, err := term.GetSize(int(os.Stdout.Fd())); err == nil && w > 20 {
+		return w
+	}
+	return 80
+}
 
-Examples:
-  reminal new deploy                                               # named background session
-  reminal attach deploy                                            # … attach to it by name
-  reminal rename prod-db                                           # rename the session you're in (no id needed)
-  reminal attach                                                   # interactive picker
-  reminal list ~/project                                           # filter by working directory
-  reminal prune 1d -y                                              # clean up sessions idle 1+ day
-  reminal
-  reminal connect ABC12345 482916
-  reminal connect ABC12345                                          # PIN prompted
-  reminal connect "https://reminal-relay.reminal.workers.dev/?s=ABC12345#p=482916"
-  reminal doctor                                                    # confirm relay reachability etc.
+// wrapText word-wraps s to at most w columns without splitting words. Always
+// returns at least one line.
+func wrapText(s string, w int) []string {
+	if w < 8 {
+		w = 8
+	}
+	words := strings.Fields(s)
+	if len(words) == 0 {
+		return []string{""}
+	}
+	lines := []string{}
+	cur := words[0]
+	for _, word := range words[1:] {
+		if len([]rune(cur))+1+len([]rune(word)) <= w {
+			cur += " " + word
+		} else {
+			lines = append(lines, cur)
+			cur = word
+		}
+	}
+	return append(lines, cur)
+}
 
-Bug reports + feature requests: https://github.com/harshalgajjar/Reminal/issues
-`)
+// helpTable prints a titled command/description table. Two columns when the
+// description column can start with room to spare; otherwise the description is
+// stacked (wrapped) under each bold command.
+func helpTable(width int, title string, rows []helpRow) {
+	fmt.Println(cBold(title))
+	maxCmd := 0
+	for _, r := range rows {
+		if l := len([]rune(r.cmd)); l > maxCmd {
+			maxCmd = l
+		}
+	}
+	const indent, gap = 2, 2
+	descCol := indent + maxCmd + gap
+	twoCol := descCol+28 <= width
+	for _, r := range rows {
+		if twoCol {
+			pad := strings.Repeat(" ", maxCmd-len([]rune(r.cmd)))
+			lines := wrapText(r.desc, width-descCol)
+			fmt.Println(strings.Repeat(" ", indent) + cBold(r.cmd) + pad + strings.Repeat(" ", gap) + cDim(lines[0]))
+			for _, ln := range lines[1:] {
+				fmt.Println(strings.Repeat(" ", descCol) + cDim(ln))
+			}
+		} else {
+			fmt.Println(strings.Repeat(" ", indent) + cBold(r.cmd))
+			for _, ln := range wrapText(r.desc, width-indent-2) {
+				fmt.Println(strings.Repeat(" ", indent+2) + cDim(ln))
+			}
+		}
+	}
+	fmt.Println()
+}
+
+// helpProse prints a titled, word-wrapped paragraph.
+func helpProse(width int, title, body string) {
+	fmt.Println(cBold(title))
+	for _, ln := range wrapText(body, width-2) {
+		fmt.Println("  " + cDim(ln))
+	}
+	fmt.Println()
 }
 
 // printVersionInfo prints a multi-line build-detail block — version,
