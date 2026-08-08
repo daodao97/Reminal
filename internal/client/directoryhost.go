@@ -30,43 +30,77 @@ import (
 // end-to-end-encrypted list — so the relay never learns what's running, and only
 // an enrolled owner can read the reply.
 //
-// Every agent runs one host goroutine. The relay allows a single agent per
-// channel, so exactly one wins the channel per machine and the losers retry;
-// whichever agent holds it can answer from the shared local session registry
-// (the same one `reminal list` reads), so it doesn't matter which session won.
-// The channel survives any one session ending: a loser takes over on its next
-// retry. A machine with no owners never opens the channel at all.
+// Every agent runs one host goroutine, but exactly one serves per machine: a
+// machine-local flock (see dirhostlock.go) elects the single host, and the
+// others stand by and take over promptly when it exits. We do NOT lean on the
+// relay's own election, because it differs by relay — the production relay
+// supersedes a same-credential agent while the local relay rejects it, so
+// without the lock sibling sessions would ping-pong the channel and the machine
+// would flap online/offline. Whichever session holds the lock answers from the
+// shared local session registry (the same one `reminal list` reads), so it
+// doesn't matter which won. A machine with no owners never opens the channel.
 
 const (
-	dirHostRetry    = 25 * time.Second
-	dirHostRetryMax = 2 * time.Minute
+	// With single-host locking there's no sibling to fight, so a dropped
+	// connection is always a genuine network blip — reclaim fast.
+	dirHostRetry    = 2 * time.Second
+	dirHostRetryMax = 30 * time.Second
+	// How often a standing-by agent re-checks to take over the lock, and how
+	// often an unowned machine re-checks for newly-enrolled owners.
+	dirHostLockPoll     = 3 * time.Second
+	dirHostOwnerRecheck = 60 * time.Second
 )
 
 // runDirectoryHost keeps this machine's directory channel served for as long as
 // stop is open. Safe to run on every agent; a no-op while unowned.
 func runDirectoryHost(stop <-chan struct{}) {
-	retry := dirHostRetry
 	for {
 		if stopped(stop) {
 			return
 		}
 		// Nothing to serve until someone owns this machine. Re-check periodically
 		// so enrolling an owner after the agent started still lights the channel up.
-		of, err := loadOwners()
-		if err != nil || of == nil || len(of.Owners) == 0 {
-			if sleepOrStop(stop, 60*time.Second) {
+		if of, err := loadOwners(); err != nil || of == nil || len(of.Owners) == 0 {
+			if sleepOrStop(stop, dirHostOwnerRecheck) {
 				return
 			}
 			continue
+		}
+		// Become this machine's sole directory host, or stand by. Polling (rather
+		// than a blocking lock) lets us keep re-checking owners and honour stop.
+		lock, ok := tryLockDirHost()
+		if !ok {
+			if sleepOrStop(stop, dirHostLockPoll) {
+				return
+			}
+			continue
+		}
+		serveDirectoryLocked(stop)
+		unlockDirHost(lock)
+	}
+}
+
+// serveDirectoryLocked serves the directory channel while this agent holds the
+// single-host lock, reconnecting quickly after a dropped relay connection (no
+// sibling can steal the channel, so a drop is always a genuine blip). It returns
+// — releasing the lock to a standing-by sibling — when stop fires or this
+// machine stops being owned.
+func serveDirectoryLocked(stop <-chan struct{}) {
+	retry := dirHostRetry
+	for {
+		if stopped(stop) {
+			return
+		}
+		if of, err := loadOwners(); err != nil || of == nil || len(of.Owners) == 0 {
+			return // every owner revoked — stop hosting and release the lock
 		}
 		machineKey, err := loadOrCreateMachineKey()
 		if err != nil {
-			if sleepOrStop(stop, 60*time.Second) {
+			if sleepOrStop(stop, retry) {
 				return
 			}
 			continue
 		}
-
 		served := serveDirectoryOnce(stop, machineKey)
 		if served {
 			retry = dirHostRetry // we held the channel; reset backoff
