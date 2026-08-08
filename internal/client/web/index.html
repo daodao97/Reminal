@@ -567,19 +567,24 @@
     }
     .recents-row .row-btn:hover { background: #30363d; color: #e6edf3; }
 
-    /* Machines panel: each owned machine is a self-contained CARD — a titled
-       header (dot + name + actions) with its live sessions nested inside — so
-       it's visually distinct from the Recent-sessions list below. */
-    .machine-box {
-      border: 1px solid #3d444d; background: #0d1117; border-radius: 8px;
-      margin-bottom: 10px; overflow: hidden; box-shadow: 0 1px 3px rgba(1,4,9,0.5);
-    }
+    /* Machines panel: each owned machine is a FLAT section — a header row
+       (dot + name + actions) with its sessions nested beneath — living directly
+       inside the one dropdown box. No per-machine card border/background, so it
+       doesn't read as a box-inside-a-box. Consecutive machines get a hairline. */
+    .machine-box { padding: 2px 0; }
+    .machine-box + .machine-box { border-top: 1px solid #21262d; margin-top: 2px; }
     .machine-head {
-      display: flex; align-items: center; gap: 8px; padding: 8px 12px;
-      background: #1c2128; border-bottom: 1px solid #30363d;
+      display: flex; align-items: center; gap: 8px; padding: 6px 6px; border-radius: 6px;
     }
-    .machine-name { font-size: 13px; font-weight: 600; color: #e6edf3; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-    .machine-caret { font-size: 10px; color: #8b949e; flex: none; width: 10px; }
+    .machine-head:hover { background: #1c222b; }
+    /* Hairline before the Recents list, only when both sections have content, so
+       the bottom stays flush when there are no recent sessions. */
+    #machines-list:not(:empty) + #recents-list:not(:empty) { border-top: 1px solid #21262d; margin-top: 4px; padding-top: 4px; }
+    /* name + count share a flex:1 track so the hostname gets all the free header
+       width (it was truncating early while empty space sat to its right). */
+    .machine-title { flex: 1; min-width: 0; display: flex; align-items: baseline; gap: 6px; }
+    .machine-name { font-size: 13px; font-weight: 600; color: #e6edf3; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+    .machine-caret { font-size: 12px; color: #8b949e; flex: none; width: 12px; text-align: center; }
     .machine-count { font-size: 11px; color: #8b949e; font-family: monospace; flex: none; }
     .machine-sessions.collapsed { display: none; }
     .machine-dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
@@ -600,29 +605,38 @@
        global green <button> default (which otherwise makes them big and green). */
     .machine-btn {
       background: transparent; color: #8b949e; border: 1px solid transparent;
-      font-size: 14px; font-weight: 400; line-height: 1; padding: 4px 9px;
+      font-size: 13px; font-weight: 400; line-height: 1; padding: 4px 6px;
       border-radius: 5px; cursor: pointer; flex: none;
     }
     .machine-btn:hover { background: #21262d; color: #e6edf3; border-color: #30363d; }
     .machine-sessions { padding: 4px 0; }
     .machine-sub { font-size: 11px; color: #8b949e; padding: 8px 12px 8px 30px; font-style: italic; }
     .machine-session {
-      display: flex; align-items: baseline; gap: 8px; padding: 8px 12px 8px 30px;
-      cursor: pointer;
+      display: flex; align-items: center; gap: 6px; padding: 8px 10px 8px 28px;
+      cursor: pointer; border-radius: 6px; margin: 1px 4px;
     }
     .machine-session:hover { background: #161b22; }
-    .machine-session.is-current { background: rgba(56,139,253,0.12); }
+    .machine-session.is-current { background: rgba(56,139,253,0.10); }
     .machine-session.is-current .ms-label { color: #79c0ff; font-weight: 500; }
     .machine-session.is-current .ms-meta { color: #58a6ff; }
-    .machine-session.is-port { cursor: default; opacity: 0.7; }
+    .machine-session.is-port { cursor: default; opacity: 0.75; }
     .machine-session.is-port:hover { background: transparent; }
-    .machine-session .ms-label { flex: 1; min-width: 0; font-size: 13px; color: #e6edf3; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-    .machine-session .ms-meta { font-size: 11px; color: #8b949e; font-family: monospace; white-space: nowrap; }
+    /* Two-line layout so the title / cwd isn't crushed onto one line alongside
+       the id and action buttons: the label wraps (up to 2 lines) with its
+       metadata beneath it, the same shape as the Recents rows. */
+    .machine-session .ms-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+    .machine-session .ms-label {
+      font-size: 13px; color: #e6edf3; line-height: 1.35; word-break: break-word;
+      display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+    }
+    .machine-session .ms-meta { font-size: 11px; color: #7d8590; font-family: monospace; line-height: 1.35; word-break: break-word; }
+    .machine-session .ms-actions { display: flex; gap: 2px; flex: none; align-self: center; }
     .machine-session .ms-btn {
       background: transparent; border: none; color: #6e7681; cursor: pointer;
-      font-size: 12px; padding: 2px 6px; flex: none; border-radius: 4px; line-height: 1;
+      font-size: 13px; padding: 5px 7px; flex: none; border-radius: 5px; line-height: 1;
     }
-    .machine-session .ms-btn:hover { background: #21262d; color: #e6edf3; }
+    .machine-session .ms-btn:hover { background: #262c36; color: #e6edf3; }
+    .machine-session .ms-kill:hover { background: rgba(248,81,73,0.15); color: #f85149; }
     .machine-session .ms-kill:hover { background: rgba(248,81,73,0.15); color: #f85149; }
     /* Divider label separating the Machines cards from the Recent-sessions list. */
     .section-label {
@@ -2583,11 +2597,13 @@
         head.style.cursor = 'pointer';
         head.title = 'Show/hide sessions';
         head.addEventListener('click', () => toggleMachineCollapse(b64));
+        const title = document.createElement('div');
+        title.className = 'machine-title';
+        title.appendChild(nameEl);
+        title.appendChild(count);
         head.appendChild(caret);
         head.appendChild(dot);
-        head.appendChild(nameEl);
-        head.appendChild(count);
-        head.appendChild(spacer);
+        head.appendChild(title);
         head.appendChild(addBtn);
         head.appendChild(renameBtn);
         head.appendChild(forgetBtn);
@@ -2694,10 +2710,14 @@
         const isCurrent = !!sessionId && s.id === sessionId;
         const row = document.createElement('div');
         row.className = 'machine-session' + (isCurrent ? ' is-current' : '');
-        const label = document.createElement('span');
+        // Two-line block: the label (title/cwd, wraps up to 2 lines) over its
+        // metadata (id · viewers · idle), so nothing gets crushed to an ellipsis.
+        const main = document.createElement('div');
+        main.className = 'ms-main';
+        const label = document.createElement('div');
         label.className = 'ms-label';
         label.textContent = sessionLabelWeb(s);
-        const meta = document.createElement('span');
+        const meta = document.createElement('div');
         meta.className = 'ms-meta';
         // Always surface the reminal id (it's how you identify/connect to a
         // session), then viewers/idle — or "current" for the one you're viewing.
@@ -2705,8 +2725,11 @@
         const extra = isCurrent ? 'current' : sessionMetaWeb(s);
         if (extra) bits.push(extra);
         meta.textContent = bits.join(' · ');
-        row.appendChild(label);
-        row.appendChild(meta);
+        main.appendChild(label);
+        main.appendChild(meta);
+        row.appendChild(main);
+        const actions = document.createElement('div');
+        actions.className = 'ms-actions';
         if (s.kind !== 'port') {
           row.title = isCurrent ? "The session you're viewing" : 'Connect (no PIN — you own this machine)';
           row.addEventListener('click', () => connectOwned(s.id));
@@ -2715,7 +2738,7 @@
           ren.title = 'Rename this session';
           ren.textContent = '✎';
           ren.addEventListener('click', (ev) => { ev.stopPropagation(); renameSessionOnMachine(b64, s.id, s.name || ''); });
-          row.appendChild(ren);
+          actions.appendChild(ren);
         } else {
           row.classList.add('is-port');
           row.title = 'Port forward';
@@ -2726,7 +2749,8 @@
         kill.title = 'Kill this session';
         kill.textContent = '✕';
         kill.addEventListener('click', (ev) => { ev.stopPropagation(); killSessionOnMachine(b64, s.id, s.name || (s.kind === 'port' ? 'port :' + s.port : '')); });
-        row.appendChild(kill);
+        actions.appendChild(kill);
+        row.appendChild(actions);
         sessions.appendChild(row);
       }
     }
