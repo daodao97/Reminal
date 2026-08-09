@@ -21,6 +21,12 @@ const (
 
 // launchdPlist is the macOS LaunchAgent that runs `reminal daemon` at login and
 // keeps it alive. exe/logPath are XML-escaped for the plist string values.
+//
+// Deliberately NO `ProcessType` key: ProcessType=Background clamps the daemon to
+// low-priority efficiency-core QoS, and sessions it spawns INHERIT that QoS — so
+// interactive terminals and window streaming spawned via the "+" ran throttled
+// (~5 fps, sluggish startup). Omitting it leaves the daemon at Standard QoS, so
+// spawned sessions run at normal priority like a terminal-started one.
 func launchdPlist(exe, logPath string) string {
 	return fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -34,7 +40,6 @@ func launchdPlist(exe, logPath string) string {
 	</array>
 	<key>RunAtLoad</key><true/>
 	<key>KeepAlive</key><true/>
-	<key>ProcessType</key><string>Background</string>
 	<key>StandardOutPath</key><string>%s</string>
 	<key>StandardErrorPath</key><string>%s</string>
 </dict>

@@ -10,6 +10,7 @@ import (
 	"os/user"
 	"path/filepath"
 	"strconv"
+	"time"
 )
 
 // macOS background host: a per-user LaunchAgent that runs `reminal daemon`.
@@ -51,10 +52,21 @@ func installService(exe string, u *user.User) error {
 
 	domain := fmt.Sprintf("gui/%d", uid)
 	target := fmt.Sprintf("gui/%d/%s", uid, daemonLabel)
-	// Reload cleanly: drop any prior instance, then bootstrap the new plist,
-	// falling back to the legacy load verb on older launchds.
+	// Reload cleanly: drop any prior instance, then bootstrap the new plist.
+	// launchd needs a beat to release the label after bootout — bootstrapping too
+	// soon fails with "5: Input/output error" and would leave the daemon DOWN — so
+	// retry with a short backoff. Fall back to the legacy load verb on older
+	// launchds.
 	_ = launchctl(uid, amRoot, "bootout", target).Run()
-	if out, err := launchctl(uid, amRoot, "bootstrap", domain, plistPath).CombinedOutput(); err != nil {
+	var out []byte
+	var err error
+	for attempt := 0; attempt < 4; attempt++ {
+		time.Sleep(time.Duration(attempt) * 400 * time.Millisecond)
+		if out, err = launchctl(uid, amRoot, "bootstrap", domain, plistPath).CombinedOutput(); err == nil {
+			break
+		}
+	}
+	if err != nil {
 		if out2, err2 := launchctl(uid, amRoot, "load", "-w", plistPath).CombinedOutput(); err2 != nil {
 			return fmt.Errorf("launchctl bootstrap: %v: %s", err, firstNonEmpty(out, out2))
 		}

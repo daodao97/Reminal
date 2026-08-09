@@ -86,11 +86,14 @@ func main() {
 				fmt.Fprintf(os.Stderr, "error: %v\n", err)
 				os.Exit(1)
 			}
-			if updated {
+			if updated && client.DaemonServiceInstalled() {
 				// The background host is a hidden, long-lived service, so unlike
-				// sessions the user can't be told to restart it — move it onto the
-				// new binary now. Best-effort and a no-op if it isn't installed.
-				_ = client.RestartDaemonService()
+				// sessions the user can't be told to restart it. Re-INSTALL (not just
+				// restart) so the service DEFINITION is refreshed too — this is how a
+				// plist fix (e.g. dropping ProcessType=Background, which was throttling
+				// spawned sessions) reaches machines set up by an older version. It
+				// also moves the daemon onto the new binary. Best-effort.
+				_ = client.InstallDaemonService()
 			}
 			return
 		case "info":

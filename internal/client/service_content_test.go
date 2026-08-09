@@ -39,6 +39,12 @@ func TestLaunchdPlistWellFormed(t *testing.T) {
 			t.Errorf("plist missing %q\n%s", want, plist)
 		}
 	}
+	// Must NOT be ProcessType=Background: it clamps the daemon (and the sessions it
+	// spawns) to throttled efficiency-core QoS — the cause of ~5fps streaming and
+	// sluggish "+"-spawned sessions. Guard against it creeping back.
+	if strings.Contains(plist, "ProcessType") {
+		t.Errorf("plist must not set ProcessType (throttles spawned sessions)\n%s", plist)
+	}
 }
 
 // A path with XML metacharacters must be escaped, and the plist must stay
