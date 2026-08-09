@@ -32,7 +32,7 @@ func RunDaemon() error {
 		close(stop)
 	}()
 	go watchBinaryAndExit(stop)
-	runDirectoryHost(stop)
+	runDirectoryHost(stop, true)
 	return nil
 }
 

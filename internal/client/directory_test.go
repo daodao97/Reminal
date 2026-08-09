@@ -48,7 +48,7 @@ func TestDirectoryRevokeSelfEndToEnd(t *testing.T) {
 
 	stop := make(chan struct{})
 	defer close(stop)
-	go runDirectoryHost(stop)
+	go runDirectoryHost(stop, true)
 
 	deadline := time.Now().Add(6 * time.Second)
 	for {
@@ -239,7 +239,7 @@ func TestDirectoryEndToEnd(t *testing.T) {
 
 	stop := make(chan struct{})
 	defer close(stop)
-	go runDirectoryHost(stop)
+	go runDirectoryHost(stop, true)
 
 	// Poll until the host has won the channel and answers.
 	deadline := time.Now().Add(6 * time.Second)
@@ -303,7 +303,7 @@ func TestDirectoryConcurrentQueries(t *testing.T) {
 
 	stop := make(chan struct{})
 	defer close(stop)
-	go runDirectoryHost(stop)
+	go runDirectoryHost(stop, true)
 
 	// Wait for the host to come up.
 	deadline := time.Now().Add(6 * time.Second)
@@ -361,7 +361,7 @@ func TestDirectoryRejectsNonOwner(t *testing.T) {
 
 	stop := make(chan struct{})
 	defer close(stop)
-	go runDirectoryHost(stop)
+	go runDirectoryHost(stop, true)
 
 	// While enrolled, the query must eventually succeed (host is up).
 	deadline := time.Now().Add(6 * time.Second)

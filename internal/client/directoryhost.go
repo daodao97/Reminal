@@ -56,11 +56,26 @@ const (
 )
 
 // runDirectoryHost keeps this machine's directory channel served for as long as
-// stop is open. Safe to run on every agent; a no-op while unowned.
-func runDirectoryHost(stop <-chan struct{}) {
+// stop is open. Safe to run on every agent; a no-op while unowned. isDaemon is
+// true only for the standalone background-host daemon (see RunDaemon); false for
+// session-embedded hosts.
+func runDirectoryHost(stop <-chan struct{}, isDaemon bool) {
 	for {
 		if stopped(stop) {
 			return
+		}
+		// When the always-on background host (daemon) is installed, IT is the
+		// canonical directory host — sessions must not compete for the single-host
+		// lock. Otherwise a session that grabbed the lock and later stopped serving
+		// (e.g. it survived a logout with a dead relay connection) would hold the
+		// lock while the daemon stands by — nobody serves and the machine shows
+		// offline. Deferring here removes that deadlock: only the daemon serves when
+		// it's installed; sessions serve only as a fallback when there's no daemon.
+		if !isDaemon && DaemonServiceInstalled() {
+			if sleepOrStop(stop, dirHostOwnerRecheck) {
+				return
+			}
+			continue
 		}
 		// Nothing to serve until someone owns this machine. Re-check periodically
 		// so enrolling an owner after the agent started still lights the channel up.
@@ -79,7 +94,7 @@ func runDirectoryHost(stop <-chan struct{}) {
 			}
 			continue
 		}
-		serveDirectoryLocked(stop)
+		serveDirectoryLocked(stop, isDaemon)
 		unlockDirHost(lock)
 	}
 }
@@ -89,10 +104,15 @@ func runDirectoryHost(stop <-chan struct{}) {
 // sibling can steal the channel, so a drop is always a genuine blip). It returns
 // — releasing the lock to a standing-by sibling — when stop fires or this
 // machine stops being owned.
-func serveDirectoryLocked(stop <-chan struct{}) {
+func serveDirectoryLocked(stop <-chan struct{}, isDaemon bool) {
 	retry := dirHostRetry
 	for {
 		if stopped(stop) {
+			return
+		}
+		// A daemon was installed while we (a session) held the lock — yield it so
+		// the daemon takes over as the canonical host.
+		if !isDaemon && DaemonServiceInstalled() {
 			return
 		}
 		if of, err := loadOwners(); err != nil || of == nil || len(of.Owners) == 0 {

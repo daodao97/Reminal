@@ -596,7 +596,7 @@ func (a *Agent) Run() error {
 	// every session across the machines they own (`reminal machines`). No-op
 	// unless the machine has owners enrolled; the relay elects one host per
 	// machine across all its sessions, so running it on every agent is safe.
-	go runDirectoryHost(shellExit)
+	go runDirectoryHost(shellExit, false)
 
 	// Trap SIGINT/SIGTERM so the process exits via the normal return path
 	// (defers fire: ClearActive, exit summary, keepawake stop). Default Go
