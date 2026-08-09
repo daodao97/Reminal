@@ -64,6 +64,50 @@ jobs:
           swiftc -O -target ${{ matrix.swift_target }} -o reminal-capture native/reminal-capture/main.swift
           codesign --force --sign - reminal-capture || true
 
+      - name: Sign (macOS — self-signed, for a stable TCC identity)
+        if: matrix.goos == 'darwin'
+        env:
+          MACOS_CERT_P12: ${{ secrets.MACOS_CERT_P12 }}
+          MACOS_CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
+          MACOS_CERT_IDENTITY: ${{ secrets.MACOS_CERT_IDENTITY }}
+        run: |
+          set -euo pipefail
+          if [ -z "${MACOS_CERT_P12}" ]; then
+            echo "No signing cert (secret MACOS_CERT_P12 empty) — leaving binaries ad-hoc signed."
+            echo "macOS TCC grants (e.g. Screen Recording for '+'-spawned sessions) won't persist"
+            echo "across versions until a cert is configured. See docs/macos-signing.md."
+            exit 0
+          fi
+          # Sign with a self-signed code-signing cert (no Apple Developer account
+          # needed). The point isn't Gatekeeper trust — it's a STABLE identity:
+          # macOS anchors a TCC permission to the code's Designated Requirement
+          # (a fixed identifier + this certificate), which stays constant across
+          # every release signed with the same cert. So a user grants reminal once
+          # (e.g. Screen Recording, needed for background-host-spawned sessions
+          # that run outside the terminal's grant) instead of on every upgrade.
+          # Not notarized — fine, because Homebrew doesn't quarantine formula
+          # binaries, so Gatekeeper never gates them.
+          KEYCHAIN="$RUNNER_TEMP/reminal-sign.keychain-db"
+          KPW="$(openssl rand -base64 24)"
+          CERT="$RUNNER_TEMP/cert.p12"
+          trap 'security delete-keychain "$KEYCHAIN" 2>/dev/null || true; rm -f "$CERT"' EXIT
+          echo "$MACOS_CERT_P12" | base64 --decode > "$CERT"
+          security create-keychain -p "$KPW" "$KEYCHAIN"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN"
+          security unlock-keychain -p "$KPW" "$KEYCHAIN"
+          security import "$CERT" -k "$KEYCHAIN" -P "$MACOS_CERT_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$KPW" "$KEYCHAIN" >/dev/null
+          # Put our keychain first in the search list so codesign resolves the identity.
+          security list-keychains -d user -s "$KEYCHAIN" $(security list-keychains -d user | sed 's/"//g')
+          # Stable identifiers → stable Designated Requirement across versions.
+          codesign --force --timestamp=none --identifier sh.reminal --sign "$MACOS_CERT_IDENTITY" reminal
+          if [ -f reminal-capture ]; then
+            codesign --force --timestamp=none --identifier sh.reminal.capture --sign "$MACOS_CERT_IDENTITY" reminal-capture
+          fi
+          echo "--- signature ---"
+          codesign -dvvv reminal 2>&1 | grep -Ei "Identifier|Authority|Signature|CDHash" || true
+          codesign --verify --strict --verbose=2 reminal
+
       - name: Package
         env:
           GOOS: ${{ matrix.goos }}
