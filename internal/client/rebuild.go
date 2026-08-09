@@ -282,15 +282,8 @@ func (w *vviewWriter) Write(p []byte) {
 		case 'J': // ED: constrain to the viewport
 			flush()
 			mode := csiParam(params, 0, 0)
-			if mode >= 2 || mode == 0 {
-				// Whole-screen clears (mode ≥2) accompany full repaints. Mode 0
-				// (erase-below) is ALSO a repaint boundary: Ink-style inline TUIs
-				// (Claude Code et al) redraw after a resize with cursor-up + ED0 +
-				// reprint and never emit home/ED2/DECSTBM — without applying here,
-				// their new-width frames were translated at the old width and
-				// stamped a duplicate, differently-wrapped copy into history (the
-				// recurring reconnect-duplicate bug). No-op unless a change is armed.
-				w.applyPending()
+			if mode >= 2 {
+				w.applyPending() // whole-screen clears accompany full repaints
 			}
 			vtop, cy, cx := w.sync()
 			switch mode {

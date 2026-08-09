@@ -3667,19 +3667,6 @@
           // reset lastSeq before processing.
           if (typeof msg.seq === 'number') {
             if (msg.seq === 1 || msg.seq + 32 < lastSeq) {
-              // The agent restarted, or it's replaying its whole scrollback from
-              // the start (a full snapshot, not incremental catch-up). If we ALREADY
-              // had content on screen (lastSeq > 0 → this is a reconnect), clear the
-              // terminal + any queued/predicted bytes FIRST so the replay REPLACES
-              // what's there instead of stacking a second copy under it — the
-              // recurring "duplicate scrollback on reconnect" bug. On a fresh connect
-              // (lastSeq already 0) the terminal is clean, so we skip the reset and
-              // keep the "Connected" line.
-              if (lastSeq > 0) {
-                pendingChunks.length = 0;
-                predictions.length = 0;
-                try { term.reset(); } catch (_) {}
-              }
               lastSeq = 0;
             } else if (msg.seq <= lastSeq) {
               break;

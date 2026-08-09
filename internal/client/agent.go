@@ -172,17 +172,6 @@ type Agent struct {
 	viewerCount    int
 	lastAppliedCol uint16
 	lastAppliedRow uint16
-	// sizeRestoreTimer (guarded by viewerSizeMu) is armed when the last viewer
-	// leaves: the restore to host size is DEFERRED by sizeRestoreGrace instead
-	// of firing immediately. Each restore is a SIGWINCH, and inline TUIs
-	// (Claude Code) re-render their whole current frame on it — when that
-	// frame is taller than the screen the unreachable top is left behind in
-	// scrollback, so an immediate restore + the next visit's shrink stamped a
-	// duplicate block for every casual phone check-in, even with no new
-	// output. With the grace, a viewer reconnecting at the same size (the
-	// common re-check) causes ZERO resizes. Canceled by viewer activity;
-	// cut short by host keystrokes (restoreHostSizeNow).
-	sizeRestoreTimer *time.Timer
 
 	// headless disables every interaction with the host terminal: no raw
 	// mode, no host indicator (cursor color / window title / banner),
@@ -356,7 +345,7 @@ func NewAgentWith(version string, opts AgentOptions) (*Agent, error) {
 			}
 			migrate = true
 		}
-		a := &Agent{
+		return &Agent{
 			sessionID:      r.SessionID,
 			pin:            r.PIN,
 			pinHash:        r.PinHash,
@@ -376,18 +365,7 @@ func NewAgentWith(version string, opts AgentOptions) (*Agent, error) {
 			headless:       opts.Headless,
 			handshakeFD:    opts.HandshakeFD,
 			cwd:            currentCwd(),
-		}
-		if r.ViewerCols > 0 && r.ViewerRows > 0 {
-			// A viewer was sizing the PTY when the old image exec'd us. Keep
-			// that size so the restart is size-seamless — snapping to the host
-			// terminal and back as viewers reconnect is two SIGWINCHes, and
-			// inline TUIs re-render their whole frame on each one (stamping
-			// duplicates when the frame is taller than the screen). The grace
-			// timer restores the host size if no viewer actually returns.
-			a.viewerCols, a.viewerRows = r.ViewerCols, r.ViewerRows
-			a.scheduleSizeRestore()
-		}
-		return a, nil
+		}, nil
 	}
 	id, err := session.NewID(8)
 	if err != nil {
@@ -770,8 +748,6 @@ func (a *Agent) recordViewerSize(cols, rows uint16) {
 	if cols == 0 || rows == 0 {
 		return
 	}
-	// A viewer is actively sizing the PTY — a deferred restore-to-host is moot.
-	a.cancelSizeRestore()
 	a.viewerSizeMu.Lock()
 	a.viewerCols = cols
 	a.viewerRows = rows
@@ -788,49 +764,6 @@ func (a *Agent) resetViewerSize() {
 	a.viewerRows = 0
 	a.viewerCount = 0
 	a.viewerSizeMu.Unlock()
-}
-
-// sizeRestoreGrace is how long after the last viewer leaves the PTY keeps the
-// viewer's size before restoring to the host terminal's. See sizeRestoreTimer.
-const sizeRestoreGrace = 2 * time.Minute
-
-// scheduleSizeRestore arms (or re-arms) the deferred restore-to-host-size.
-// Called when the last viewer disconnects instead of restoring immediately.
-func (a *Agent) scheduleSizeRestore() {
-	a.viewerSizeMu.Lock()
-	if a.sizeRestoreTimer != nil {
-		a.sizeRestoreTimer.Stop()
-	}
-	a.sizeRestoreTimer = time.AfterFunc(sizeRestoreGrace, func() {
-		a.viewerSizeMu.Lock()
-		a.sizeRestoreTimer = nil
-		still := a.viewerCount == 0
-		a.viewerSizeMu.Unlock()
-		if still {
-			a.resetViewerSize()
-			a.applyEffectiveSize()
-		}
-	})
-	a.viewerSizeMu.Unlock()
-}
-
-// cancelSizeRestore disarms a pending deferred restore (a viewer is active
-// again — its own resize now drives the PTY).
-func (a *Agent) cancelSizeRestore() {
-	a.viewerSizeMu.Lock()
-	if a.sizeRestoreTimer != nil {
-		a.sizeRestoreTimer.Stop()
-		a.sizeRestoreTimer = nil
-	}
-	a.viewerSizeMu.Unlock()
-}
-
-// restoreHostSizeNow cuts the grace period short: the host user started typing
-// with no viewers attached, so snap the PTY back to their terminal immediately.
-func (a *Agent) restoreHostSizeNow() {
-	a.cancelSizeRestore()
-	a.resetViewerSize()
-	a.applyEffectiveSize()
 }
 
 // applyEffectiveSize resizes the PTY to the right dimensions for the
@@ -1946,16 +1879,6 @@ func (a *Agent) pumpHostStdin() {
 	for {
 		n, err := os.Stdin.Read(buf)
 		if n > 0 {
-			// The host user is typing. If a deferred restore-to-host-size is
-			// pending (last viewer left; grace period running), cut it short so
-			// their terminal is correctly sized the moment they engage — the
-			// grace only exists so idle phone re-checks don't flap the size.
-			a.viewerSizeMu.Lock()
-			pendingRestore := a.sizeRestoreTimer != nil
-			a.viewerSizeMu.Unlock()
-			if pendingRestore {
-				a.restoreHostSizeNow()
-			}
 			data := buf[:n]
 			if i := bytes.IndexByte(data, escapeKey); i >= 0 {
 				// Flush bytes before the escape to the PTY.
@@ -2227,26 +2150,29 @@ func (a *Agent) runReader(conn *websocket.Conn, cursorCh chan uint64) error {
 			a.updateActiveViewers(msg.Count)
 			a.syncViewerList(msg.Count, true)
 			a.viewerSizeMu.Lock()
+			prevCount := a.viewerCount
 			a.viewerCount = msg.Count
 			pc, pr := a.lastAppliedCol, a.lastAppliedRow
 			a.viewerSizeMu.Unlock()
 			// Re-publish the PTY size so the freshly-joined viewer
 			// can size its xterm.js to match. Existing viewers
 			// no-op this since they're already at the right size.
-			//
-			// NOTE: there used to be a "prompt repaint wiggle" here on the 0→1
-			// transition (Resize rows+1 then back) to redraw a prompt that had
-			// scrolled out of the resume window. It's obsolete — a reconnecting
-			// viewer always receives the prompt now, via the rebuilt full-screen
-			// snapshot or the recorded replay bytes — and it was actively
-			// harmful: each wiggle is two SIGWINCHes, and Ink-style TUIs
-			// (Claude Code) re-render their whole frame on every WINCH. When
-			// that frame is taller than the screen, the unreachable top is left
-			// behind — so every same-size, no-change reconnect stamped a
-			// duplicate block into scrollback. See also scheduleSizeRestore,
-			// which removes the other per-visit resize flap.
 			if pc > 0 && pr > 0 {
 				a.broadcastSize(pc, pr)
+				// Force the shell to repaint its prompt on the
+				// 0→1+ transition only. That covers the true
+				// reattach case (sole viewer dropped, came back)
+				// where the prompt was drawn before the disconnect
+				// and might have scrolled out of the resume window.
+				// Gating on prevCount==0 avoids flickering TUI
+				// apps (claude code, vim) for existing viewers when
+				// a SECOND viewer joins — they don't need the
+				// repaint, and React/Ink-based UIs re-render the
+				// whole screen on every WINCH.
+				if prevCount == 0 {
+					_ = a.term.Resize(pc, pr+1)
+					_ = a.term.Resize(pc, pr)
+				}
 			}
 		case protocol.TypeClosed:
 			if msg.Count > 0 {
@@ -2255,13 +2181,12 @@ func (a *Agent) runReader(conn *websocket.Conn, cursorCh chan uint64) error {
 			} else {
 				agentNotify("  [%s] Last viewer disconnected\n",
 					time.Now().Format("15:04:05"))
-				// DON'T restore the host size immediately: defer it by a grace
-				// period so a viewer re-checking in at the same size (the common
-				// quick phone visit) causes no resize at all — an immediate
-				// restore + re-shrink made inline TUIs stamp a duplicate frame
-				// into scrollback on every visit. Host keystrokes cut the grace
-				// short (restoreHostSizeNow).
-				a.scheduleSizeRestore()
+				// Reset the viewer-min so a fresh viewer joining
+				// later can grow the PTY back to its size, instead
+				// of staying pinned at whatever a long-gone phone
+				// once asked for.
+				a.resetViewerSize()
+				a.applyEffectiveSize()
 				// No one left to receive frames — stop all window streams so
 				// we're not capturing the screen into the void, and release any
 				// held mouse button / modifier so leaving the page can never

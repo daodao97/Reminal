@@ -74,13 +74,6 @@ const (
 	// netpoller had registered with kqueue/epoll causes the runtime to
 	// crash on its next poll cycle with EBADF.
 	envResumePTYFD = "REMINAL_RESUME_PTY_FD"
-	// envResumeViewerCols/Rows carry the size the active viewer had set, so
-	// the resumed agent keeps the PTY at that size instead of flapping to the
-	// host terminal and back while viewers reconnect (each flap is a SIGWINCH
-	// that makes inline TUIs re-render — and stamp duplicate frames when
-	// taller than the screen). Zero when no viewer size was in effect.
-	envResumeViewerCols = "REMINAL_RESUME_VIEWER_COLS"
-	envResumeViewerRows = "REMINAL_RESUME_VIEWER_ROWS"
 )
 
 // ResumeState is what the new process reconstructs from env vars after
@@ -93,10 +86,6 @@ type ResumeState struct {
 	Token     string
 	StartedAt time.Time
 	PTY       *pty.Session
-	// ViewerCols/Rows: the viewer-driven PTY size in effect before the restart
-	// (zero if none) — reapplied so the restart is size-seamless for viewers.
-	ViewerCols uint16
-	ViewerRows uint16
 }
 
 // LoadResumeState reads REMINAL_RESUME=1 + the surrounding env vars
@@ -131,12 +120,6 @@ func LoadResumeState() (*ResumeState, error) {
 		return nil, fmt.Errorf("resume: failed to open inherited pty fd %d", ptyFD)
 	}
 
-	vc, _ := strconv.Atoi(os.Getenv(envResumeViewerCols))
-	vr, _ := strconv.Atoi(os.Getenv(envResumeViewerRows))
-	if vc < 0 || vc > 65535 || vr < 0 || vr > 65535 {
-		vc, vr = 0, 0
-	}
-
 	// Scrub env so nothing downstream (the shell we never spawn, any
 	// child commands, `reminal info` from inside it) sees these.
 	_ = os.Unsetenv(envResume)
@@ -146,18 +129,14 @@ func LoadResumeState() (*ResumeState, error) {
 	_ = os.Unsetenv(envResumeToken)
 	_ = os.Unsetenv(envResumePTYFD)
 	_ = os.Unsetenv(envResumeStartedAt)
-	_ = os.Unsetenv(envResumeViewerCols)
-	_ = os.Unsetenv(envResumeViewerRows)
 
 	return &ResumeState{
-		SessionID:  id,
-		PIN:        pin,
-		PinHash:    pinHash,
-		Token:      token,
-		StartedAt:  startedAt,
-		PTY:        pty.Attach(ptyFile),
-		ViewerCols: uint16(vc),
-		ViewerRows: uint16(vr),
+		SessionID: id,
+		PIN:       pin,
+		PinHash:   pinHash,
+		Token:     token,
+		StartedAt: startedAt,
+		PTY:       pty.Attach(ptyFile),
 	}, nil
 }
 
@@ -200,16 +179,6 @@ func (a *Agent) executeRestart() error {
 	// fd 3 failed with 9" crash.
 	a.stopControlListener()
 
-	// Capture the current viewer size while the runtime is still healthy
-	// (mutexes can schedule): it rides the exec so the new agent keeps the
-	// PTY at the viewer's size instead of snapping to the host terminal and
-	// back — a size flap that made inline TUIs (Claude Code) re-render their
-	// mid-turn frame twice at different widths and stamp duplicate blocks
-	// into scrollback on every `restart --all`/upgrade while being viewed.
-	a.viewerSizeMu.Lock()
-	resumeVC, resumeVR := a.viewerCols, a.viewerRows
-	a.viewerSizeMu.Unlock()
-
 	// ---- Phase 2: tight fd-and-exec sequence. No Go runtime calls
 	// from here on.
 
@@ -233,8 +202,6 @@ func (a *Agent) executeRestart() error {
 		envResumeToken+"="+a.token,
 		envResumePTYFD+"="+strconv.Itoa(ptyFD),
 		envResumeStartedAt+"="+strconv.FormatInt(a.startedAt.Unix(), 10),
-		envResumeViewerCols+"="+strconv.Itoa(int(resumeVC)),
-		envResumeViewerRows+"="+strconv.Itoa(int(resumeVR)),
 	)
 
 	if err := syscall.Exec(exe, []string{exe}, env); err != nil {
