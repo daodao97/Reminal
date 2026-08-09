@@ -85,6 +85,18 @@ func Spawn(name string) (*SpawnedSession, error) {
 	cmd.ExtraFiles = []*os.File{w}
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 
+	// Start the session in the user's home when we have no meaningful working
+	// directory of our own — i.e. when spawned by the background host, which runs
+	// under launchd/systemd with cwd "/". A shell that opens at "/" isn't what a
+	// real terminal gives you; "~" is. When `reminal new` is run from an actual
+	// directory, that directory is inherited (cmd.Dir left unset), so it still
+	// opens where the user invoked it.
+	if wd, werr := os.Getwd(); werr != nil || wd == "/" {
+		if home, herr := os.UserHomeDir(); herr == nil {
+			cmd.Dir = home
+		}
+	}
+
 	if err := cmd.Start(); err != nil {
 		_ = w.Close()
 		return nil, fmt.Errorf("start headless reminal: %w", err)
