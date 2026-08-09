@@ -356,7 +356,7 @@ func NewAgentWith(version string, opts AgentOptions) (*Agent, error) {
 			}
 			migrate = true
 		}
-		return &Agent{
+		a := &Agent{
 			sessionID:      r.SessionID,
 			pin:            r.PIN,
 			pinHash:        r.PinHash,
@@ -376,7 +376,18 @@ func NewAgentWith(version string, opts AgentOptions) (*Agent, error) {
 			headless:       opts.Headless,
 			handshakeFD:    opts.HandshakeFD,
 			cwd:            currentCwd(),
-		}, nil
+		}
+		if r.ViewerCols > 0 && r.ViewerRows > 0 {
+			// A viewer was sizing the PTY when the old image exec'd us. Keep
+			// that size so the restart is size-seamless — snapping to the host
+			// terminal and back as viewers reconnect is two SIGWINCHes, and
+			// inline TUIs re-render their whole frame on each one (stamping
+			// duplicates when the frame is taller than the screen). The grace
+			// timer restores the host size if no viewer actually returns.
+			a.viewerCols, a.viewerRows = r.ViewerCols, r.ViewerRows
+			a.scheduleSizeRestore()
+		}
+		return a, nil
 	}
 	id, err := session.NewID(8)
 	if err != nil {
