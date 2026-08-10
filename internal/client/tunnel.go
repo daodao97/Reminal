@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -322,7 +323,22 @@ func (t *Tunnel) handleTunnelReq(conn *websocket.Conn, payload string) {
 			body = bytes.NewReader(raw)
 		}
 	}
-	target := fmt.Sprintf("http://127.0.0.1:%d%s", t.port, req.URL)
+	// Build the target with a FIXED local host and ONLY the visitor's path+query.
+	// String-concatenating req.URL would let a crafted value (e.g. "@evil.com/",
+	// an absolute URL) redirect the proxied request off-box — an open-proxy / SSRF
+	// pivot to internal services. Taking just Path+RawQuery and letting url.URL
+	// re-add a leading "/" makes the host impossible to confuse.
+	ref, perr := url.Parse(req.URL)
+	if perr != nil {
+		t.sendError(conn, req.ReqID, "bad request url")
+		return
+	}
+	target := (&url.URL{
+		Scheme:   "http",
+		Host:     fmt.Sprintf("127.0.0.1:%d", t.port),
+		Path:     ref.Path,
+		RawQuery: ref.RawQuery,
+	}).String()
 	httpReq, err := http.NewRequest(strings.ToUpper(req.Method), target, body)
 	if err != nil {
 		t.sendError(conn, req.ReqID, fmt.Sprintf("build request: %v", err))
