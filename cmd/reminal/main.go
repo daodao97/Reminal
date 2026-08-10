@@ -583,6 +583,19 @@ func main() {
 		}
 	}
 
+	// darwin self-heal (correctness, not version): if `reminal upgrade` from an older
+	// version extracted us as a LOOSE binary — stripping the sh.reminal bundle
+	// identity and its always-on daemon — re-materialize the app bundle from this
+	// exact version and re-exec from it so this session runs correctly. One-shot:
+	// once bundled it no-ops.
+	if newBin, healed := updater.EnsureBundleInstalled(version); healed {
+		client.EnsureDaemonInstalled()
+		if err := syscall.Exec(newBin, os.Args, os.Environ()); err != nil {
+			fmt.Fprintln(os.Stderr, "reminal: installed the app bundle — please re-run `reminal`.")
+			return
+		}
+	}
+
 	agent, err := client.NewAgentWith(version, client.AgentOptions{Name: *name})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)

@@ -372,6 +372,56 @@ func apply(url string) error {
 	return nil
 }
 
+// EnsureBundleInstalled is the darwin self-heal for `reminal upgrade` run from an
+// OLDER version. That old updater, not knowing about the .app, extracts a new
+// release's inner binary LOOSE — stripping the sh.reminal code identity the daemon's
+// TCC grants are anchored to (no bundle ⇒ no always-on capture daemon). On the next
+// run this detects "I'm a loose release binary that should be a bundle," downloads
+// THIS EXACT version's signed .app (by version, NOT "latest", so prereleases heal
+// too), migrates to it, and returns the bundle's CLI path so the caller can re-exec
+// from it. Correctness-based (keyed on install shape, not version numbers) and
+// one-shot: once bundled, bundleRoot != "" and it no-ops. Best-effort — any failure
+// leaves the loose binary working (degraded) and it retries next run. Returns
+// ("", false) when there's nothing to do or on any error.
+func EnsureBundleInstalled(currentVersion string) (bundleCLI string, healed bool) {
+	if runtime.GOOS != "darwin" {
+		return "", false
+	}
+	if currentVersion == "" || currentVersion == "dev" || currentVersion == "0.0.0" {
+		return "", false // dev / manual build — never touch it
+	}
+	bin, err := os.Executable()
+	if err != nil {
+		return "", false
+	}
+	if real, rerr := filepath.EvalSymlinks(bin); rerr == nil {
+		bin = real
+	}
+	if bundleRoot(bin) != "" {
+		return "", false // already a bundle — the common, cheap path
+	}
+	// Loose darwin release binary → re-materialize the bundle from this exact
+	// version's asset.
+	url := assetURLFor("v"+strings.TrimPrefix(currentVersion, "v"), runtime.GOOS, runtime.GOARCH)
+	resp, err := (&http.Client{Timeout: 10 * time.Minute}).Get(url)
+	if err != nil {
+		return "", false
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return "", false
+	}
+	gz, err := gzip.NewReader(resp.Body)
+	if err != nil {
+		return "", false
+	}
+	defer gz.Close()
+	if err := migrateBareToBundle(tar.NewReader(gz), bin); err != nil {
+		return "", false
+	}
+	return filepath.Join(appDir(), "reminal.app", "Contents", "MacOS", "reminal"), true
+}
+
 // bundleRoot returns the path to the enclosing reminal.app if bin lives inside a
 // macOS bundle (…/reminal.app/Contents/MacOS/reminal), else "". Used to decide
 // whether a self-update should swap a whole .app or a loose binary.
