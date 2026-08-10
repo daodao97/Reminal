@@ -85,6 +85,9 @@ func handleMirrorConn(conn net.Conn) {
 	switch cmd {
 	case "capture":
 		mirrorServeCapture(conn, strings.Fields(rest)) // owns + closes conn
+	case "captureregion":
+		mirrorServeCaptureRegion(conn, strings.Fields(rest))
+		_ = conn.Close()
 	case "input":
 		mirrorServeInput(conn, rest)
 		_ = conn.Close()
@@ -190,6 +193,23 @@ func mirrorScreencaptureLoop(conn net.Conn, id string, fps int) {
 			}
 		}
 	}
+}
+
+// mirrorServeCaptureRegion returns one JPEG of a screen rectangle (used for the
+// right-click context menu, which the OS draws as a separate overlapping window).
+// Written as a single [len][JPEG] frame, like the streaming path.
+func mirrorServeCaptureRegion(conn net.Conn, args []string) {
+	if len(args) < 4 {
+		return
+	}
+	img, err := darwinWindows{}.captureRegion(atoiOr(args[0], 0), atoiOr(args[1], 0), atoiOr(args[2], 0), atoiOr(args[3], 0))
+	if err != nil || len(img) == 0 {
+		return
+	}
+	var hdr [4]byte
+	binary.BigEndian.PutUint32(hdr[:], uint32(len(img)))
+	_, _ = conn.Write(hdr[:])
+	_, _ = conn.Write(img)
 }
 
 // mirrorInputEvent mirrors the viewer input event the session forwards verbatim.
@@ -332,4 +352,35 @@ func mirrorCheck() string {
 	var buf [16]byte
 	n, _ := conn.Read(buf[:])
 	return strings.TrimSpace(string(buf[:n]))
+}
+
+// mirrorCaptureRegion (session side) fetches one region JPEG from the daemon (for
+// the right-click context menu), reading a single [len][JPEG] frame.
+func mirrorCaptureRegion(x, y, w, h int) ([]byte, error) {
+	sock, err := mirrorSockPath()
+	if err != nil {
+		return nil, err
+	}
+	conn, err := net.DialTimeout("unix", sock, mirrorDialTimeout)
+	if err != nil {
+		return nil, err
+	}
+	defer conn.Close()
+	_ = conn.SetDeadline(time.Now().Add(4 * time.Second))
+	if _, err := fmt.Fprintf(conn, "captureregion %d %d %d %d\n", x, y, w, h); err != nil {
+		return nil, err
+	}
+	var lenBuf [4]byte
+	if _, err := io.ReadFull(conn, lenBuf[:]); err != nil {
+		return nil, err
+	}
+	n := binary.BigEndian.Uint32(lenBuf[:])
+	if n == 0 || n > 16*1024*1024 {
+		return nil, errors.New("bad region frame")
+	}
+	img := make([]byte, n)
+	if _, err := io.ReadFull(conn, img); err != nil {
+		return nil, err
+	}
+	return img, nil
 }

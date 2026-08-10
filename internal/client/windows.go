@@ -276,6 +276,37 @@ func (a *Agent) handleWindowCtl(encData string) {
 	}
 }
 
+// updateMenuState maintains the right-click context-menu region-capture window for
+// the darwin (daemon-proxied) input path. A right-click arms a brief region grab
+// around the window so the OS-drawn menu (a separate overlapping window) shows in
+// the mirror; a left-click clears it. Only a right-click resolves the bounds.
+func (a *Agent) updateMenuState(plaintext []byte) {
+	var ev struct {
+		ID     string `json:"id"`
+		Kind   string `json:"kind"`
+		Button string `json:"button"`
+	}
+	if json.Unmarshal(plaintext, &ev) != nil || ev.Kind != "click" {
+		return
+	}
+	if ev.Button == "right" {
+		w, err := findWindow(a.windows(), ev.ID)
+		if err != nil {
+			return
+		}
+		a.winMu.Lock()
+		if a.winMenu == nil {
+			a.winMenu = map[string]winMenuState{}
+		}
+		a.winMenu[w.ID] = winMenuState{x: w.X, y: w.Y, w: w.W, h: w.H, until: time.Now().Add(winMenuHold)}
+		a.winMu.Unlock()
+		return
+	}
+	a.winMu.Lock()
+	delete(a.winMenu, ev.ID)
+	a.winMu.Unlock()
+}
+
 // handleWindowInput injects a mouse/keyboard event into the target window.
 func (a *Agent) handleWindowInput(encData string) {
 	plaintext, err := a.box.Decrypt(encData)
@@ -285,8 +316,11 @@ func (a *Agent) handleWindowInput(encData string) {
 	if runtime.GOOS == "darwin" {
 		// Inject in the daemon (sh.reminal) so one grant covers Accessibility +
 		// Automation for every session, terminal or "+". Runs on the serialized
-		// winOps worker, so forwarding synchronously keeps events ordered.
+		// winOps worker, so forwarding synchronously keeps events ordered. Still
+		// track the right-click context-menu window here — the capture path reads
+		// a.winMenu to region-capture (through the daemon) so the menu shows.
 		mirrorForwardInput(string(plaintext))
+		a.updateMenuState(plaintext)
 		return
 	}
 	var ev struct {
@@ -967,6 +1001,10 @@ func (s *winStream) capture() (img []byte, err error) {
 	}
 	s.capNative = false
 	if menuActive {
+		if runtime.GOOS == "darwin" {
+			// Region-capture (for the right-click menu) also runs in the daemon.
+			return mirrorCaptureRegion(menu.x, menu.y, menu.w, menu.h)
+		}
 		return s.b.captureRegion(menu.x, menu.y, menu.w, menu.h)
 	}
 	if runtime.GOOS == "darwin" {
