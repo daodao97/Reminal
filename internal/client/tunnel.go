@@ -11,12 +11,12 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"os/signal"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -71,8 +71,6 @@ type Tunnel struct {
 	// deadline to expire.
 	connMu sync.Mutex
 	conn   *websocket.Conn
-
-	paused atomic.Bool
 }
 
 // NewTunnel constructs a port-forward agent. Session ID + PIN are
@@ -141,21 +139,18 @@ func (t *Tunnel) Run() error {
 	defer signal.Stop(sigCh)
 	stop := make(chan struct{})
 	go func() {
-		for sig := range sigCh {
-			if sig == syscall.SIGUSR1 {
-				t.paused.Store(true)
-			}
-			close(stop)
-			// Close the live WS too — otherwise the read in
-			// runConnection sits until its 60s deadline, which makes
-			// `reminal stop` look like it didn't work.
-			t.connMu.Lock()
-			if t.conn != nil {
-				_ = t.conn.Close()
-			}
-			t.connMu.Unlock()
-			return
+		// Any of SIGINT/SIGTERM/SIGUSR1 shuts the forward down — a tunnel has no
+		// local shell to keep alive, so (unlike the shell agent) there's nothing
+		// to pause; `reminal stop` simply ends the forward.
+		<-sigCh
+		close(stop)
+		// Close the live WS too — otherwise the read in runConnection sits until
+		// its 60s deadline, which makes `reminal stop` look like it didn't work.
+		t.connMu.Lock()
+		if t.conn != nil {
+			_ = t.conn.Close()
 		}
+		t.connMu.Unlock()
 	}()
 
 	// Serve this machine's owner-derived directory channel too, so a machine
@@ -225,7 +220,15 @@ func (t *Tunnel) activeRecord() session.Active {
 	}
 }
 
-func (t *Tunnel) runConnection(stop <-chan struct{}) error {
+func (t *Tunnel) runConnection(stop <-chan struct{}) (err error) {
+	// Port-forward is a process-lifetime service; a panic in the synchronous
+	// register/dispatch path must not crash it (spawned handleTunnelReq recovers
+	// separately). Recover into an error so the caller reconnects.
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("recovered from panic in tunnel connection: %v", r)
+		}
+	}()
 	wsURL := config.SessionWS(t.sessionID, string(protocol.RoleTunnel))
 	conn, resp, err := websocket.DefaultDialer.Dial(wsURL, nil)
 	if err != nil {
@@ -235,6 +238,7 @@ func (t *Tunnel) runConnection(stop <-chan struct{}) error {
 		return fmt.Errorf("dial relay: %w", err)
 	}
 	defer conn.Close()
+	conn.SetReadLimit(maxRelayMessageBytes) // untrusted relay — bound frame size
 	t.connMu.Lock()
 	t.conn = conn
 	t.connMu.Unlock()
@@ -305,6 +309,9 @@ func (t *Tunnel) runConnection(stop <-chan struct{}) error {
 // HTTP request, and sends back a tunnel_resp. Errors surface to the
 // visitor as a 502 with the message in the body.
 func (t *Tunnel) handleTunnelReq(conn *websocket.Conn, payload string) {
+	// Spawned per relay-forwarded request (go t.handleTunnelReq); a panic here would
+	// crash the port-forward. Contain it so one bad request just fails.
+	defer func() { if r := recover(); r != nil { recoverLog("handleTunnelReq", r) } }()
 	var req struct {
 		ReqID   string            `json:"req_id"`
 		Method  string            `json:"method"`
@@ -322,7 +329,22 @@ func (t *Tunnel) handleTunnelReq(conn *websocket.Conn, payload string) {
 			body = bytes.NewReader(raw)
 		}
 	}
-	target := fmt.Sprintf("http://127.0.0.1:%d%s", t.port, req.URL)
+	// Build the target with a FIXED local host and ONLY the visitor's path+query.
+	// String-concatenating req.URL would let a crafted value (e.g. "@evil.com/",
+	// an absolute URL) redirect the proxied request off-box — an open-proxy / SSRF
+	// pivot to internal services. Taking just Path+RawQuery and letting url.URL
+	// re-add a leading "/" makes the host impossible to confuse.
+	ref, perr := url.Parse(req.URL)
+	if perr != nil {
+		t.sendError(conn, req.ReqID, "bad request url")
+		return
+	}
+	target := (&url.URL{
+		Scheme:   "http",
+		Host:     fmt.Sprintf("127.0.0.1:%d", t.port),
+		Path:     ref.Path,
+		RawQuery: ref.RawQuery,
+	}).String()
 	httpReq, err := http.NewRequest(strings.ToUpper(req.Method), target, body)
 	if err != nil {
 		t.sendError(conn, req.ReqID, fmt.Sprintf("build request: %v", err))
@@ -384,6 +406,7 @@ func (t *Tunnel) sendError(conn *websocket.Conn, reqID, msg string) {
 func (t *Tunnel) writeMsg(conn *websocket.Conn, m protocol.Message) error {
 	t.writeMu.Lock()
 	defer t.writeMu.Unlock()
+	_ = conn.SetWriteDeadline(time.Now().Add(wsWriteWait))
 	return conn.WriteJSON(m)
 }
 

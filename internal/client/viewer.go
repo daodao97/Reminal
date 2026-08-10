@@ -212,7 +212,7 @@ func (v *Viewer) Run() error {
 		if first {
 			v.notify("Connecting…  (press Ctrl-] to disconnect)")
 		} else {
-			v.notify(fmt.Sprintf("Reconnecting…"))
+			v.notify("Reconnecting…")
 		}
 
 		start := time.Now()
@@ -284,7 +284,16 @@ type fatalErr struct{ err error }
 func (e *fatalErr) Error() string { return e.err.Error() }
 func (e *fatalErr) Unwrap() error { return e.err }
 
-func (v *Viewer) runConnection(stdinCh <-chan []byte, winCh <-chan os.Signal, intCh <-chan os.Signal, escapeCh <-chan struct{}) error {
+func (v *Viewer) runConnection(stdinCh <-chan []byte, winCh <-chan os.Signal, intCh <-chan os.Signal, escapeCh <-chan struct{}) (err error) {
+	// The viewer processes messages from the agent it connected to; a compromised
+	// or buggy agent must not be able to crash the viewer with a crafted message.
+	// Recover a handler panic into an error so runViewer reconnects instead of
+	// crashing. Mirrors the agent's runConnection recover.
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("recovered from panic in viewer connection handler: %v", r)
+		}
+	}()
 	wsURL := config.SessionWS(v.sessionID, string(protocol.RoleViewer))
 	dialStart := time.Now()
 	conn, resp, err := websocket.DefaultDialer.Dial(wsURL, nil)
@@ -294,6 +303,7 @@ func (v *Viewer) runConnection(stdinCh <-chan []byte, winCh <-chan os.Signal, in
 		}
 		return fmt.Errorf("dial: %w", err)
 	}
+	conn.SetReadLimit(maxRelayMessageBytes) // untrusted relay — bound frame size
 	dialTime := time.Since(dialStart)
 	defer conn.Close()
 
@@ -662,7 +672,15 @@ func (v *Viewer) authenticate(conn *websocket.Conn) error {
 	}
 }
 
-func (v *Viewer) runReader(conn *websocket.Conn, agentLive *atomic.Bool) error {
+func (v *Viewer) runReader(conn *websocket.Conn, agentLive *atomic.Bool) (err error) {
+	// This is the viewer's real agent-message loop and it runs in its own goroutine
+	// (outside runConnection's recover), so a panic on a crafted agent message would
+	// crash the viewer. Recover it into an error so runConnection reconnects.
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("recovered from panic in viewer reader: %v", r)
+		}
+	}()
 	for {
 		_ = conn.SetReadDeadline(time.Now().Add(readDeadline))
 		_, raw, err := conn.ReadMessage()
@@ -818,6 +836,7 @@ func (v *Viewer) writeMsg(conn *websocket.Conn, msg protocol.Message) error {
 	}
 	v.writeMu.Lock()
 	defer v.writeMu.Unlock()
+	_ = conn.SetWriteDeadline(time.Now().Add(wsWriteWait))
 	return conn.WriteMessage(websocket.TextMessage, data)
 }
 
@@ -834,6 +853,7 @@ type pendingDownload struct {
 	name       string
 	total      int
 	chunks     map[int][]byte
+	bytes      int // running sum of decoded chunk bytes (bounds memory)
 	staleTimer *time.Timer
 }
 
@@ -860,6 +880,13 @@ func (v *Viewer) handleDownload(plaintext []byte) {
 		return
 	}
 	safe := filepath.Base(payload.Name)
+	// Base still yields "..", ".", "/", or "" for degenerate names; ".." makes
+	// filepath.Join(dir, safe) resolve to dir's PARENT, letting a hostile host
+	// steer the write above ~/Downloads/reminal-incoming. Reject them all.
+	if safe == "." || safe == ".." || safe == "/" || safe == "" {
+		v.notify("download failed: invalid filename")
+		return
+	}
 	chunk, err := base64.StdEncoding.DecodeString(payload.Content)
 	if err != nil {
 		v.notify(fmt.Sprintf("download failed: bad base64: %v", err))
@@ -870,6 +897,11 @@ func (v *Viewer) handleDownload(plaintext []byte) {
 	// that fit in one chunk. Write immediately, bypassing the buffer.
 	if payload.DownloadID == "" || payload.Total <= 1 {
 		v.writeIncoming(safe, chunk)
+		return
+	}
+	if payload.Total > maxUploadChunks {
+		// A hostile host could send Total≈2e9 → make(map, Total) OOMs the viewer.
+		v.notify(fmt.Sprintf("download failed: too many chunks (%d; max %d)", payload.Total, maxUploadChunks))
 		return
 	}
 	if payload.Index < 0 || payload.Index >= payload.Total {
@@ -903,7 +935,15 @@ func (v *Viewer) handleDownload(plaintext []byte) {
 	}
 	// Late chunks reset the stale timer. Duplicates are ignored.
 	if _, dup := dl.chunks[payload.Index]; !dup {
+		if dl.bytes+len(chunk) > downloadMaxBytes {
+			dl.staleTimer.Stop()
+			delete(v.pendingDownloads, payload.DownloadID)
+			v.downloadsMu.Unlock()
+			v.notify(fmt.Sprintf("download %q aborted: exceeds %s", dl.name, humanByteSize(downloadMaxBytes)))
+			return
+		}
 		dl.chunks[payload.Index] = chunk
+		dl.bytes += len(chunk)
 	}
 	dl.staleTimer.Reset(uploadStaleTimeout)
 	complete := len(dl.chunks) == dl.total

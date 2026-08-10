@@ -6,6 +6,7 @@ package client
 import (
 	"os"
 	"os/signal"
+	"runtime"
 	"syscall"
 	"time"
 )
@@ -32,6 +33,12 @@ func RunDaemon() error {
 		close(stop)
 	}()
 	go watchBinaryAndExit(stop)
+	if runtime.GOOS == "darwin" {
+		// The daemon is the single granted process that does all window/desktop
+		// capture + input injection; sessions delegate to it over mirror.sock so
+		// one reminal.app grant covers every session.
+		go serveMirror(stop)
+	}
 	runDirectoryHost(stop, true)
 	return nil
 }

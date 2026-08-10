@@ -5,6 +5,7 @@ package main
 
 import (
 	"fmt"
+	"runtime"
 	"strings"
 	"time"
 
@@ -89,8 +90,14 @@ func enableBackgroundHost() {
 }
 
 // disableBackgroundHostIfLastOwner tears the login service down once the machine
-// has no owners left — the presence is only needed while someone owns it.
+// has no owners left. On macOS the daemon is a PERMANENT local service — it
+// performs all screen capture + input injection so one grant covers every session
+// — so we keep it even with zero owners. Elsewhere the presence is only needed
+// while someone owns the machine, so the old teardown stands.
 func disableBackgroundHostIfLastOwner() {
+	if runtime.GOOS == "darwin" {
+		return
+	}
 	owners, err := client.ListOwners()
 	if err != nil || len(owners) > 0 {
 		return

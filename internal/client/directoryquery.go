@@ -188,6 +188,7 @@ func writeDir(conn *websocket.Conn, msg protocol.Message) error {
 	if err != nil {
 		return err
 	}
+	_ = conn.SetWriteDeadline(time.Now().Add(wsWriteWait))
 	return conn.WriteMessage(websocket.TextMessage, data)
 }
 

@@ -37,6 +37,21 @@ import (
 // full screen of escape codes plus thousands of lines of plain output.
 const scrollbackBytes = 2 * 1024 * 1024
 
+// maxSnapshotPlaintext bounds a snapshot's plaintext so the ENCRYPTED frame
+// (base64 ~4/3 inflation + screen + wrapper) stays under the relay's 1 MiB WS
+// frame limit — the snapshot is one un-chunked frame, and a larger one is dropped
+// by the relay, breaking reconnect. 640 KiB plaintext → ~0.9 MiB encrypted, a
+// safe margin under 1 MiB; still thousands of lines of history.
+const maxSnapshotPlaintext = 640 * 1024
+
+// maxRelayMessageBytes caps a single WS frame the agent/viewer reads from the
+// (untrusted, see directoryhost) relay. Without it gorilla reads an unbounded
+// frame into memory, so a malicious or rogue relay could OOM the client with one
+// giant message. 2 MiB sits well above any legit frame — the relay caps forwarded
+// frames at 1 MiB (maxDirMessageBytes) and large payloads are chunked under that —
+// while still firmly bounding memory. Mirrors the directory connections' cap.
+const maxRelayMessageBytes = 2 * 1024 * 1024
+
 // reconnect timing
 const (
 	initialBackoff = 1 * time.Second
@@ -47,6 +62,12 @@ const (
 	// pings every 30s under normal operation this is well above the noise
 	// floor; it mainly catches half-open TCP that the OS hasn't noticed.
 	readDeadlineAgent = 60 * time.Second
+	// wsWriteWait bounds a single WS write. Without it, gorilla's WriteMessage
+	// blocks forever if the peer stops reading (its send buffer fills) — and
+	// since writes hold writeMu, that wedges the whole connection with no
+	// recovery, because the read deadline keeps resetting while the peer is
+	// still sending. 30s is well above a slow-mobile flush yet bounds the hang.
+	wsWriteWait = 30 * time.Second
 )
 
 type Agent struct {
@@ -416,6 +437,15 @@ func NewAgentWith(version string, opts AgentOptions) (*Agent, error) {
 }
 
 func (a *Agent) Run() error {
+	// Correctness self-heal (idempotent, NOT version-gated): a foreground host
+	// running from reminal.app must have the always-on capture daemon — it performs
+	// all window/desktop capture + input under the one sh.reminal grant. If a prior
+	// upgrade/migration (or a manual app move) left it missing, install it now.
+	// No-op when already present, not bundled, or headless (those are spawned by the
+	// daemon, which by definition already exists).
+	if !a.headless {
+		EnsureDaemonInstalled()
+	}
 	// Banner goes to the host terminal only in foreground mode. Headless
 	// agents have no terminal — credentials are delivered to the parent
 	// `reminal new` process via the handshake fd and from there printed
@@ -1151,6 +1181,7 @@ type pendingUpload struct {
 	ttlSeconds int
 	total      int            // total chunks expected
 	chunks     map[int][]byte // index -> decoded bytes
+	bytes      int            // running sum of decoded chunk bytes (bounds memory)
 	startedAt  time.Time
 	staleTimer *time.Timer
 	// progress notice is sent at the start; final notice on completion
@@ -1172,6 +1203,15 @@ const maxUploadTTLSeconds = 365 * 24 * 60 * 60
 // chunks to stay well under the Cloudflare DO 1 MiB WS message limit
 // (with base64 + encryption overhead).
 const uploadChunkMaxBytes = 768 * 1024
+
+// maxUploadChunks bounds the viewer-supplied chunk count so make(map, Total)
+// can't be steered into a multi-GB preallocation (Total is attacker-controlled;
+// an unbounded value like 2e9 OOMs the host on the first chunk). Derived from a
+// conservative 64 KiB floor chunk so it never rejects a legitimate ≤100 MiB
+// upload even if a client chunks far smaller than the 256 KiB web default.
+// Accumulated bytes are bounded separately and exactly (see pendingUpload.bytes).
+const minUploadChunkFloor = 64 * 1024
+const maxUploadChunks = downloadMaxBytes / minUploadChunkFloor
 
 // handleUpload decrypts a TypeUpload message and either finalizes a
 // single-shot upload (no upload_id) or routes a chunk into the
@@ -1202,7 +1242,11 @@ func (a *Agent) handleUpload(encData string) {
 		return
 	}
 	safe := filepath.Base(payload.Name)
-	if safe == "." || safe == "/" || safe == "" {
+	// filepath.Base still yields "..", ".", "/", or "" for degenerate names;
+	// ".." in particular resolves filepath.Join(dir, safe) to dir's PARENT, so
+	// an authenticated viewer could steer the write one level above the intended
+	// ~/Downloads/reminal. Reject every degenerate element (".." was missing).
+	if safe == "." || safe == ".." || safe == "/" || safe == "" {
 		a.broadcastNotice("upload failed: invalid filename")
 		return
 	}
@@ -1235,6 +1279,10 @@ func (a *Agent) handleUpload(encData string) {
 	}
 
 	// Chunked path. Validate then add to pending map.
+	if payload.Total > maxUploadChunks {
+		a.broadcastNotice(fmt.Sprintf("upload failed: too many chunks (%d; max %d)", payload.Total, maxUploadChunks))
+		return
+	}
 	if payload.Index < 0 || payload.Index >= payload.Total {
 		a.broadcastNotice(fmt.Sprintf("upload failed: bad chunk index %d/%d", payload.Index, payload.Total))
 		return
@@ -1268,7 +1316,19 @@ func (a *Agent) handleUpload(encData string) {
 	}
 	// Late chunks reset the stale timer. Duplicates are ignored.
 	if _, dup := up.chunks[payload.Index]; !dup {
+		// Bound accumulated memory exactly: a hostile client can claim a large
+		// Total (up to maxUploadChunks) and send full-size chunks, so the chunk
+		// count cap alone permits far more than downloadMaxBytes. Abort the
+		// upload the moment its decoded bytes would exceed the file cap.
+		if up.bytes+len(chunk) > downloadMaxBytes {
+			up.staleTimer.Stop()
+			delete(a.pendingUploads, payload.UploadID)
+			a.uploadsMu.Unlock()
+			a.broadcastNotice(fmt.Sprintf("upload %q aborted: exceeds %s", up.name, humanByteSize(downloadMaxBytes)))
+			return
+		}
 		up.chunks[payload.Index] = chunk
+		up.bytes += len(chunk)
 	}
 	up.staleTimer.Reset(uploadStaleTimeout)
 	complete := len(up.chunks) == up.total
@@ -1685,6 +1745,17 @@ func (a *Agent) resizeScreen(cols, rows uint16) {
 // recorded between this snapshot of the buffer and the live-screen read that
 // follows is missing from the replay only for milliseconds' worth of bytes.
 func (a *Agent) rebuildView() (history, screen []string, ok bool) {
+	// A malformed escape sequence recorded in scrollback can drive the replay
+	// emulator (via vviewWriter) into a state where a forwarded byte panics with
+	// an out-of-range index — found by FuzzVViewWrite with "\x1b[r\x88" (empty
+	// DECSTBM then a C1 byte). Generating a snapshot must NEVER crash the agent,
+	// so degrade to no-history-rebuild; snapshotFrame then falls back to a
+	// screen-only snapshot.
+	defer func() {
+		if r := recover(); r != nil {
+			history, screen, ok = nil, nil, false
+		}
+	}()
 	if a.box == nil || a.buf == nil || a.scrollbackLines == 0 {
 		return nil, nil, false
 	}
@@ -1758,6 +1829,12 @@ func (a *Agent) rebuildView() (history, screen []string, ok bool) {
 		}
 		w.Write(pt)
 	}
+	if w.dead {
+		// A malformed sequence in scrollback drove the replay emulator to panic
+		// (contained in vviewWriter.Write). The rebuilt history is unreliable —
+		// fall back to a screen-only snapshot rather than ship corrupt history.
+		return nil, nil, false
+	}
 	wasAlt := e.IsAltScreen()
 	if wasAlt {
 		// Pop back to the main buffer so Render() shows the content BEHIND the
@@ -1827,7 +1904,18 @@ func (a *Agent) snapshotFrame() (string, uint64) {
 		history = renderScrollback(a.screen, a.scrollbackLines)
 		rebuiltScreen = nil
 	}
-	snap := buildSnapshot(a.screen, history, rebuiltScreen, a.scrollbackBytes, false)
+	// Clamp the plaintext budget so the ENCRYPTED frame fits the relay's 1 MiB WS
+	// limit. The snapshot is sent as ONE un-chunked frame (unlike uploads/downloads),
+	// box.Encrypt base64-inflates it ~4/3, and the screen + message wrapper add more —
+	// so a 2 MiB history budget (the default) produced a ~1.1 MiB frame that the relay
+	// (Cloudflare DO / SetReadLimit) drops, breaking reconnect for large-scrollback
+	// sessions. maxSnapshotPlaintext keeps the frame safely under the cap; smaller
+	// snapshots are unaffected.
+	budget := a.scrollbackBytes
+	if budget <= 0 || budget > maxSnapshotPlaintext {
+		budget = maxSnapshotPlaintext
+	}
+	snap := buildSnapshot(a.screen, history, rebuiltScreen, budget, false)
 	latest := a.buf.LatestSeq()
 	a.screenMu.Unlock()
 	if snap == "" {
@@ -1913,7 +2001,18 @@ func (a *Agent) pumpHostStdin() {
 	}
 }
 
-func (a *Agent) runConnection(shellExit <-chan struct{}) error {
+func (a *Agent) runConnection(shellExit <-chan struct{}) (err error) {
+	// A panic in a viewer-message handler (the read-loop dispatch below processes
+	// untrusted input) must NOT crash the agent — that would kill the shell session
+	// for the host and every viewer. Recover it into an error so the reconnect loop
+	// re-establishes the connection instead. Registered first, so it runs LAST
+	// (after the cleanup defers below) — the WS is closed and state reset before we
+	// reconnect. Standard server resilience (cf. http.Server per-request recover).
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("recovered from panic in connection handler: %v", r)
+		}
+	}()
 	wsURL := config.SessionWS(a.sessionID, string(protocol.RoleAgent))
 	conn, resp, err := websocket.DefaultDialer.Dial(wsURL, nil)
 	if err != nil {
@@ -1928,6 +2027,7 @@ func (a *Agent) runConnection(shellExit <-chan struct{}) error {
 		return fmt.Errorf("dial relay: %w", err)
 	}
 	defer conn.Close()
+	conn.SetReadLimit(maxRelayMessageBytes) // untrusted relay — bound frame size
 	// Track the live conn so `reminal stop` (SIGUSR1) can close it
 	// immediately rather than waiting for the next read deadline.
 	a.currentConnMu.Lock()
@@ -2193,7 +2293,10 @@ func (a *Agent) runReader(conn *websocket.Conn, cursorCh chan uint64) error {
 				// strand the host's desktop in a grab.
 				a.stopWindowStream("")
 				a.closeAllRTCPeers()
-				a.enqueueWinOp(func() { _ = a.windows().releaseInput() })
+				// Must not be dropped: a drag that filled winOps and left a button
+				// held is exactly when this fires, and a lost release strands the
+				// host's desktop in a grab. Guaranteed-delivery, off the reader.
+				go a.enqueueWinOpImportant(func() { a.releaseWindowInput() })
 			}
 			a.viewerSizeMu.Lock()
 			a.viewerCount = msg.Count
@@ -2450,6 +2553,7 @@ func (a *Agent) writeMsg(conn *websocket.Conn, msg protocol.Message) error {
 	}
 	a.writeMu.Lock()
 	defer a.writeMu.Unlock()
+	_ = conn.SetWriteDeadline(time.Now().Add(wsWriteWait))
 	return conn.WriteMessage(websocket.TextMessage, data)
 }
 

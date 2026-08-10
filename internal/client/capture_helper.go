@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -47,6 +48,11 @@ type winHelper struct {
 	// window would linger forever: it only notices a dead peer when a frame
 	// WRITE fails, and a static window never writes.
 	stdin io.WriteCloser
+
+	// conn is set instead of cmd/stdin when the frames come from the daemon's
+	// mirror socket (the session-delegates-to-daemon path). Closing it stops the
+	// daemon-side capture, so it doubles as the lifeline.
+	conn net.Conn
 
 	mu     sync.Mutex
 	latest []byte // newest frame not yet consumed by next(); nil once taken
@@ -198,6 +204,10 @@ func (h *winHelper) alive() bool {
 // stop kills the helper process and waits for it to reap. Closing stdin first
 // gives it the graceful EOF exit; the Kill is the backstop.
 func (h *winHelper) stop() {
+	if h.conn != nil {
+		_ = h.conn.Close() // daemon detects the closed conn and stops its helper
+		return
+	}
 	_ = h.stdin.Close()
 	if h.cmd.Process != nil {
 		_ = h.cmd.Process.Kill()

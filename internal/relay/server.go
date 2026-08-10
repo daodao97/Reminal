@@ -19,6 +19,23 @@ import (
 // giving the same agent a chance to reattach (e.g., across a network blip).
 const orphanTTL = 10 * time.Minute
 
+// wsWriteWait bounds a single WS write to a peer. Without it, a peer that stops
+// reading (its send buffer fills) makes WriteMessage block forever while holding
+// writeMu, leaking the forwarding goroutine and stalling that peer's queue. The
+// deadline frees the goroutine and drops the frame; a corrupt conn then fails
+// fast on subsequent writes.
+const wsWriteWait = 30 * time.Second
+
+// Read deadlines bound how long a connection may sit silent before we drop it and
+// reclaim its goroutine. Without them a peer that connects and never speaks — never
+// even authenticating — leaks a goroutine forever (slow-loris). authWait is a tight
+// window to send the first Auth/Register frame; readWait is the steady-state
+// liveness budget once attached, comfortably above the clients' 30s ping cadence.
+const (
+	defaultAuthWait = 20 * time.Second
+	defaultReadWait = 90 * time.Second
+)
+
 var upgrader = websocket.Upgrader{
 	ReadBufferSize:  4096,
 	WriteBufferSize: 4096,
@@ -43,10 +60,19 @@ type room struct {
 type Server struct {
 	rooms map[string]*room
 	mu    sync.RWMutex
+	// Read-deadline windows; fields (not globals) so a test can set them on its
+	// own Server before serving without racing the handler goroutines. See
+	// defaultAuthWait/defaultReadWait.
+	authWait time.Duration
+	readWait time.Duration
 }
 
 func NewServer() *Server {
-	return &Server{rooms: make(map[string]*room)}
+	return &Server{
+		rooms:    make(map[string]*room),
+		authWait: defaultAuthWait,
+		readWait: defaultReadWait,
+	}
 }
 
 func (s *Server) HandleWS(w http.ResponseWriter, r *http.Request) {
@@ -107,10 +133,20 @@ var forwardableTypes = map[protocol.MessageType]bool{
 }
 
 func (s *Server) handleSessionConn(sessionID string, role protocol.Role, conn *websocket.Conn) {
+	// Per-connection goroutine processing untrusted peer messages. A panic here
+	// must NOT crash the relay — that would disconnect every other session. Recover
+	// so only this connection drops (its deferred conn.Close/detach still run).
+	defer func() { _ = recover() }()
 	defer conn.Close()
 	defer s.detach(sessionID, role, conn)
 
+	authed := false
 	for {
+		wait := s.authWait
+		if authed {
+			wait = s.readWait
+		}
+		_ = conn.SetReadDeadline(time.Now().Add(wait))
 		_, raw, err := conn.ReadMessage()
 		if err != nil {
 			return
@@ -145,6 +181,7 @@ func (s *Server) handleSessionConn(sessionID string, role protocol.Role, conn *w
 				return
 			}
 			p.authed = true
+			authed = true // loosen this conn's read deadline to the liveness budget
 			// Compute presence flags for notifications after unlock.
 			agentOnline := r.agent != nil && r.agent.authed
 			anyViewerOnline := false
@@ -282,6 +319,8 @@ func (s *Server) handleAuthLocked(r *room, role protocol.Role, msg protocol.Mess
 }
 
 func (s *Server) handleLegacyConn(conn *websocket.Conn) {
+	// Per-connection goroutine; a panic must not crash the relay for everyone else.
+	defer func() { _ = recover() }()
 	defer conn.Close()
 
 	var registered bool
@@ -289,6 +328,11 @@ func (s *Server) handleLegacyConn(conn *websocket.Conn) {
 	var role protocol.Role
 
 	for {
+		wait := s.authWait
+		if registered {
+			wait = s.readWait
+		}
+		_ = conn.SetReadDeadline(time.Now().Add(wait))
 		_, raw, err := conn.ReadMessage()
 		if err != nil {
 			break
@@ -568,6 +612,7 @@ func (s *Server) write(conn *websocket.Conn, msg protocol.Message) {
 	if err != nil {
 		return
 	}
+	_ = conn.SetWriteDeadline(time.Now().Add(wsWriteWait))
 	_ = conn.WriteMessage(websocket.TextMessage, data)
 }
 
@@ -578,6 +623,7 @@ func (s *Server) writeTo(p *peer, msg protocol.Message) {
 	}
 	p.writeMu.Lock()
 	defer p.writeMu.Unlock()
+	_ = p.conn.SetWriteDeadline(time.Now().Add(wsWriteWait))
 	_ = p.conn.WriteMessage(websocket.TextMessage, data)
 }
 

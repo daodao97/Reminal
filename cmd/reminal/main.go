@@ -86,14 +86,18 @@ func main() {
 				fmt.Fprintf(os.Stderr, "error: %v\n", err)
 				os.Exit(1)
 			}
-			if updated && client.DaemonServiceInstalled() {
-				// The background host is a hidden, long-lived service, so unlike
-				// sessions the user can't be told to restart it. Re-INSTALL (not just
-				// restart) so the service DEFINITION is refreshed too — this is how a
-				// plist fix (e.g. dropping ProcessType=Background, which was throttling
-				// spawned sessions) reaches machines set up by an older version. It
-				// also moves the daemon onto the new binary. Best-effort.
-				_ = client.InstallDaemonService()
+			if updated {
+				// Re-INSTALL (not just restart) so the service DEFINITION is refreshed —
+				// this is how a plist fix (e.g. dropping ProcessType=Background, which
+				// was throttling spawned sessions) reaches machines set up by an older
+				// version. It also moves the daemon onto the new binary. On darwin ALWAYS
+				// do it: a bare→bundle migration just installed the app with no daemon
+				// yet, and correctness (not version) is what we key on. Linux keeps the
+				// refresh-if-present behavior (its daemon is ownership-driven).
+				// Best-effort.
+				if runtime.GOOS == "darwin" || client.DaemonServiceInstalled() {
+					_ = client.InstallDaemonService()
+				}
 			}
 			return
 		case "info":
@@ -132,8 +136,14 @@ func main() {
 			return
 		case "__request-permissions":
 			// Hidden: runs INSIDE the LaunchServices-launched reminal.app (see
-			// `reminal permissions`) to trigger the TCC prompts as sh.reminal.
-			_ = client.RequestAllPermissions()
+			// `reminal permissions`) to trigger the TCC prompt(s) as sh.reminal. An
+			// optional arg (screen|accessibility|automation) triggers just that one so
+			// the guided flow can request them one at a time; no arg does all three.
+			which := ""
+			if len(os.Args) > 2 {
+				which = os.Args[2]
+			}
+			_ = client.RequestPermission(which)
 			return
 		case "settings":
 			if err := runSettings(os.Args[2:]); err != nil {
@@ -570,6 +580,19 @@ func main() {
 			fmt.Fprintln(os.Stderr, "  To see join info / QR:   reminal info")
 			fmt.Fprintln(os.Stderr, "  To create another one:   reminal new")
 			os.Exit(2)
+		}
+	}
+
+	// darwin self-heal (correctness, not version): if `reminal upgrade` from an older
+	// version extracted us as a LOOSE binary — stripping the sh.reminal bundle
+	// identity and its always-on daemon — re-materialize the app bundle from this
+	// exact version and re-exec from it so this session runs correctly. One-shot:
+	// once bundled it no-ops.
+	if newBin, healed := updater.EnsureBundleInstalled(version); healed {
+		client.EnsureDaemonInstalled()
+		if err := syscall.Exec(newBin, os.Args, os.Environ()); err != nil {
+			fmt.Fprintln(os.Stderr, "reminal: installed the app bundle — please re-run `reminal`.")
+			return
 		}
 	}
 

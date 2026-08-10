@@ -93,6 +93,7 @@ func (w *wsFrameConn) send(msg protocol.Message) error {
 	}
 	w.mu.Lock()
 	defer w.mu.Unlock()
+	_ = w.conn.SetWriteDeadline(time.Now().Add(wsWriteWait))
 	return w.conn.WriteMessage(websocket.TextMessage, data)
 }
 
@@ -152,6 +153,7 @@ func RunCopy(path string, ttl time.Duration) error {
 		return fmt.Errorf("connect to relay: %w", err)
 	}
 	defer conn.Close()
+	conn.SetReadLimit(maxRelayMessageBytes) // untrusted relay — bound frame size
 	fc := &wsFrameConn{conn: conn}
 
 	fmt.Printf("Copy code: %s\n", displayCode(code))
@@ -284,6 +286,7 @@ func RunCopyHold(path string, ttl time.Duration, handshakeFD int) error {
 		return err
 	}
 	defer conn.Close()
+	conn.SetReadLimit(maxRelayMessageBytes) // untrusted relay — bound frame size
 
 	// Offer is live the moment the source WS is accepted — safe to release
 	// the parent now.
@@ -319,6 +322,7 @@ func RunPaste(codeInput, dest string) error {
 		return fmt.Errorf("connect to relay: %w", err)
 	}
 	defer conn.Close()
+	conn.SetReadLimit(maxRelayMessageBytes) // untrusted relay — bound frame size
 	fc := &wsFrameConn{conn: conn}
 
 	path, err := runPaste(fc, code, dest)

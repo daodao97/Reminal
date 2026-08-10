@@ -2,14 +2,17 @@ module github.com/reminal/reminal
 
 go 1.25.0
 
+toolchain go1.26.5
+
 require (
 	github.com/charmbracelet/x/vt v0.0.0-20260628005914-6eb80f72a239
 	github.com/creack/pty v1.1.21
 	github.com/gorilla/websocket v1.5.3
 	github.com/mdp/qrterminal/v3 v3.2.1
-	golang.org/x/crypto v0.53.0
-	golang.org/x/sys v0.46.0
-	golang.org/x/term v0.44.0
+	github.com/pion/webrtc/v4 v4.2.16
+	golang.org/x/crypto v0.54.0
+	golang.org/x/sys v0.47.0
+	golang.org/x/term v0.45.0
 )
 
 require (
@@ -41,11 +44,10 @@ require (
 	github.com/pion/stun/v3 v3.1.6 // indirect
 	github.com/pion/transport/v4 v4.0.2 // indirect
 	github.com/pion/turn/v5 v5.0.10 // indirect
-	github.com/pion/webrtc/v4 v4.2.16 // indirect
 	github.com/rivo/uniseg v0.4.7 // indirect
 	github.com/wlynxg/anet v0.0.5 // indirect
 	github.com/xo/terminfo v0.0.0-20220910002029-abceb7e1c41e // indirect
-	golang.org/x/net v0.55.0 // indirect
+	golang.org/x/net v0.57.0 // indirect
 	golang.org/x/sync v0.21.0 // indirect
 	golang.org/x/time v0.14.0 // indirect
 	rsc.io/qr v0.2.0 // indirect

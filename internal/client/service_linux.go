@@ -76,6 +76,11 @@ func serviceInstalled(u *user.User) bool {
 	return err == nil
 }
 
+// runningFromBundle is false on Linux: there's no reminal.app, and the daemon here
+// is the ownership-driven directory host (installed by the Machines flow), not the
+// always-on capture daemon EnsureDaemonInstalled manages on macOS.
+func runningFromBundle() bool { return false }
+
 // restartService bounces the unit so it re-execs the binary at ExecStart's path.
 // No-op when the service isn't installed.
 func restartService(u *user.User) error {

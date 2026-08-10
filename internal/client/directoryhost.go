@@ -144,7 +144,22 @@ func serveDirectoryLocked(stop <-chan struct{}, isDaemon bool) {
 // wins) serves until the connection drops or stop fires. Returns whether it
 // actually became the host, so the caller can distinguish "lost the election"
 // (back off longer) from "was hosting, then disconnected" (retry promptly).
+// safeGoDir runs a directory-message handler in a goroutine, recovering panics so
+// an untrusted relay message can't crash the always-on daemon. The handlers are
+// spawned (not synchronous) so serveDirectoryOnce's recover wouldn't catch them.
+func safeGoDir(f func()) {
+	go func() {
+		defer func() { if r := recover(); r != nil { recoverLog("safeGoDir", r) } }()
+		f()
+	}()
+}
+
 func serveDirectoryOnce(stop <-chan struct{}, machineKey ed25519.PrivateKey) (served bool) {
+	// The dispatch loop below processes UNTRUSTED relay input (owner-connect,
+	// dir-query). A panic in a synchronous handler must NOT crash the always-on
+	// daemon — recover it so the directory host just drops the connection and
+	// reconnects. (Spawned dh.handleDir* goroutines recover via safeGoDir.)
+	defer func() { _ = recover() }()
 	machinePub := machineKey.Public().(ed25519.PublicKey)
 	dh := &dirHost{
 		machineKey:  machineKey,
@@ -222,13 +237,13 @@ func serveDirectoryOnce(stop <-chan struct{}, machineKey ed25519.PrivateKey) (se
 		case protocol.TypeDirQuery:
 			dh.handleDirQuery()
 		case protocol.TypeNewSession:
-			go dh.handleNewSession(msg)
+			safeGoDir(func() { dh.handleNewSession(msg) })
 		case protocol.TypeDirRename:
-			go dh.handleDirRename(msg)
+			safeGoDir(func() { dh.handleDirRename(msg) })
 		case protocol.TypeDirRevokeSelf:
-			go dh.handleDirRevokeSelf(msg)
+			safeGoDir(func() { dh.handleDirRevokeSelf(msg) })
 		case protocol.TypeDirKill:
-			go dh.handleDirKill(msg)
+			safeGoDir(func() { dh.handleDirKill(msg) })
 		case protocol.TypePing:
 			_ = dh.write(protocol.Message{Type: protocol.TypePong})
 		}
@@ -297,6 +312,7 @@ func (dh *dirHost) write(msg protocol.Message) error {
 	}
 	dh.writeMu.Lock()
 	defer dh.writeMu.Unlock()
+	_ = dh.conn.SetWriteDeadline(time.Now().Add(wsWriteWait))
 	return dh.conn.WriteMessage(websocket.TextMessage, data)
 }
 

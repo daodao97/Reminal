@@ -17,6 +17,5 @@ package relay
 type authState struct {
 	pinHash      string // legacy credential; superseded by token (see server.go)
 	token        string // high-entropy reattach credential; empty on legacy sessions
-	agentAuthed  bool
-	viewerAuthed bool
+	agentAuthed bool
 }

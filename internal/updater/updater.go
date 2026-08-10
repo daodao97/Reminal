@@ -19,6 +19,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strconv"
@@ -330,6 +331,17 @@ func apply(url string) error {
 		return applyBundle(tr, root)
 	}
 
+	// State-based (NOT version-based) migration: a loose macOS binary — a pre-bundle
+	// `curl … install.sh` install — upgrading to a modern darwin release, which is a
+	// signed reminal.app. Install the bundle and repoint this CLI at it. Extracting
+	// the inner binary loose (the fallthrough below) would strip the code identity the
+	// daemon's Screen Recording / Accessibility grants are anchored to, silently
+	// disabling the always-on capture daemon. Keyed on "am I a bare binary?", so it
+	// self-repairs on any bare→bundle transition regardless of the version numbers.
+	if runtime.GOOS == "darwin" {
+		return migrateBareToBundle(tr, bin)
+	}
+
 	// The (linux, or legacy darwin) archives carry the reminal binary AND the
 	// reminal-capture native window-capture helper. Install both, each atomically.
 	// The helper is a best-effort sidecar: a failure to place it doesn't fail the
@@ -358,6 +370,56 @@ func apply(url string) error {
 		return errors.New("reminal binary not found in archive")
 	}
 	return nil
+}
+
+// EnsureBundleInstalled is the darwin self-heal for `reminal upgrade` run from an
+// OLDER version. That old updater, not knowing about the .app, extracts a new
+// release's inner binary LOOSE — stripping the sh.reminal code identity the daemon's
+// TCC grants are anchored to (no bundle ⇒ no always-on capture daemon). On the next
+// run this detects "I'm a loose release binary that should be a bundle," downloads
+// THIS EXACT version's signed .app (by version, NOT "latest", so prereleases heal
+// too), migrates to it, and returns the bundle's CLI path so the caller can re-exec
+// from it. Correctness-based (keyed on install shape, not version numbers) and
+// one-shot: once bundled, bundleRoot != "" and it no-ops. Best-effort — any failure
+// leaves the loose binary working (degraded) and it retries next run. Returns
+// ("", false) when there's nothing to do or on any error.
+func EnsureBundleInstalled(currentVersion string) (bundleCLI string, healed bool) {
+	if runtime.GOOS != "darwin" {
+		return "", false
+	}
+	if currentVersion == "" || currentVersion == "dev" || currentVersion == "0.0.0" {
+		return "", false // dev / manual build — never touch it
+	}
+	bin, err := os.Executable()
+	if err != nil {
+		return "", false
+	}
+	if real, rerr := filepath.EvalSymlinks(bin); rerr == nil {
+		bin = real
+	}
+	if bundleRoot(bin) != "" {
+		return "", false // already a bundle — the common, cheap path
+	}
+	// Loose darwin release binary → re-materialize the bundle from this exact
+	// version's asset.
+	url := assetURLFor("v"+strings.TrimPrefix(currentVersion, "v"), runtime.GOOS, runtime.GOARCH)
+	resp, err := (&http.Client{Timeout: 10 * time.Minute}).Get(url)
+	if err != nil {
+		return "", false
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return "", false
+	}
+	gz, err := gzip.NewReader(resp.Body)
+	if err != nil {
+		return "", false
+	}
+	defer gz.Close()
+	if err := migrateBareToBundle(tar.NewReader(gz), bin); err != nil {
+		return "", false
+	}
+	return filepath.Join(appDir(), "reminal.app", "Contents", "MacOS", "reminal"), true
 }
 
 // bundleRoot returns the path to the enclosing reminal.app if bin lives inside a
@@ -411,6 +473,20 @@ func applyBundle(tr *tar.Reader, appRoot string) error {
 				return err
 			}
 		case tar.TypeSymlink:
+			// Reject symlinks that escape the staging tree. An absolute or
+			// ..-climbing Linkname, followed by a regular-file entry written
+			// UNDER that link, would make os.OpenFile follow the link and write
+			// through it to an arbitrary path (symlink-based tar slip). Legit
+			// macOS .app bundles only carry relative, in-bundle symlinks, so this
+			// never rejects a genuine release.
+			resolved := hdr.Linkname
+			if !filepath.IsAbs(resolved) {
+				resolved = filepath.Join(filepath.Dir(target), resolved)
+			}
+			resolved = filepath.Clean(resolved)
+			if resolved != staging && !strings.HasPrefix(resolved, staging+string(filepath.Separator)) {
+				continue // link points outside staging — drop it
+			}
 			if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
 				return err
 			}
@@ -440,19 +516,89 @@ func applyBundle(tr *tar.Reader, appRoot string) error {
 	}
 	newApp := filepath.Join(staging, root)
 
-	// Swap: move the old bundle aside, move the new one in, drop the old. The
-	// window between renames is tiny; roll back if the second rename fails.
+	// Swap: move the old bundle aside (if one exists — a bare→bundle migration
+	// installs fresh into ~/Applications with nothing to replace), move the new one
+	// in, drop the old. The window between renames is tiny; roll back if the second
+	// rename fails.
 	backup := appRoot + ".old"
 	_ = os.RemoveAll(backup)
-	if err := os.Rename(appRoot, backup); err != nil {
-		return fmt.Errorf("move old bundle: %w", err)
+	hadOld := false
+	if _, statErr := os.Stat(appRoot); statErr == nil {
+		if err := os.Rename(appRoot, backup); err != nil {
+			return fmt.Errorf("move old bundle: %w", err)
+		}
+		hadOld = true
 	}
 	if err := os.Rename(newApp, appRoot); err != nil {
-		_ = os.Rename(backup, appRoot) // roll back
+		if hadOld {
+			_ = os.Rename(backup, appRoot) // roll back
+		}
 		return fmt.Errorf("install new bundle: %w", err)
 	}
-	_ = os.RemoveAll(backup)
+	if hadOld {
+		_ = os.RemoveAll(backup)
+	}
 	return nil
+}
+
+// migrateBareToBundle upgrades a loose macOS binary install to the signed
+// reminal.app: installs the .app under ~/Applications (honoring REMINAL_APP_DIR,
+// matching install.sh), repoints the on-PATH CLI at the bundle's binary via a
+// symlink, drops the now-stale loose capture helper, and registers the app with
+// LaunchServices. The daemon is (re)installed separately by the caller's idempotent
+// correctness check. Idempotent: safe to run on any version→bundle transition.
+func migrateBareToBundle(tr *tar.Reader, bareBin string) error {
+	appRoot := filepath.Join(appDir(), "reminal.app")
+	if err := os.MkdirAll(filepath.Dir(appRoot), 0o755); err != nil {
+		return fmt.Errorf("create app dir: %w", err)
+	}
+	if err := applyBundle(tr, appRoot); err != nil {
+		if strings.Contains(err.Error(), "not found in archive") {
+			return fmt.Errorf("%w — re-run the install script: "+
+				"curl -fsSL https://raw.githubusercontent.com/%s/main/install.sh | sh", err, repo)
+		}
+		return err
+	}
+	// Repoint the PATH entry (…/.local/bin/reminal) at the bundle so `reminal` keeps
+	// resolving after the migration, and the daemon (which EvalSymlinks's it) runs
+	// the sh.reminal bundle identity.
+	inner := filepath.Join(appRoot, "Contents", "MacOS", "reminal")
+	_ = os.Remove(bareBin)
+	if err := os.Symlink(inner, bareBin); err != nil {
+		return fmt.Errorf("symlink CLI at %s: %w", bareBin, err)
+	}
+	// The bundle carries its own ScreenCaptureKit helper; remove the loose sidecar
+	// from the old bare install so it can't shadow the bundle's copy.
+	_ = os.Remove(filepath.Join(filepath.Dir(bareBin), "reminal-capture"))
+	// Best-effort: register icon/identity with LaunchServices, strip quarantine.
+	lsregister(appRoot)
+	_ = exec.Command("/usr/bin/xattr", "-dr", "com.apple.quarantine", appRoot).Run()
+	fmt.Fprintln(os.Stderr,
+		"Installed reminal.app. Run `reminal permissions` once to grant screen recording, accessibility, and automation.")
+	return nil
+}
+
+// appDir is where reminal.app is installed — REMINAL_APP_DIR or ~/Applications
+// (matching install.sh).
+func appDir() string {
+	if d := strings.TrimSpace(os.Getenv("REMINAL_APP_DIR")); d != "" {
+		return d
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "Applications"
+	}
+	return filepath.Join(home, "Applications")
+}
+
+// lsregister registers the bundle with LaunchServices so Finder/Settings show its
+// icon and identity. Best-effort.
+func lsregister(app string) {
+	const lsr = "/System/Library/Frameworks/CoreServices.framework/Frameworks/" +
+		"LaunchServices.framework/Support/lsregister"
+	if _, err := os.Stat(lsr); err == nil {
+		_ = exec.Command(lsr, "-f", app).Run()
+	}
 }
 
 // installFileAtomic writes r to dest by streaming into a sibling temp file on

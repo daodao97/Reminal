@@ -5,13 +5,27 @@ package client
 
 import (
 	"errors"
+	"fmt"
 	"net"
 	"os"
+	"runtime/debug"
 	"strconv"
 	"strings"
 	"syscall"
 	"time"
 )
+
+// recoverLog reports a recovered panic. The resilience recovers (winOps worker,
+// per-connection handlers) keep an untrusted message from crashing the process, but
+// a silent recover would also hide a real panic-on-valid-input bug. Log it — gated
+// on REMINAL_DEBUG so it never corrupts the shell terminal the agent shares in
+// normal use; a developer chasing a "sometimes doesn't work" report sets the var
+// and sees the panic + stack. Call as: defer func(){ if r := recover(); r != nil { recoverLog("where", r) } }().
+func recoverLog(where string, r any) {
+	if os.Getenv("REMINAL_DEBUG") == "1" {
+		fmt.Fprintf(os.Stderr, "\r\nreminal: recovered panic in %s: %v\r\n%s\r\n", where, r, debug.Stack())
+	}
+}
 
 // rateLimitedError is returned when the relay's edge (Cloudflare on the
 // workers.dev domain) responds 429 to the WS upgrade. The main reconnect

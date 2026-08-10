@@ -348,9 +348,10 @@ func runPaste(fc frameConn, code, dest string) (string, error) {
 // reassembled bytes.
 func receiveStream(fc frameConn, box *crypto.Box) (string, []byte, error) {
 	var (
-		name   string
-		total  = -1
-		chunks = map[int][]byte{}
+		name     string
+		total    = -1
+		chunks   = map[int][]byte{}
+		received int // running sum of decoded bytes — bounds receiver memory
 	)
 	for total == -1 || len(chunks) < total {
 		msg, err := fc.recv()
@@ -368,7 +369,9 @@ func receiveStream(fc frameConn, box *crypto.Box) (string, []byte, error) {
 				return "", nil, fmt.Errorf("rendezvous: parse chunk: %w", err)
 			}
 			if total == -1 {
-				if c.Total <= 0 {
+				// Bound the peer-supplied chunk count: it sizes the loop below and
+				// an unbounded value lets a hostile sender balloon the chunks map.
+				if c.Total <= 0 || c.Total > maxUploadChunks {
 					return "", nil, errors.New("rendezvous: bad chunk total")
 				}
 				total = c.Total
@@ -382,7 +385,14 @@ func receiveStream(fc frameConn, box *crypto.Box) (string, []byte, error) {
 				return "", nil, fmt.Errorf("rendezvous: bad chunk base64: %w", err)
 			}
 			if _, dup := chunks[c.Index]; !dup {
+				// Abort before storing if the transfer would exceed the file cap.
+				// The source enforces this too (validateCopyFile), but a hostile
+				// sender bypasses its own check, so the receiver bounds independently.
+				if received+len(b) > downloadMaxBytes {
+					return "", nil, fmt.Errorf("rendezvous: transfer exceeds %s", humanByteSize(downloadMaxBytes))
+				}
 				chunks[c.Index] = b
+				received += len(b)
 			}
 		case protocol.TypeError:
 			return "", nil, fmt.Errorf("source aborted: %s", msg.Error)
@@ -399,7 +409,12 @@ func receiveStream(fc frameConn, box *crypto.Box) (string, []byte, error) {
 	for i := 0; i < total; i++ {
 		assembled = append(assembled, chunks[i]...)
 	}
-	if name == "" {
+	// filepath.Base strips multi-level traversal (../../x → x), but still yields
+	// ".", "..", or "/" for degenerate sender-supplied names — each of which
+	// resolves ONTO dest or into its PARENT rather than to a file inside dest.
+	// Fold those (and the empty case) to a safe default so a hostile sender can't
+	// steer the write outside the chosen directory.
+	if name == "" || name == "." || name == ".." || name == string(filepath.Separator) {
 		name = "pasted-file"
 	}
 	return name, assembled, nil

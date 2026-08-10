@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"image"
 	"image/color"
@@ -173,7 +174,14 @@ func (a *Agent) windows() windowBackend {
 		a.winOps = make(chan func(), 64)
 		go func() {
 			for op := range a.winOps {
-				op()
+				// Recover per-op: window ops run backend calls (osascript/xdotool/
+				// screencapture, coordinate math) and some are driven by untrusted
+				// viewer input. A panic in one must NOT take down the whole agent —
+				// drop it and keep serving the queue.
+				func() {
+					defer func() { if r := recover(); r != nil { recoverLog("winOps", r) } }()
+					op()
+				}()
 			}
 		}()
 	})
@@ -190,6 +198,19 @@ func (a *Agent) enqueueWinOp(op func()) {
 	case a.winOps <- op:
 	default:
 	}
+}
+
+// enqueueWinOpImportant queues an op that MUST run — unlike enqueueWinOp it never
+// drops under backpressure. Used for releasing a held mouse button when viewers
+// leave: a dropped release strands the host's desktop in a grab (a drag floods
+// winOps AND holds a button, so the release is exactly what enqueueWinOp would
+// drop). It blocks until the op is queued, so call it from its own goroutine —
+// the op still runs on the worker, serialized with in-flight input. If the worker
+// is wedged this leaks one goroutine (a far better failure than a stuck button)
+// without blocking the relay reader.
+func (a *Agent) enqueueWinOpImportant(op func()) {
+	a.windows() // ensure backend + worker exist
+	a.winOps <- op
 }
 
 // handleWindowList enumerates the host's windows and sends the encrypted list
@@ -271,14 +292,55 @@ func (a *Agent) handleWindowCtl(encData string) {
 		a.startWindowStream(req.ID)
 	case "stop":
 		a.stopWindowStream(req.ID)
-		_ = a.windows().releaseInput() // never leave a button held after a pane closes
+		a.releaseWindowInput() // never leave a button held after a pane closes
 	}
+}
+
+// updateMenuState maintains the right-click context-menu region-capture window for
+// the darwin (daemon-proxied) input path. A right-click arms a brief region grab
+// around the window so the OS-drawn menu (a separate overlapping window) shows in
+// the mirror; a left-click clears it. Only a right-click resolves the bounds.
+func (a *Agent) updateMenuState(plaintext []byte) {
+	var ev struct {
+		ID     string `json:"id"`
+		Kind   string `json:"kind"`
+		Button string `json:"button"`
+	}
+	if json.Unmarshal(plaintext, &ev) != nil || ev.Kind != "click" {
+		return
+	}
+	if ev.Button == "right" {
+		w, err := findWindow(a.windows(), ev.ID)
+		if err != nil {
+			return
+		}
+		a.winMu.Lock()
+		if a.winMenu == nil {
+			a.winMenu = map[string]winMenuState{}
+		}
+		a.winMenu[w.ID] = winMenuState{x: w.X, y: w.Y, w: w.W, h: w.H, until: time.Now().Add(winMenuHold)}
+		a.winMu.Unlock()
+		return
+	}
+	a.winMu.Lock()
+	delete(a.winMenu, ev.ID)
+	a.winMu.Unlock()
 }
 
 // handleWindowInput injects a mouse/keyboard event into the target window.
 func (a *Agent) handleWindowInput(encData string) {
 	plaintext, err := a.box.Decrypt(encData)
 	if err != nil {
+		return
+	}
+	if runtime.GOOS == "darwin" {
+		// Inject in the daemon (sh.reminal) so one grant covers Accessibility +
+		// Automation for every session, terminal or "+". Runs on the serialized
+		// winOps worker, so forwarding synchronously keeps events ordered. Still
+		// track the right-click context-menu window here — the capture path reads
+		// a.winMenu to region-capture (through the daemon) so the menu shows.
+		mirrorForwardInput(string(plaintext))
+		a.updateMenuState(plaintext)
 		return
 	}
 	var ev struct {
@@ -890,6 +952,29 @@ func (s *winStream) waitCapacity() bool {
 	return true
 }
 
+// releaseWindowInput releases any held mouse button so an interrupted click/drag
+// can't leave the host's desktop grabbed. On macOS the injection ran in the daemon
+// (sh.reminal), so the release must too — releasing in this session's (Terminal)
+// context wouldn't touch the daemon's held press.
+func (a *Agent) releaseWindowInput() {
+	if runtime.GOOS == "darwin" {
+		mirrorRelease()
+		return
+	}
+	_ = a.windows().releaseInput()
+}
+
+// startCaptureHelper returns the frame source for a window. On macOS it dials the
+// daemon's mirror service — so ALL capture runs in the one granted sh.reminal
+// process and a single reminal.app grant covers every session (terminal or "+");
+// elsewhere it spawns the capture helper directly.
+func startCaptureHelper(id string, maxWidth, quality, fps int) (*winHelper, error) {
+	if runtime.GOOS == "darwin" {
+		return startMirrorCapture(id, maxWidth, quality, fps)
+	}
+	return startWinHelper(id, maxWidth, quality, fps)
+}
+
 // ensureHelper keeps the native capture helper alive: reaps one that died and
 // (re)starts it, subject to helperRetryCooldown after a failure.
 func (s *winStream) ensureHelper() {
@@ -912,7 +997,7 @@ func (s *winStream) ensureHelper() {
 	if time.Now().Before(s.helperRetryAt) {
 		return
 	}
-	if h, err := startWinHelper(s.w.ID, winMaxWidth, winCaptureQuality, winHelperFPS); err == nil {
+	if h, err := startCaptureHelper(s.w.ID, winMaxWidth, winCaptureQuality, winHelperFPS); err == nil {
 		s.helper = h
 		s.helperErr = ""
 	} else {
@@ -948,7 +1033,22 @@ func (s *winStream) capture() (img []byte, err error) {
 	}
 	s.capNative = false
 	if menuActive {
+		if runtime.GOOS == "darwin" {
+			// Region-capture (for the right-click menu) also runs in the daemon.
+			return mirrorCaptureRegion(menu.x, menu.y, menu.w, menu.h)
+		}
 		return s.b.captureRegion(menu.x, menu.y, menu.w, menu.h)
+	}
+	if runtime.GOOS == "darwin" {
+		// No local screencapture fallback on macOS: capture must run in the daemon
+		// (sh.reminal) so one grant covers every session. A nil helper here means
+		// the daemon is unreachable — surface that instead of a terminal-attributed
+		// capture (decision: fail-and-retry, don't silently double-grant).
+		e := s.helperErr
+		if e == "" {
+			e = "screen-sharing service starting — retry"
+		}
+		return nil, errors.New(e)
 	}
 	return s.b.capture(s.w)
 }
@@ -990,7 +1090,7 @@ func (s *winStream) checkWindow(conn *websocket.Conn, changed bool) bool {
 		if resized && s.helper != nil {
 			s.helper.stop()
 			s.helper = nil
-			if h, err := startWinHelper(s.w.ID, winMaxWidth, winCaptureQuality, winHelperFPS); err == nil {
+			if h, err := startCaptureHelper(s.w.ID, winMaxWidth, winCaptureQuality, winHelperFPS); err == nil {
 				s.helper = h
 			} else {
 				s.helperRetryAt = time.Now().Add(helperRetryCooldown)

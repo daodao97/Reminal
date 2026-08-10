@@ -140,6 +140,21 @@ func RestartDaemonService() error {
 	return restartService(u)
 }
 
+// EnsureDaemonInstalled is an idempotent CORRECTNESS check (deliberately NOT
+// version-gated): whenever reminal is running from the macOS reminal.app bundle,
+// the always-on daemon must exist to perform screen capture + input injection for
+// every session under the one granted sh.reminal identity. If its login service is
+// missing, install it. A no-op — cheap stat of the plist — when already present or
+// when not running from a bundle (bare/dev builds, and Linux, use their existing
+// paths). Safe to call on every startup and after an upgrade/migration, so a
+// bundle-without-daemon self-heals regardless of which version introduced the gap.
+func EnsureDaemonInstalled() {
+	if !runningFromBundle() || DaemonServiceInstalled() {
+		return
+	}
+	_ = InstallDaemonService()
+}
+
 // DaemonServiceInstalled reports whether the background-host login service is
 // installed for the owning user. Lets callers decide whether to mention/refresh
 // it (e.g. `reminal restart --all`). False on any lookup error.

@@ -3535,7 +3535,7 @@
           try {
             const bytes = await decrypt(cryptoKey, msg.data);
             const payload = JSON.parse(new TextDecoder().decode(bytes));
-            triggerDownload(payload.name, payload.content);
+            handleDownloadChunk(payload);
           } catch (e) {
             term.write('\r\n\x1b[2m[reminal] download failed: ' + e + '\x1b[0m\r\n');
           }
@@ -4308,10 +4308,18 @@
     // triggerDownload routes previewable files (images, PDFs) to the modal
     // (better phone UX — no app switch) and everything else to a standard
     // Blob + hidden-anchor download.
-    function triggerDownload(name, b64) {
+    function b64ToBytes(b64) {
       const bin = atob(b64);
       const bytes = new Uint8Array(bin.length);
       for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+      return bytes;
+    }
+
+    function triggerDownload(name, b64) {
+      triggerDownloadBytes(name, b64ToBytes(b64));
+    }
+
+    function triggerDownloadBytes(name, bytes) {
       const mime = previewMimeFor(name);
       if (mime) {
         showPreview(name, new Blob([bytes], { type: mime }), mime);
@@ -4326,6 +4334,63 @@
       a.click();
       setTimeout(() => { URL.revokeObjectURL(url); a.remove(); }, 1000);
       term.write('\r\n\x1b[2m[reminal] downloaded ' + (name || 'file') + ' (' + humanBytes(bytes.length) + ')\x1b[0m\r\n');
+    }
+
+    // Chunked-download reassembly, mirroring the Go viewer (viewer.go). The agent
+    // sends `reminal send` files as N TypeDownload frames sharing a download_id;
+    // small files arrive as a single frame (total<=1) and download immediately.
+    // Bounds match the Go side so a hostile host can't OOM the tab.
+    const DOWNLOAD_MAX_BYTES = 100 * 1024 * 1024;
+    const DOWNLOAD_MAX_CHUNKS = 1600;
+    const DOWNLOAD_STALE_MS = 60000;
+    const pendingDownloads = new Map(); // download_id -> {name,total,chunks:Map,bytes,timer}
+
+    function handleDownloadChunk(payload) {
+      // Single-shot: legacy agents (no download_id) and files that fit in one chunk.
+      if (!payload.download_id || !payload.total || payload.total <= 1) {
+        triggerDownload(payload.name, payload.content);
+        return;
+      }
+      const total = payload.total;
+      if (total > DOWNLOAD_MAX_CHUNKS) {
+        term.write('\r\n\x1b[2m[reminal] download failed: too many chunks (' + total + ')\x1b[0m\r\n');
+        return;
+      }
+      const idx = payload.index;
+      if (typeof idx !== 'number' || idx < 0 || idx >= total) {
+        term.write('\r\n\x1b[2m[reminal] download failed: bad chunk index ' + idx + '/' + total + '\x1b[0m\r\n');
+        return;
+      }
+      const id = payload.download_id;
+      let dl = pendingDownloads.get(id);
+      if (!dl) {
+        dl = { name: payload.name, total: total, chunks: new Map(), bytes: 0, timer: null };
+        pendingDownloads.set(id, dl);
+      }
+      if (dl.timer) clearTimeout(dl.timer);
+      dl.timer = setTimeout(() => { pendingDownloads.delete(id); }, DOWNLOAD_STALE_MS);
+      if (!dl.chunks.has(idx)) {
+        const bytes = b64ToBytes(payload.content);
+        if (dl.bytes + bytes.length > DOWNLOAD_MAX_BYTES) {
+          clearTimeout(dl.timer);
+          pendingDownloads.delete(id);
+          term.write('\r\n\x1b[2m[reminal] download aborted: exceeds cap\x1b[0m\r\n');
+          return;
+        }
+        dl.chunks.set(idx, bytes);
+        dl.bytes += bytes.length;
+      }
+      if (dl.chunks.size !== dl.total) return;
+      // Complete — concat in index order.
+      clearTimeout(dl.timer);
+      pendingDownloads.delete(id);
+      const out = new Uint8Array(dl.bytes);
+      let off = 0;
+      for (let i = 0; i < dl.total; i++) {
+        const c = dl.chunks.get(i);
+        if (c) { out.set(c, off); off += c.length; }
+      }
+      triggerDownloadBytes(dl.name, out);
     }
 
     // ---- Keybar toggle (collapse / expand) ----

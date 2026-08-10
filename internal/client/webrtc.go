@@ -23,6 +23,14 @@ import (
 // closed so we stop wasting sends on it; the viewer re-negotiates later.
 const rtcProbeWindow = 8 * time.Second
 
+// rtcHandshakeTimeout bounds how long a freshly-offered peer may sit before its
+// DataChannel opens. A viewer that requests an offer but never answers (crashed
+// tab, flaky mobile, or a viewer spamming hellos with distinct peer ids) leaves
+// a PeerConnection stuck in "new" — pion never fires Failed without a remote
+// description, and rtcSinks only reaps peers that DID open — so nothing else
+// collects it until the last viewer leaves. This reaps the un-opened peer.
+const rtcHandshakeTimeout = 30 * time.Second
+
 // Window frames are the relay's heaviest traffic, and the Cloudflare relay
 // bills every forwarded WebSocket message as a request. When a viewer can open
 // a WebRTC DataChannel, frames (and their acks) flow directly peer-to-peer over
@@ -185,6 +193,10 @@ type rtcICEMsg struct {
 // with a frames DataChannel, create an offer, and send it back. ICE candidates
 // are trickled as they're gathered.
 func (a *Agent) handleWebRTCHello(conn *websocket.Conn, encData string) {
+	// Runs in its own goroutine (go a.handleWebRTCHello), so a panic here escapes
+	// runConnection's recover and would crash the agent. Contain it: a malformed
+	// viewer hello must at worst drop this P2P attempt (WS fallback covers it).
+	defer func() { _ = recover() }()
 	plaintext, err := a.box.Decrypt(encData)
 	if err != nil {
 		return
@@ -212,6 +224,10 @@ func (a *Agent) handleWebRTCHello(conn *websocket.Conn, encData string) {
 	dc.OnOpen(func() { peer.startProbe(); peer.open.Store(true) })
 	dc.OnClose(func() { peer.open.Store(false) })
 	dc.OnMessage(func(m webrtc.DataChannelMessage) {
+		// Runs in pion's read goroutine, outside every other recover, on
+		// viewer-supplied data. Contain any panic so a crafted DataChannel message
+		// can't crash the agent.
+		defer func() { if r := recover(); r != nil { recoverLog("dc.OnMessage", r) } }()
 		// The only viewer→agent traffic on this channel is frame acks. Because
 		// the viewer acks a frame over the SAME transport it arrived on, an ack
 		// here proves a full frame really traversed this channel — so it's now
@@ -247,7 +263,7 @@ func (a *Agent) handleWebRTCHello(conn *websocket.Conn, encData string) {
 		// a blip that doesn't heal escalates to "failed", which lands here.
 		if s == webrtc.PeerConnectionStateFailed || s == webrtc.PeerConnectionStateClosed {
 			peer.open.Store(false)
-			a.dropRTCPeer(hello.Peer)
+			a.dropRTCPeer(hello.Peer, peer)
 		}
 	})
 
@@ -271,6 +287,15 @@ func (a *Agent) handleWebRTCHello(conn *websocket.Conn, encData string) {
 	}
 	a.rtcPeers[hello.Peer] = peer
 	a.rtcMu.Unlock()
+
+	// Reap the peer if its DataChannel never opens (viewer never answered). Fire-
+	// and-forget: if it opened, open.Load() is true and this no-ops; dropRTCPeer's
+	// identity guard handles the case where a reconnect already replaced it.
+	time.AfterFunc(rtcHandshakeTimeout, func() {
+		if !peer.open.Load() {
+			a.dropRTCPeer(hello.Peer, peer)
+		}
+	})
 
 	a.sendWindowMsg(conn, protocol.TypeWebRTCOffer, rtcSDPMsg{Peer: hello.Peer, SDP: offer.SDP, ICE: viewerICE})
 }
@@ -305,6 +330,12 @@ func (a *Agent) handleWebRTCAnswer(encData string) {
 	}
 }
 
+// maxPendingICE caps candidates buffered before the answer arrives. Real ICE
+// gathering yields a handful (host/srflx/relay per interface); the ceiling just
+// stops a peer that trickles candidates but never answers from growing the buffer
+// unbounded until its connection times out.
+const maxPendingICE = 64
+
 // handleWebRTCICE adds a trickled candidate, buffering it if the answer hasn't
 // been applied yet (pion rejects candidates before the remote description).
 func (a *Agent) handleWebRTCICE(encData string) {
@@ -323,7 +354,9 @@ func (a *Agent) handleWebRTCICE(encData string) {
 	cand := webrtc.ICECandidateInit{Candidate: m.Candidate, SDPMid: m.Mid, SDPMLineIndex: m.Line}
 	peer.mu.Lock()
 	if !peer.haveRemote {
-		peer.pendingICE = append(peer.pendingICE, cand)
+		if len(peer.pendingICE) < maxPendingICE {
+			peer.pendingICE = append(peer.pendingICE, cand)
+		}
 		peer.mu.Unlock()
 		return
 	}
@@ -337,15 +370,18 @@ func (a *Agent) rtcPeerByID(id string) *rtcPeer {
 	return a.rtcPeers[id]
 }
 
-// dropRTCPeer tears down and forgets a peer connection.
-func (a *Agent) dropRTCPeer(id string) {
+// dropRTCPeer tears down a peer connection and forgets it — but only if it's
+// STILL the current peer for id. A reconnecting viewer replaces the map entry
+// under the same id and closes the old pc; that old pc's async state-change
+// callback lands here, and without the identity guard it would evict the fresh
+// peer that just took its place (killing the new P2P transport → WS fallback).
+func (a *Agent) dropRTCPeer(id string, p *rtcPeer) {
 	a.rtcMu.Lock()
-	peer := a.rtcPeers[id]
-	delete(a.rtcPeers, id)
-	a.rtcMu.Unlock()
-	if peer != nil {
-		_ = peer.pc.Close()
+	if a.rtcPeers[id] == p {
+		delete(a.rtcPeers, id)
 	}
+	a.rtcMu.Unlock()
+	_ = p.pc.Close()
 }
 
 // closeAllRTCPeers tears down every peer connection (e.g. last viewer left).

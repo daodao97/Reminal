@@ -61,6 +61,11 @@ type vviewWriter struct {
 	// carry holds a CSI split across Write calls (recorded chunks are ~4KB) so
 	// a row-addressed sequence straddling a boundary is still translated.
 	carry []byte
+	// dead is set if a Write panicked (a malformed scrollback sequence can drive
+	// the emulator into an out-of-range index — see FuzzVViewWrite). Once dead,
+	// further Writes are skipped and rebuildView falls back to a screen-only
+	// snapshot instead of crashing the agent.
+	dead bool
 }
 
 // sync samples the emulator cursor, advances vtop if flow carried the cursor
@@ -136,6 +141,19 @@ func (w *vviewWriter) Base() int {
 
 // Write replays p through the emulator with virtual-viewport translation.
 func (w *vviewWriter) Write(p []byte) {
+	// The replay emulator can panic (out-of-range index) on adversarial escape
+	// sequences recorded in scrollback — found by FuzzVViewWrite with "\x1b[r\x88".
+	// A snapshot must never crash the agent, so contain it here: mark the writer
+	// dead and stop; rebuildView sees w.dead and degrades to a screen-only
+	// snapshot. Non-panicking writes are entirely unaffected.
+	if w.dead {
+		return
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			w.dead = true
+		}
+	}()
 	if len(w.carry) > 0 {
 		p = append(w.carry, p...)
 		w.carry = nil

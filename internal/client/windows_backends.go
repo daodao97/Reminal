@@ -40,12 +40,10 @@ func (darwinWindows) unsupported() string {
 // the call always errored and the hint never fired. No helper (screencapture-only
 // path) => we can't cheaply preflight, so stay quiet rather than warn spuriously.
 func (darwinWindows) permissionHint() string {
-	p, err := captureHelperPath()
-	if err != nil {
-		return ""
-	}
-	out, err := run(p, "check")
-	if err == nil && strings.TrimSpace(out) == "no" {
+	// Capture runs in the DAEMON (sh.reminal), so ask it — not this session, which
+	// may be attributed to Terminal. "" (daemon unreachable) → stay quiet; the
+	// capture path surfaces the "service starting" state instead.
+	if mirrorCheck() == "no" {
 		return "Screen Recording isn't granted for reminal on this Mac, so windows " +
 			"list but can't be mirrored. Run  reminal permissions  on the host to " +
 			"grant it (and remote-control access), then reopen the window."
