@@ -411,6 +411,20 @@ func applyBundle(tr *tar.Reader, appRoot string) error {
 				return err
 			}
 		case tar.TypeSymlink:
+			// Reject symlinks that escape the staging tree. An absolute or
+			// ..-climbing Linkname, followed by a regular-file entry written
+			// UNDER that link, would make os.OpenFile follow the link and write
+			// through it to an arbitrary path (symlink-based tar slip). Legit
+			// macOS .app bundles only carry relative, in-bundle symlinks, so this
+			// never rejects a genuine release.
+			resolved := hdr.Linkname
+			if !filepath.IsAbs(resolved) {
+				resolved = filepath.Join(filepath.Dir(target), resolved)
+			}
+			resolved = filepath.Clean(resolved)
+			if resolved != staging && !strings.HasPrefix(resolved, staging+string(filepath.Separator)) {
+				continue // link points outside staging — drop it
+			}
 			if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
 				return err
 			}
