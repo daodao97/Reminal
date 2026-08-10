@@ -44,10 +44,12 @@ func bundlePath() string {
 // background daemon's ("+") sessions too.
 func RequestAllPermissions() error {
 	if helper, err := captureHelperPath(); err == nil {
-		_ = exec.Command(helper, "request").Run() // Screen Recording (SCK)
-		time.Sleep(600 * time.Millisecond)
-		_ = exec.Command(helper, "accessibility").Run() // Accessibility (CGEvent)
-		time.Sleep(600 * time.Millisecond)
+		_ = exec.Command(helper, "request").Run() // Screen Recording — system-owned dialog
+		time.Sleep(500 * time.Millisecond)        // let its dialog surface first
+		// Accessibility's dialog is dropped if the requester exits while another TCC
+		// dialog is up (why it used to need a second run) — `accessibility` now stays
+		// alive polling until granted or ~30s, so this blocks here.
+		_ = exec.Command(helper, "accessibility").Run()
 	}
 	// Automation: a benign query to System Events triggers the "…wants to control
 	// System Events" prompt. Blocks until the user answers.

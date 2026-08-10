@@ -88,7 +88,16 @@ if args.count >= 2, args[1] == "request" {
 // when untrusted. Prints "granted"/"denied".
 if args.count >= 2, args[1] == "accessibility" {
     let key = kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String
-    let trusted = AXIsProcessTrustedWithOptions([key: true] as CFDictionary)
+    var trusted = AXIsProcessTrustedWithOptions([key: true] as CFDictionary)
+    // Stay alive so the dialog isn't dropped while it's queued behind another TCC
+    // prompt (that's why it used to appear only on a SECOND run), and pick up the
+    // grant the moment the user flips it. Poll up to ~30s.
+    var waited = 0
+    while !trusted && waited < 30 {
+        Thread.sleep(forTimeInterval: 1)
+        trusted = AXIsProcessTrusted()
+        waited += 1
+    }
     print(trusted ? "granted" : "denied")
     exit(trusted ? 0 : 1)
 }
