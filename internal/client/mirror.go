@@ -66,7 +66,17 @@ func serveMirror(stop <-chan struct{}) {
 	for {
 		conn, err := ln.Accept()
 		if err != nil {
-			return // listener closed on stop
+			select {
+			case <-stop:
+				return // listener closed on stop — the intended exit
+			default:
+			}
+			// Any OTHER Accept error (e.g. EMFILE under fd pressure) must NOT kill
+			// the always-on mirror service — capture/input would then fail with
+			// "service restarting" forever until the daemon is restarted. Back off
+			// briefly and keep accepting, matching http.Server.Serve's resilience.
+			time.Sleep(50 * time.Millisecond)
+			continue
 		}
 		go handleMirrorConn(conn)
 	}
