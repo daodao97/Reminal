@@ -297,6 +297,7 @@ func (dh *dirHost) write(msg protocol.Message) error {
 	}
 	dh.writeMu.Lock()
 	defer dh.writeMu.Unlock()
+	_ = dh.conn.SetWriteDeadline(time.Now().Add(wsWriteWait))
 	return dh.conn.WriteMessage(websocket.TextMessage, data)
 }
 

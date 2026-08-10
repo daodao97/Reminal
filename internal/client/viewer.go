@@ -819,6 +819,7 @@ func (v *Viewer) writeMsg(conn *websocket.Conn, msg protocol.Message) error {
 	}
 	v.writeMu.Lock()
 	defer v.writeMu.Unlock()
+	_ = conn.SetWriteDeadline(time.Now().Add(wsWriteWait))
 	return conn.WriteMessage(websocket.TextMessage, data)
 }
 

@@ -93,6 +93,7 @@ func (w *wsFrameConn) send(msg protocol.Message) error {
 	}
 	w.mu.Lock()
 	defer w.mu.Unlock()
+	_ = w.conn.SetWriteDeadline(time.Now().Add(wsWriteWait))
 	return w.conn.WriteMessage(websocket.TextMessage, data)
 }
 

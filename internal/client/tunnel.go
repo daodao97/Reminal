@@ -401,6 +401,7 @@ func (t *Tunnel) sendError(conn *websocket.Conn, reqID, msg string) {
 func (t *Tunnel) writeMsg(conn *websocket.Conn, m protocol.Message) error {
 	t.writeMu.Lock()
 	defer t.writeMu.Unlock()
+	_ = conn.SetWriteDeadline(time.Now().Add(wsWriteWait))
 	return conn.WriteJSON(m)
 }
 

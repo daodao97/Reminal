@@ -19,6 +19,13 @@ import (
 // giving the same agent a chance to reattach (e.g., across a network blip).
 const orphanTTL = 10 * time.Minute
 
+// wsWriteWait bounds a single WS write to a peer. Without it, a peer that stops
+// reading (its send buffer fills) makes WriteMessage block forever while holding
+// writeMu, leaking the forwarding goroutine and stalling that peer's queue. The
+// deadline frees the goroutine and drops the frame; a corrupt conn then fails
+// fast on subsequent writes.
+const wsWriteWait = 30 * time.Second
+
 var upgrader = websocket.Upgrader{
 	ReadBufferSize:  4096,
 	WriteBufferSize: 4096,
@@ -568,6 +575,7 @@ func (s *Server) write(conn *websocket.Conn, msg protocol.Message) {
 	if err != nil {
 		return
 	}
+	_ = conn.SetWriteDeadline(time.Now().Add(wsWriteWait))
 	_ = conn.WriteMessage(websocket.TextMessage, data)
 }
 
@@ -578,6 +586,7 @@ func (s *Server) writeTo(p *peer, msg protocol.Message) {
 	}
 	p.writeMu.Lock()
 	defer p.writeMu.Unlock()
+	_ = p.conn.SetWriteDeadline(time.Now().Add(wsWriteWait))
 	_ = p.conn.WriteMessage(websocket.TextMessage, data)
 }
 

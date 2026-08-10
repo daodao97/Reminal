@@ -55,6 +55,12 @@ const (
 	// pings every 30s under normal operation this is well above the noise
 	// floor; it mainly catches half-open TCP that the OS hasn't noticed.
 	readDeadlineAgent = 60 * time.Second
+	// wsWriteWait bounds a single WS write. Without it, gorilla's WriteMessage
+	// blocks forever if the peer stops reading (its send buffer fills) — and
+	// since writes hold writeMu, that wedges the whole connection with no
+	// recovery, because the read deadline keeps resetting while the peer is
+	// still sending. 30s is well above a slow-mobile flush yet bounds the hang.
+	wsWriteWait = 30 * time.Second
 )
 
 type Agent struct {
@@ -2489,6 +2495,7 @@ func (a *Agent) writeMsg(conn *websocket.Conn, msg protocol.Message) error {
 	}
 	a.writeMu.Lock()
 	defer a.writeMu.Unlock()
+	_ = conn.SetWriteDeadline(time.Now().Add(wsWriteWait))
 	return conn.WriteMessage(websocket.TextMessage, data)
 }
 
