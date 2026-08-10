@@ -64,5 +64,33 @@ func SaveSettings(s Settings) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(p, data, 0o600)
+	// Write atomically (temp + rename) so a concurrent reader — e.g. the daemon's
+	// vdisplayLoop polling ClosedLid every 12s — never sees the truncated file that
+	// os.WriteFile's O_TRUNC would momentarily expose. A partial read json-parses
+	// to zero-value settings, which would silently drop closed-lid mode for a poll
+	// cycle (the machine could sleep on lid close). Matches the owners store.
+	dir := filepath.Dir(p)
+	f, err := os.CreateTemp(dir, ".settings-*.tmp")
+	if err != nil {
+		return err
+	}
+	tmp := f.Name()
+	if _, err := f.Write(data); err != nil {
+		_ = f.Close()
+		_ = os.Remove(tmp)
+		return err
+	}
+	if err := f.Close(); err != nil {
+		_ = os.Remove(tmp)
+		return err
+	}
+	if err := os.Chmod(tmp, 0o600); err != nil {
+		_ = os.Remove(tmp)
+		return err
+	}
+	if err := os.Rename(tmp, p); err != nil {
+		_ = os.Remove(tmp)
+		return err
+	}
+	return nil
 }
