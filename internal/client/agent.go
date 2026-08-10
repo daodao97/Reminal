@@ -1202,7 +1202,11 @@ func (a *Agent) handleUpload(encData string) {
 		return
 	}
 	safe := filepath.Base(payload.Name)
-	if safe == "." || safe == "/" || safe == "" {
+	// filepath.Base still yields "..", ".", "/", or "" for degenerate names;
+	// ".." in particular resolves filepath.Join(dir, safe) to dir's PARENT, so
+	// an authenticated viewer could steer the write one level above the intended
+	// ~/Downloads/reminal. Reject every degenerate element (".." was missing).
+	if safe == "." || safe == ".." || safe == "/" || safe == "" {
 		a.broadcastNotice("upload failed: invalid filename")
 		return
 	}

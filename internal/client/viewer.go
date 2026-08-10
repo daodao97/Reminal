@@ -860,6 +860,13 @@ func (v *Viewer) handleDownload(plaintext []byte) {
 		return
 	}
 	safe := filepath.Base(payload.Name)
+	// Base still yields "..", ".", "/", or "" for degenerate names; ".." makes
+	// filepath.Join(dir, safe) resolve to dir's PARENT, letting a hostile host
+	// steer the write above ~/Downloads/reminal-incoming. Reject them all.
+	if safe == "." || safe == ".." || safe == "/" || safe == "" {
+		v.notify("download failed: invalid filename")
+		return
+	}
 	chunk, err := base64.StdEncoding.DecodeString(payload.Content)
 	if err != nil {
 		v.notify(fmt.Sprintf("download failed: bad base64: %v", err))

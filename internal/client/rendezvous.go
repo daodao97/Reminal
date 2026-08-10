@@ -399,7 +399,12 @@ func receiveStream(fc frameConn, box *crypto.Box) (string, []byte, error) {
 	for i := 0; i < total; i++ {
 		assembled = append(assembled, chunks[i]...)
 	}
-	if name == "" {
+	// filepath.Base strips multi-level traversal (../../x → x), but still yields
+	// ".", "..", or "/" for degenerate sender-supplied names — each of which
+	// resolves ONTO dest or into its PARENT rather than to a file inside dest.
+	// Fold those (and the empty case) to a safe default so a hostile sender can't
+	// steer the write outside the chosen directory.
+	if name == "" || name == "." || name == ".." || name == string(filepath.Separator) {
 		name = "pasted-file"
 	}
 	return name, assembled, nil
