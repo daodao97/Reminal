@@ -1729,6 +1729,17 @@ func (a *Agent) resizeScreen(cols, rows uint16) {
 // recorded between this snapshot of the buffer and the live-screen read that
 // follows is missing from the replay only for milliseconds' worth of bytes.
 func (a *Agent) rebuildView() (history, screen []string, ok bool) {
+	// A malformed escape sequence recorded in scrollback can drive the replay
+	// emulator (via vviewWriter) into a state where a forwarded byte panics with
+	// an out-of-range index — found by FuzzVViewWrite with "\x1b[r\x88" (empty
+	// DECSTBM then a C1 byte). Generating a snapshot must NEVER crash the agent,
+	// so degrade to no-history-rebuild; snapshotFrame then falls back to a
+	// screen-only snapshot.
+	defer func() {
+		if r := recover(); r != nil {
+			history, screen, ok = nil, nil, false
+		}
+	}()
 	if a.box == nil || a.buf == nil || a.scrollbackLines == 0 {
 		return nil, nil, false
 	}
@@ -1801,6 +1812,12 @@ func (a *Agent) rebuildView() (history, screen []string, ok bool) {
 			return nil, nil, false
 		}
 		w.Write(pt)
+	}
+	if w.dead {
+		// A malformed sequence in scrollback drove the replay emulator to panic
+		// (contained in vviewWriter.Write). The rebuilt history is unreliable —
+		// fall back to a screen-only snapshot rather than ship corrupt history.
+		return nil, nil, false
 	}
 	wasAlt := e.IsAltScreen()
 	if wasAlt {
