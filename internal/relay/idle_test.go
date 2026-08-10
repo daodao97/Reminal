@@ -15,11 +15,10 @@ import (
 // nothing is dropped by the pre-auth read deadline instead of leaking a goroutine
 // forever (slow-loris). It shrinks authWait so the test is fast.
 func TestSilentConnDroppedByAuthDeadline(t *testing.T) {
-	origAuth := authWait
-	authWait = 150 * time.Millisecond
-	defer func() { authWait = origAuth }()
-
 	s := NewServer()
+	// Set on this Server before it starts serving — happens-before the handler
+	// goroutines, so no data race (and no shared global to restore).
+	s.authWait = 150 * time.Millisecond
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
 		if len(parts) != 2 {

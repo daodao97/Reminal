@@ -31,9 +31,9 @@ const wsWriteWait = 30 * time.Second
 // even authenticating — leaks a goroutine forever (slow-loris). authWait is a tight
 // window to send the first Auth/Register frame; readWait is the steady-state
 // liveness budget once attached, comfortably above the clients' 30s ping cadence.
-var (
-	authWait = 20 * time.Second
-	readWait = 90 * time.Second
+const (
+	defaultAuthWait = 20 * time.Second
+	defaultReadWait = 90 * time.Second
 )
 
 var upgrader = websocket.Upgrader{
@@ -60,10 +60,19 @@ type room struct {
 type Server struct {
 	rooms map[string]*room
 	mu    sync.RWMutex
+	// Read-deadline windows; fields (not globals) so a test can set them on its
+	// own Server before serving without racing the handler goroutines. See
+	// defaultAuthWait/defaultReadWait.
+	authWait time.Duration
+	readWait time.Duration
 }
 
 func NewServer() *Server {
-	return &Server{rooms: make(map[string]*room)}
+	return &Server{
+		rooms:    make(map[string]*room),
+		authWait: defaultAuthWait,
+		readWait: defaultReadWait,
+	}
 }
 
 func (s *Server) HandleWS(w http.ResponseWriter, r *http.Request) {
@@ -129,9 +138,9 @@ func (s *Server) handleSessionConn(sessionID string, role protocol.Role, conn *w
 
 	authed := false
 	for {
-		wait := authWait
+		wait := s.authWait
 		if authed {
-			wait = readWait
+			wait = s.readWait
 		}
 		_ = conn.SetReadDeadline(time.Now().Add(wait))
 		_, raw, err := conn.ReadMessage()
@@ -313,9 +322,9 @@ func (s *Server) handleLegacyConn(conn *websocket.Conn) {
 	var role protocol.Role
 
 	for {
-		wait := authWait
+		wait := s.authWait
 		if registered {
-			wait = readWait
+			wait = s.readWait
 		}
 		_ = conn.SetReadDeadline(time.Now().Add(wait))
 		_, raw, err := conn.ReadMessage()
