@@ -133,6 +133,10 @@ var forwardableTypes = map[protocol.MessageType]bool{
 }
 
 func (s *Server) handleSessionConn(sessionID string, role protocol.Role, conn *websocket.Conn) {
+	// Per-connection goroutine processing untrusted peer messages. A panic here
+	// must NOT crash the relay — that would disconnect every other session. Recover
+	// so only this connection drops (its deferred conn.Close/detach still run).
+	defer func() { _ = recover() }()
 	defer conn.Close()
 	defer s.detach(sessionID, role, conn)
 
@@ -315,6 +319,8 @@ func (s *Server) handleAuthLocked(r *room, role protocol.Role, msg protocol.Mess
 }
 
 func (s *Server) handleLegacyConn(conn *websocket.Conn) {
+	// Per-connection goroutine; a panic must not crash the relay for everyone else.
+	defer func() { _ = recover() }()
 	defer conn.Close()
 
 	var registered bool
