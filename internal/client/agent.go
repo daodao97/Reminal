@@ -37,6 +37,13 @@ import (
 // full screen of escape codes plus thousands of lines of plain output.
 const scrollbackBytes = 2 * 1024 * 1024
 
+// maxSnapshotPlaintext bounds a snapshot's plaintext so the ENCRYPTED frame
+// (base64 ~4/3 inflation + screen + wrapper) stays under the relay's 1 MiB WS
+// frame limit — the snapshot is one un-chunked frame, and a larger one is dropped
+// by the relay, breaking reconnect. 640 KiB plaintext → ~0.9 MiB encrypted, a
+// safe margin under 1 MiB; still thousands of lines of history.
+const maxSnapshotPlaintext = 640 * 1024
+
 // maxRelayMessageBytes caps a single WS frame the agent/viewer reads from the
 // (untrusted, see directoryhost) relay. Without it gorilla reads an unbounded
 // frame into memory, so a malicious or rogue relay could OOM the client with one
@@ -1888,7 +1895,18 @@ func (a *Agent) snapshotFrame() (string, uint64) {
 		history = renderScrollback(a.screen, a.scrollbackLines)
 		rebuiltScreen = nil
 	}
-	snap := buildSnapshot(a.screen, history, rebuiltScreen, a.scrollbackBytes, false)
+	// Clamp the plaintext budget so the ENCRYPTED frame fits the relay's 1 MiB WS
+	// limit. The snapshot is sent as ONE un-chunked frame (unlike uploads/downloads),
+	// box.Encrypt base64-inflates it ~4/3, and the screen + message wrapper add more —
+	// so a 2 MiB history budget (the default) produced a ~1.1 MiB frame that the relay
+	// (Cloudflare DO / SetReadLimit) drops, breaking reconnect for large-scrollback
+	// sessions. maxSnapshotPlaintext keeps the frame safely under the cap; smaller
+	// snapshots are unaffected.
+	budget := a.scrollbackBytes
+	if budget <= 0 || budget > maxSnapshotPlaintext {
+		budget = maxSnapshotPlaintext
+	}
+	snap := buildSnapshot(a.screen, history, rebuiltScreen, budget, false)
 	latest := a.buf.LatestSeq()
 	a.screenMu.Unlock()
 	if snap == "" {
