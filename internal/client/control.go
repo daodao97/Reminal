@@ -130,6 +130,9 @@ func (a *Agent) listenControl() (cleanup func()) {
 //	send <absolute-path>      # broadcast file as TypeDownload to viewers
 func (a *Agent) handleControlConn(conn net.Conn) {
 	defer conn.Close()
+	// Spawned per connection (go a.handleControlConn); a panic here would crash the
+	// agent and kill the shell session. Contain it — the command just fails.
+	defer func() { _ = recover() }()
 	r := bufio.NewReader(conn)
 	line, err := r.ReadString('\n')
 	if err != nil {

@@ -85,6 +85,9 @@ func serveMirror(stop <-chan struct{}) {
 // handleMirrorConn reads one command line ("<cmd> <rest>") and dispatches.
 // `capture` keeps the connection open streaming frames; `input`/`check` reply once.
 func handleMirrorConn(conn net.Conn) {
+	// Spawned per connection (go handleMirrorConn); a panic here would crash the
+	// always-on daemon and take down capture/input for every session. Contain it.
+	defer func() { _ = recover() }()
 	br := bufio.NewReader(conn)
 	line, err := br.ReadString('\n')
 	if err != nil {
