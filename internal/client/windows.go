@@ -193,6 +193,19 @@ func (a *Agent) enqueueWinOp(op func()) {
 	}
 }
 
+// enqueueWinOpImportant queues an op that MUST run — unlike enqueueWinOp it never
+// drops under backpressure. Used for releasing a held mouse button when viewers
+// leave: a dropped release strands the host's desktop in a grab (a drag floods
+// winOps AND holds a button, so the release is exactly what enqueueWinOp would
+// drop). It blocks until the op is queued, so call it from its own goroutine —
+// the op still runs on the worker, serialized with in-flight input. If the worker
+// is wedged this leaks one goroutine (a far better failure than a stuck button)
+// without blocking the relay reader.
+func (a *Agent) enqueueWinOpImportant(op func()) {
+	a.windows() // ensure backend + worker exist
+	a.winOps <- op
+}
+
 // handleWindowList enumerates the host's windows and sends the encrypted list
 // back to viewers in reply to a window_list request.
 func (a *Agent) handleWindowList(conn *websocket.Conn) {
