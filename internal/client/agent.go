@@ -2193,7 +2193,7 @@ func (a *Agent) runReader(conn *websocket.Conn, cursorCh chan uint64) error {
 				// strand the host's desktop in a grab.
 				a.stopWindowStream("")
 				a.closeAllRTCPeers()
-				a.enqueueWinOp(func() { _ = a.windows().releaseInput() })
+				a.enqueueWinOp(func() { a.releaseWindowInput() })
 			}
 			a.viewerSizeMu.Lock()
 			a.viewerCount = msg.Count

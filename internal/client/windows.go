@@ -272,7 +272,7 @@ func (a *Agent) handleWindowCtl(encData string) {
 		a.startWindowStream(req.ID)
 	case "stop":
 		a.stopWindowStream(req.ID)
-		_ = a.windows().releaseInput() // never leave a button held after a pane closes
+		a.releaseWindowInput() // never leave a button held after a pane closes
 	}
 }
 
@@ -930,6 +930,18 @@ func (s *winStream) waitCapacity() bool {
 		}
 	}
 	return true
+}
+
+// releaseWindowInput releases any held mouse button so an interrupted click/drag
+// can't leave the host's desktop grabbed. On macOS the injection ran in the daemon
+// (sh.reminal), so the release must too — releasing in this session's (Terminal)
+// context wouldn't touch the daemon's held press.
+func (a *Agent) releaseWindowInput() {
+	if runtime.GOOS == "darwin" {
+		mirrorRelease()
+		return
+	}
+	_ = a.windows().releaseInput()
 }
 
 // startCaptureHelper returns the frame source for a window. On macOS it dials the

@@ -91,6 +91,10 @@ func handleMirrorConn(conn net.Conn) {
 	case "input":
 		mirrorServeInput(conn, rest)
 		_ = conn.Close()
+	case "release":
+		_ = darwinWindows{}.releaseInput() // unstick any held mouse button
+		fmt.Fprintln(conn, "ok")
+		_ = conn.Close()
 	case "check":
 		out := "no"
 		if p, e := captureHelperPath(); e == nil {
@@ -356,6 +360,27 @@ func mirrorCheck() string {
 	var buf [16]byte
 	n, _ := conn.Read(buf[:])
 	return strings.TrimSpace(string(buf[:n]))
+}
+
+// mirrorRelease (session side) asks the daemon to release any held mouse button —
+// injection happens in the daemon, so a stranded press from an interrupted drag
+// must be cleared there, not in this session's (Terminal) context.
+func mirrorRelease() {
+	sock, err := mirrorSockPath()
+	if err != nil {
+		return
+	}
+	conn, err := net.DialTimeout("unix", sock, mirrorDialTimeout)
+	if err != nil {
+		return
+	}
+	defer conn.Close()
+	_ = conn.SetDeadline(time.Now().Add(4 * time.Second))
+	if _, err := fmt.Fprintln(conn, "release"); err != nil {
+		return
+	}
+	var reply [16]byte
+	_, _ = conn.Read(reply[:])
 }
 
 // mirrorCaptureRegion (session side) fetches one region JPEG from the daemon (for
