@@ -193,6 +193,10 @@ type rtcICEMsg struct {
 // with a frames DataChannel, create an offer, and send it back. ICE candidates
 // are trickled as they're gathered.
 func (a *Agent) handleWebRTCHello(conn *websocket.Conn, encData string) {
+	// Runs in its own goroutine (go a.handleWebRTCHello), so a panic here escapes
+	// runConnection's recover and would crash the agent. Contain it: a malformed
+	// viewer hello must at worst drop this P2P attempt (WS fallback covers it).
+	defer func() { _ = recover() }()
 	plaintext, err := a.box.Decrypt(encData)
 	if err != nil {
 		return

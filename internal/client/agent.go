@@ -1992,7 +1992,18 @@ func (a *Agent) pumpHostStdin() {
 	}
 }
 
-func (a *Agent) runConnection(shellExit <-chan struct{}) error {
+func (a *Agent) runConnection(shellExit <-chan struct{}) (err error) {
+	// A panic in a viewer-message handler (the read-loop dispatch below processes
+	// untrusted input) must NOT crash the agent — that would kill the shell session
+	// for the host and every viewer. Recover it into an error so the reconnect loop
+	// re-establishes the connection instead. Registered first, so it runs LAST
+	// (after the cleanup defers below) — the WS is closed and state reset before we
+	// reconnect. Standard server resilience (cf. http.Server per-request recover).
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("recovered from panic in connection handler: %v", r)
+		}
+	}()
 	wsURL := config.SessionWS(a.sessionID, string(protocol.RoleAgent))
 	conn, resp, err := websocket.DefaultDialer.Dial(wsURL, nil)
 	if err != nil {
