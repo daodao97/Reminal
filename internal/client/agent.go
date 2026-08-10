@@ -37,6 +37,14 @@ import (
 // full screen of escape codes plus thousands of lines of plain output.
 const scrollbackBytes = 2 * 1024 * 1024
 
+// maxRelayMessageBytes caps a single WS frame the agent/viewer reads from the
+// (untrusted, see directoryhost) relay. Without it gorilla reads an unbounded
+// frame into memory, so a malicious or rogue relay could OOM the client with one
+// giant message. 2 MiB sits well above any legit frame — the relay caps forwarded
+// frames at 1 MiB (maxDirMessageBytes) and large payloads are chunked under that —
+// while still firmly bounding memory. Mirrors the directory connections' cap.
+const maxRelayMessageBytes = 2 * 1024 * 1024
+
 // reconnect timing
 const (
 	initialBackoff = 1 * time.Second
@@ -1958,6 +1966,7 @@ func (a *Agent) runConnection(shellExit <-chan struct{}) error {
 		return fmt.Errorf("dial relay: %w", err)
 	}
 	defer conn.Close()
+	conn.SetReadLimit(maxRelayMessageBytes) // untrusted relay — bound frame size
 	// Track the live conn so `reminal stop` (SIGUSR1) can close it
 	// immediately rather than waiting for the next read deadline.
 	a.currentConnMu.Lock()

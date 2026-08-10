@@ -236,6 +236,7 @@ func (t *Tunnel) runConnection(stop <-chan struct{}) error {
 		return fmt.Errorf("dial relay: %w", err)
 	}
 	defer conn.Close()
+	conn.SetReadLimit(maxRelayMessageBytes) // untrusted relay — bound frame size
 	t.connMu.Lock()
 	t.conn = conn
 	t.connMu.Unlock()

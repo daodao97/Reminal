@@ -294,6 +294,7 @@ func (v *Viewer) runConnection(stdinCh <-chan []byte, winCh <-chan os.Signal, in
 		}
 		return fmt.Errorf("dial: %w", err)
 	}
+	conn.SetReadLimit(maxRelayMessageBytes) // untrusted relay — bound frame size
 	dialTime := time.Since(dialStart)
 	defer conn.Close()
 
