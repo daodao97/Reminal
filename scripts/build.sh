@@ -12,7 +12,7 @@ BUILD_DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 BUILD_LDFLAGS="-X main.buildDate=${BUILD_DATE} -X main.commit=${COMMIT}"
 
 echo "Building reminal ${VERSION}..."
-CGO_ENABLED=0 go build -ldflags "-s -w -X main.version=${VERSION} ${BUILD_LDFLAGS} ${RELAY_LDFLAGS}" -o "${OUTPUT}" ./cmd/reminal
+CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -X main.version=${VERSION} ${BUILD_LDFLAGS} ${RELAY_LDFLAGS}" -o "${OUTPUT}" ./cmd/reminal
 
 echo "Built ${OUTPUT}"
 "${OUTPUT}" version
