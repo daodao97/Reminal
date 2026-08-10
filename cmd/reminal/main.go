@@ -126,6 +126,11 @@ func main() {
 			}
 			return
 		case "permissions", "permission":
+			// If an older `reminal upgrade` left us a loose binary, heal into the
+			// bundle first (and re-exec) — otherwise EnsurePermissions can only report
+			// "this build isn't a bundle". This is the command users run right after
+			// upgrading, so it must complete the upgrade, not dead-end.
+			selfHealBundle()
 			// macOS: surface all three TCC prompts (Screen Recording, Accessibility,
 			// Automation) for the reminal.app identity so one grant of each covers
 			// background ("+") sessions too.
@@ -307,6 +312,9 @@ func main() {
 					name = a
 				}
 			}
+			// Heal a loose post-upgrade install into the bundle first — a "+"
+			// background session needs the daemon the bundle carries.
+			selfHealBundle()
 			if err := runNew(name); err != nil {
 				fmt.Fprintf(os.Stderr, "error: %v\n", err)
 				os.Exit(1)
@@ -583,18 +591,9 @@ func main() {
 		}
 	}
 
-	// darwin self-heal (correctness, not version): if `reminal upgrade` from an older
-	// version extracted us as a LOOSE binary — stripping the sh.reminal bundle
-	// identity and its always-on daemon — re-materialize the app bundle from this
-	// exact version and re-exec from it so this session runs correctly. One-shot:
-	// once bundled it no-ops.
-	if newBin, healed := updater.EnsureBundleInstalled(version); healed {
-		client.EnsureDaemonInstalled()
-		if err := syscall.Exec(newBin, os.Args, os.Environ()); err != nil {
-			fmt.Fprintln(os.Stderr, "reminal: installed the app bundle — please re-run `reminal`.")
-			return
-		}
-	}
+	// darwin self-heal: if an older `reminal upgrade` left us a loose binary,
+	// re-materialize the app bundle + daemon and re-exec from it. One-shot.
+	selfHealBundle()
 
 	agent, err := client.NewAgentWith(version, client.AgentOptions{Name: *name})
 	if err != nil {
@@ -751,6 +750,27 @@ func helpProse(width int, title, body string) {
 		fmt.Println("  " + cDim(ln))
 	}
 	fmt.Println()
+}
+
+// selfHealBundle re-materializes the reminal.app bundle when we're running as a
+// loose darwin release binary — the state an OLDER version's `reminal upgrade`
+// leaves behind (it extracts the inner binary loose, stripping the sh.reminal
+// identity + always-on daemon). It installs THIS exact version's bundle, ensures
+// the daemon, and re-execs from the bundle so the command the user actually ran
+// (`reminal`, `reminal permissions`, …) continues under the correct identity.
+// No-op once bundled, on non-darwin, and for dev builds. Called from the entry
+// points a user hits right after upgrading, so the upgrade completes instead of
+// dead-ending on "this build isn't a bundle".
+func selfHealBundle() {
+	newBin, healed := updater.EnsureBundleInstalled(version)
+	if !healed {
+		return
+	}
+	client.EnsureDaemonInstalled()
+	if err := syscall.Exec(newBin, os.Args, os.Environ()); err != nil {
+		fmt.Fprintln(os.Stderr, "reminal: installed the app bundle — please re-run your command.")
+		os.Exit(0)
+	}
 }
 
 // printVersionInfo prints a multi-line build-detail block — version,
