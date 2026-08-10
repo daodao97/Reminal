@@ -284,7 +284,16 @@ type fatalErr struct{ err error }
 func (e *fatalErr) Error() string { return e.err.Error() }
 func (e *fatalErr) Unwrap() error { return e.err }
 
-func (v *Viewer) runConnection(stdinCh <-chan []byte, winCh <-chan os.Signal, intCh <-chan os.Signal, escapeCh <-chan struct{}) error {
+func (v *Viewer) runConnection(stdinCh <-chan []byte, winCh <-chan os.Signal, intCh <-chan os.Signal, escapeCh <-chan struct{}) (err error) {
+	// The viewer processes messages from the agent it connected to; a compromised
+	// or buggy agent must not be able to crash the viewer with a crafted message.
+	// Recover a handler panic into an error so runViewer reconnects instead of
+	// crashing. Mirrors the agent's runConnection recover.
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("recovered from panic in viewer connection handler: %v", r)
+		}
+	}()
 	wsURL := config.SessionWS(v.sessionID, string(protocol.RoleViewer))
 	dialStart := time.Now()
 	conn, resp, err := websocket.DefaultDialer.Dial(wsURL, nil)
@@ -663,7 +672,15 @@ func (v *Viewer) authenticate(conn *websocket.Conn) error {
 	}
 }
 
-func (v *Viewer) runReader(conn *websocket.Conn, agentLive *atomic.Bool) error {
+func (v *Viewer) runReader(conn *websocket.Conn, agentLive *atomic.Bool) (err error) {
+	// This is the viewer's real agent-message loop and it runs in its own goroutine
+	// (outside runConnection's recover), so a panic on a crafted agent message would
+	// crash the viewer. Recover it into an error so runConnection reconnects.
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("recovered from panic in viewer reader: %v", r)
+		}
+	}()
 	for {
 		_ = conn.SetReadDeadline(time.Now().Add(readDeadline))
 		_, raw, err := conn.ReadMessage()

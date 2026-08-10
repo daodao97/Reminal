@@ -220,7 +220,15 @@ func (t *Tunnel) activeRecord() session.Active {
 	}
 }
 
-func (t *Tunnel) runConnection(stop <-chan struct{}) error {
+func (t *Tunnel) runConnection(stop <-chan struct{}) (err error) {
+	// Port-forward is a process-lifetime service; a panic in the synchronous
+	// register/dispatch path must not crash it (spawned handleTunnelReq recovers
+	// separately). Recover into an error so the caller reconnects.
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("recovered from panic in tunnel connection: %v", r)
+		}
+	}()
 	wsURL := config.SessionWS(t.sessionID, string(protocol.RoleTunnel))
 	conn, resp, err := websocket.DefaultDialer.Dial(wsURL, nil)
 	if err != nil {
@@ -301,6 +309,9 @@ func (t *Tunnel) runConnection(stop <-chan struct{}) error {
 // HTTP request, and sends back a tunnel_resp. Errors surface to the
 // visitor as a 502 with the message in the body.
 func (t *Tunnel) handleTunnelReq(conn *websocket.Conn, payload string) {
+	// Spawned per relay-forwarded request (go t.handleTunnelReq); a panic here would
+	// crash the port-forward. Contain it so one bad request just fails.
+	defer func() { _ = recover() }()
 	var req struct {
 		ReqID   string            `json:"req_id"`
 		Method  string            `json:"method"`
