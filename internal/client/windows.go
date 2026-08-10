@@ -179,7 +179,7 @@ func (a *Agent) windows() windowBackend {
 				// viewer input. A panic in one must NOT take down the whole agent —
 				// drop it and keep serving the queue.
 				func() {
-					defer func() { _ = recover() }()
+					defer func() { if r := recover(); r != nil { recoverLog("winOps", r) } }()
 					op()
 				}()
 			}

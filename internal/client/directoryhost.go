@@ -149,7 +149,7 @@ func serveDirectoryLocked(stop <-chan struct{}, isDaemon bool) {
 // spawned (not synchronous) so serveDirectoryOnce's recover wouldn't catch them.
 func safeGoDir(f func()) {
 	go func() {
-		defer func() { _ = recover() }()
+		defer func() { if r := recover(); r != nil { recoverLog("safeGoDir", r) } }()
 		f()
 	}()
 }

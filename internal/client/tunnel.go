@@ -311,7 +311,7 @@ func (t *Tunnel) runConnection(stop <-chan struct{}) (err error) {
 func (t *Tunnel) handleTunnelReq(conn *websocket.Conn, payload string) {
 	// Spawned per relay-forwarded request (go t.handleTunnelReq); a panic here would
 	// crash the port-forward. Contain it so one bad request just fails.
-	defer func() { _ = recover() }()
+	defer func() { if r := recover(); r != nil { recoverLog("handleTunnelReq", r) } }()
 	var req struct {
 		ReqID   string            `json:"req_id"`
 		Method  string            `json:"method"`
