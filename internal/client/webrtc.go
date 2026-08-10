@@ -305,6 +305,12 @@ func (a *Agent) handleWebRTCAnswer(encData string) {
 	}
 }
 
+// maxPendingICE caps candidates buffered before the answer arrives. Real ICE
+// gathering yields a handful (host/srflx/relay per interface); the ceiling just
+// stops a peer that trickles candidates but never answers from growing the buffer
+// unbounded until its connection times out.
+const maxPendingICE = 64
+
 // handleWebRTCICE adds a trickled candidate, buffering it if the answer hasn't
 // been applied yet (pion rejects candidates before the remote description).
 func (a *Agent) handleWebRTCICE(encData string) {
@@ -323,7 +329,9 @@ func (a *Agent) handleWebRTCICE(encData string) {
 	cand := webrtc.ICECandidateInit{Candidate: m.Candidate, SDPMid: m.Mid, SDPMLineIndex: m.Line}
 	peer.mu.Lock()
 	if !peer.haveRemote {
-		peer.pendingICE = append(peer.pendingICE, cand)
+		if len(peer.pendingICE) < maxPendingICE {
+			peer.pendingICE = append(peer.pendingICE, cand)
+		}
 		peer.mu.Unlock()
 		return
 	}
