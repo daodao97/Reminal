@@ -212,7 +212,7 @@ func (v *Viewer) Run() error {
 		if first {
 			v.notify("Connecting…  (press Ctrl-] to disconnect)")
 		} else {
-			v.notify(fmt.Sprintf("Reconnecting…"))
+			v.notify("Reconnecting…")
 		}
 
 		start := time.Now()

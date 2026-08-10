@@ -17,7 +17,6 @@ import (
 	"os/signal"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -72,8 +71,6 @@ type Tunnel struct {
 	// deadline to expire.
 	connMu sync.Mutex
 	conn   *websocket.Conn
-
-	paused atomic.Bool
 }
 
 // NewTunnel constructs a port-forward agent. Session ID + PIN are
@@ -142,21 +139,18 @@ func (t *Tunnel) Run() error {
 	defer signal.Stop(sigCh)
 	stop := make(chan struct{})
 	go func() {
-		for sig := range sigCh {
-			if sig == syscall.SIGUSR1 {
-				t.paused.Store(true)
-			}
-			close(stop)
-			// Close the live WS too — otherwise the read in
-			// runConnection sits until its 60s deadline, which makes
-			// `reminal stop` look like it didn't work.
-			t.connMu.Lock()
-			if t.conn != nil {
-				_ = t.conn.Close()
-			}
-			t.connMu.Unlock()
-			return
+		// Any of SIGINT/SIGTERM/SIGUSR1 shuts the forward down — a tunnel has no
+		// local shell to keep alive, so (unlike the shell agent) there's nothing
+		// to pause; `reminal stop` simply ends the forward.
+		<-sigCh
+		close(stop)
+		// Close the live WS too — otherwise the read in runConnection sits until
+		// its 60s deadline, which makes `reminal stop` look like it didn't work.
+		t.connMu.Lock()
+		if t.conn != nil {
+			_ = t.conn.Close()
 		}
+		t.connMu.Unlock()
 	}()
 
 	// Serve this machine's owner-derived directory channel too, so a machine
