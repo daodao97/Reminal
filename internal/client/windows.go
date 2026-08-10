@@ -174,7 +174,14 @@ func (a *Agent) windows() windowBackend {
 		a.winOps = make(chan func(), 64)
 		go func() {
 			for op := range a.winOps {
-				op()
+				// Recover per-op: window ops run backend calls (osascript/xdotool/
+				// screencapture, coordinate math) and some are driven by untrusted
+				// viewer input. A panic in one must NOT take down the whole agent —
+				// drop it and keep serving the queue.
+				func() {
+					defer func() { _ = recover() }()
+					op()
+				}()
 			}
 		}()
 	})
