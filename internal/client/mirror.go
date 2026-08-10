@@ -109,17 +109,31 @@ func handleMirrorConn(conn net.Conn) {
 		fmt.Fprintln(conn, "ok")
 		_ = conn.Close()
 	case "check":
-		out := "no"
-		if p, e := captureHelperPath(); e == nil {
-			if o, e := run(p, "check"); e == nil {
-				out = strings.TrimSpace(o)
-			}
-		}
-		fmt.Fprintf(conn, "%s\n", out)
-		_ = conn.Close()
+		writeHelperCheck(conn, "check") // Screen Recording preflight
+	case "axcheck":
+		writeHelperCheck(conn, "ax-check") // Accessibility preflight
+	case "autocheck":
+		writeHelperCheck(conn, "auto-check") // Automation preflight
 	default:
 		_ = conn.Close()
 	}
+}
+
+// writeHelperCheck runs the capture helper's non-prompting preflight subcommand in
+// the daemon's granted (sh.reminal) context and writes "ok"/"no" back, then closes
+// conn. The daemon is the ONLY place these checks report truthfully — run from a
+// session (Terminal) or via prlctl (prltoolsd) the TCC identity is wrong. Powers
+// the session-side polling that lets `reminal permissions` advance one grant at a
+// time.
+func writeHelperCheck(conn net.Conn, sub string) {
+	out := "no"
+	if p, e := captureHelperPath(); e == nil {
+		if o, e := run(p, sub); e == nil {
+			out = strings.TrimSpace(o)
+		}
+	}
+	fmt.Fprintf(conn, "%s\n", out)
+	_ = conn.Close()
 }
 
 // mirrorServeCapture streams a window's [uint32 BE len][JPEG] frames to conn by
@@ -356,7 +370,15 @@ func mirrorForwardInput(eventJSON string) {
 
 // mirrorCheck (session side) asks the daemon whether Screen Recording is granted
 // in its context. Returns "ok"/"no", or "" when the daemon is unreachable.
-func mirrorCheck() string {
+func mirrorCheck() string { return mirrorGrantQuery("check") }
+
+// mirrorGrantQuery (session side) asks the daemon to run one non-prompting
+// permission preflight in ITS granted (sh.reminal) context — "check" (Screen
+// Recording), "axcheck" (Accessibility), or "autocheck" (Automation). Returns
+// "ok"/"no", or "" when the daemon is unreachable. This is the only trustworthy
+// vantage point: the same check run from a session (Terminal) or via prlctl
+// (prltoolsd) reports the wrong identity. Drives `reminal permissions` polling.
+func mirrorGrantQuery(cmd string) string {
 	sock, err := mirrorSockPath()
 	if err != nil {
 		return ""
@@ -367,7 +389,7 @@ func mirrorCheck() string {
 	}
 	defer conn.Close()
 	_ = conn.SetDeadline(time.Now().Add(4 * time.Second))
-	if _, err := fmt.Fprintln(conn, "check"); err != nil {
+	if _, err := fmt.Fprintln(conn, cmd); err != nil {
 		return ""
 	}
 	var buf [16]byte

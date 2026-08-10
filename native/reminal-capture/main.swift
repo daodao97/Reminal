@@ -21,6 +21,7 @@ import ApplicationServices
 import CoreGraphics
 import CoreImage
 import CoreMedia
+import CoreServices
 import CoreVideo
 import Foundation
 import ImageIO
@@ -108,6 +109,39 @@ if args.count >= 2, args[1] == "accessibility" {
 // run `reminal permissions` instead of streaming silent black frames.
 if args.count >= 2, args[1] == "check" {
     print(CGPreflightScreenCaptureAccess() ? "ok" : "no")
+    exit(0)
+}
+
+// Preflight subcommand: `reminal-capture ax-check` reports Accessibility
+// (control-this-computer) status WITHOUT prompting — AXIsProcessTrusted (no
+// options) never shows the dialog, unlike the `accessibility` subcommand above.
+// The daemon runs this in its granted (sh.reminal) context so `reminal permissions`
+// can poll for the grant one step at a time. Prints "ok"/"no".
+if args.count >= 2, args[1] == "ax-check" {
+    print(AXIsProcessTrusted() ? "ok" : "no")
+    exit(0)
+}
+
+// Preflight subcommand: `reminal-capture auto-check` reports Automation (Apple
+// Events → System Events) status WITHOUT prompting, via
+// AEDeterminePermissionToAutomateTarget(askUserIfNeeded: false). noErr means the
+// grant is already in place; anything else (denied, undetermined, target not
+// running) counts as "not yet". The daemon runs this in its granted context for
+// `reminal permissions` polling. Prints "ok"/"no".
+if args.count >= 2, args[1] == "auto-check" {
+    let bundleID = "com.apple.systemevents"
+    var target = AEAddressDesc()
+    let bytes = Array(bundleID.utf8)
+    let created = bytes.withUnsafeBufferPointer { buf in
+        AECreateDesc(typeApplicationBundleID, buf.baseAddress, buf.count, &target)
+    }
+    if created != noErr {
+        print("no")
+        exit(0)
+    }
+    let status = AEDeterminePermissionToAutomateTarget(&target, typeWildCard, typeWildCard, false)
+    AEDisposeDesc(&target)
+    print(status == noErr ? "ok" : "no")
     exit(0)
 }
 

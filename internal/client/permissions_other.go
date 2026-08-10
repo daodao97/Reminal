@@ -14,5 +14,5 @@ func EnsurePermissions() error {
 	return nil
 }
 
-// RequestAllPermissions is a no-op off macOS.
-func RequestAllPermissions() error { return nil }
+// RequestPermission is a no-op off macOS.
+func RequestPermission(which string) error { return nil }

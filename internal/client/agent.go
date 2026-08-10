@@ -437,6 +437,15 @@ func NewAgentWith(version string, opts AgentOptions) (*Agent, error) {
 }
 
 func (a *Agent) Run() error {
+	// Correctness self-heal (idempotent, NOT version-gated): a foreground host
+	// running from reminal.app must have the always-on capture daemon — it performs
+	// all window/desktop capture + input under the one sh.reminal grant. If a prior
+	// upgrade/migration (or a manual app move) left it missing, install it now.
+	// No-op when already present, not bundled, or headless (those are spawned by the
+	// daemon, which by definition already exists).
+	if !a.headless {
+		EnsureDaemonInstalled()
+	}
 	// Banner goes to the host terminal only in foreground mode. Headless
 	// agents have no terminal — credentials are delivered to the parent
 	// `reminal new` process via the handshake fd and from there printed

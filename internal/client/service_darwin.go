@@ -97,6 +97,12 @@ func serviceInstalled(u *user.User) bool {
 	return err == nil
 }
 
+// runningFromBundle reports whether this binary is running from the reminal.app
+// bundle — the condition under which the always-on capture daemon must exist (so
+// EnsureDaemonInstalled auto-installs it). A bare/dev build returns false and keeps
+// using the terminal's own grants.
+func runningFromBundle() bool { return bundlePath() != "" }
+
 // restartService bounces the agent so it re-execs the binary at the plist's
 // path. No-op when the service isn't installed.
 func restartService(u *user.User) error {
