@@ -247,7 +247,7 @@ func (a *Agent) handleWebRTCHello(conn *websocket.Conn, encData string) {
 		// a blip that doesn't heal escalates to "failed", which lands here.
 		if s == webrtc.PeerConnectionStateFailed || s == webrtc.PeerConnectionStateClosed {
 			peer.open.Store(false)
-			a.dropRTCPeer(hello.Peer)
+			a.dropRTCPeer(hello.Peer, peer)
 		}
 	})
 
@@ -337,15 +337,18 @@ func (a *Agent) rtcPeerByID(id string) *rtcPeer {
 	return a.rtcPeers[id]
 }
 
-// dropRTCPeer tears down and forgets a peer connection.
-func (a *Agent) dropRTCPeer(id string) {
+// dropRTCPeer tears down a peer connection and forgets it — but only if it's
+// STILL the current peer for id. A reconnecting viewer replaces the map entry
+// under the same id and closes the old pc; that old pc's async state-change
+// callback lands here, and without the identity guard it would evict the fresh
+// peer that just took its place (killing the new P2P transport → WS fallback).
+func (a *Agent) dropRTCPeer(id string, p *rtcPeer) {
 	a.rtcMu.Lock()
-	peer := a.rtcPeers[id]
-	delete(a.rtcPeers, id)
-	a.rtcMu.Unlock()
-	if peer != nil {
-		_ = peer.pc.Close()
+	if a.rtcPeers[id] == p {
+		delete(a.rtcPeers, id)
 	}
+	a.rtcMu.Unlock()
+	_ = p.pc.Close()
 }
 
 // closeAllRTCPeers tears down every peer connection (e.g. last viewer left).
