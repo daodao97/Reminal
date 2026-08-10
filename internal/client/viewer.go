@@ -834,6 +834,7 @@ type pendingDownload struct {
 	name       string
 	total      int
 	chunks     map[int][]byte
+	bytes      int // running sum of decoded chunk bytes (bounds memory)
 	staleTimer *time.Timer
 }
 
@@ -879,6 +880,11 @@ func (v *Viewer) handleDownload(plaintext []byte) {
 		v.writeIncoming(safe, chunk)
 		return
 	}
+	if payload.Total > maxUploadChunks {
+		// A hostile host could send Total≈2e9 → make(map, Total) OOMs the viewer.
+		v.notify(fmt.Sprintf("download failed: too many chunks (%d; max %d)", payload.Total, maxUploadChunks))
+		return
+	}
 	if payload.Index < 0 || payload.Index >= payload.Total {
 		v.notify(fmt.Sprintf("download failed: bad chunk index %d/%d", payload.Index, payload.Total))
 		return
@@ -910,7 +916,15 @@ func (v *Viewer) handleDownload(plaintext []byte) {
 	}
 	// Late chunks reset the stale timer. Duplicates are ignored.
 	if _, dup := dl.chunks[payload.Index]; !dup {
+		if dl.bytes+len(chunk) > downloadMaxBytes {
+			dl.staleTimer.Stop()
+			delete(v.pendingDownloads, payload.DownloadID)
+			v.downloadsMu.Unlock()
+			v.notify(fmt.Sprintf("download %q aborted: exceeds %s", dl.name, humanByteSize(downloadMaxBytes)))
+			return
+		}
 		dl.chunks[payload.Index] = chunk
+		dl.bytes += len(chunk)
 	}
 	dl.staleTimer.Reset(uploadStaleTimeout)
 	complete := len(dl.chunks) == dl.total
