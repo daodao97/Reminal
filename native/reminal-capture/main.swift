@@ -18,6 +18,7 @@
 // non-zero, so the agent falls back to its screencapture path.
 
 import ApplicationServices
+import CoreGraphics
 import CoreImage
 import CoreMedia
 import CoreVideo
@@ -90,6 +91,15 @@ if args.count >= 2, args[1] == "accessibility" {
     let trusted = AXIsProcessTrustedWithOptions([key: true] as CFDictionary)
     print(trusted ? "granted" : "denied")
     exit(trusted ? 0 : 1)
+}
+
+// Preflight subcommand: `reminal-capture check` reports Screen Recording status
+// WITHOUT prompting (CGPreflightScreenCaptureAccess — native; the JXA bridge
+// doesn't expose it). Prints "ok"/"no". The agent uses this to warn a viewer to
+// run `reminal permissions` instead of streaming silent black frames.
+if args.count >= 2, args[1] == "check" {
+    print(CGPreflightScreenCaptureAccess() ? "ok" : "no")
+    exit(0)
 }
 
 func die(_ msg: String) -> Never {

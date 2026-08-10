@@ -29,17 +29,26 @@ func (darwinWindows) unsupported() string {
 	return ""
 }
 
-// permissionHint asks CoreGraphics whether this process holds Screen Recording
-// permission. Without it, macOS still lets us enumerate windows but hands back
-// black/empty captures — so we warn instead of showing silent blank panes.
-// CGPreflightScreenCaptureAccess doesn't prompt, so it's safe to call often.
+// permissionHint reports whether this process holds Screen Recording permission,
+// returning a viewer-facing warning if not. Without it macOS still enumerates
+// windows but hands back black/empty captures — so we tell the user how to fix it
+// instead of showing silent blank panes.
+//
+// Detection goes through reminal-capture's `check` (a native, non-prompting
+// CGPreflightScreenCaptureAccess). The old osascript/JXA check was dead code —
+// $.CGPreflightScreenCaptureAccess is undefined in JavaScript-for-Automation, so
+// the call always errored and the hint never fired. No helper (screencapture-only
+// path) => we can't cheaply preflight, so stay quiet rather than warn spuriously.
 func (darwinWindows) permissionHint() string {
-	out, err := run("osascript", "-l", "JavaScript", "-e",
-		`ObjC.import('CoreGraphics'); $.CGPreflightScreenCaptureAccess() ? 'ok' : 'no'`)
+	p, err := captureHelperPath()
+	if err != nil {
+		return ""
+	}
+	out, err := run(p, "check")
 	if err == nil && strings.TrimSpace(out) == "no" {
-		return "Screen Recording is off, so windows list but can't be captured. " +
-			"Enable it for your terminal in System Settings ▸ Privacy & Security ▸ " +
-			"Screen Recording, then reconnect."
+		return "Screen Recording isn't granted for reminal on this Mac, so windows " +
+			"list but can't be mirrored. Run  reminal permissions  on the host to " +
+			"grant it (and remote-control access), then reopen the window."
 	}
 	return ""
 }
