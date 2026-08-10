@@ -794,9 +794,18 @@
     .wpane-info .v.ws { color: #f0883e; }
     /* Warning banner atop the Windows dropdown (e.g. Screen Recording is off). */
     .windows-hint {
-      margin: 6px; padding: 8px 10px; border-radius: 6px; font-size: 11.5px; line-height: 1.45;
+      margin: 6px; padding: 8px 10px; border-radius: 6px; font-size: 11.5px; line-height: 1.6;
       background: rgba(187, 128, 9, 0.15); border: 1px solid rgba(187, 128, 9, 0.5); color: #e3b341;
     }
+    .windows-hint .cmd {
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px;
+      background: rgba(0, 0, 0, 0.35); color: #e6edf3; padding: 1px 5px; border-radius: 4px; white-space: nowrap;
+    }
+    .windows-hint .copy-cmd {
+      margin-left: 5px; font-size: 10.5px; padding: 2px 8px; cursor: pointer; vertical-align: baseline;
+      background: #21262d; color: #adbac7; border: 1px solid #30363d; border-radius: 4px;
+    }
+    .windows-hint .copy-cmd:hover { background: #30363d; color: #e6edf3; }
     .windows-note { padding: 12px; color: #8b949e; font-size: 12px; line-height: 1.5; }
     /* Search box atop the Apps launcher (the app list can be long). */
     .apps-search {
@@ -1058,10 +1067,19 @@
     let hostNewError = '';
     let hostNewTimer = null;
     let hostDesktopErr = '';
+    let hostDesktopHint = ''; // permission hint under "View full desktop"
     // Open a mirror pane for each display the host lists. An agent that's too
     // old (or a platform without desktop capture) lists none — say so briefly.
     async function openDesktopPanes() {
       const wins = await nextWindowList();
+      // Screen Recording not granted → the desktop would just stream black. Surface
+      // the same "run reminal permissions" hint here rather than open dead panes.
+      if (winHint) {
+        hostDesktopHint = winHint;
+        renderHost();
+        return;
+      }
+      hostDesktopHint = '';
       const displays = wins.filter(w => (w.id || '').startsWith('display:'));
       if (!displays.length) {
         hostDesktopErr = 'Not supported by this host';
@@ -1254,6 +1272,7 @@
       // input pipeline as single windows, keyed by "display:<id>" entries the
       // agent appends to the window list.
       html += '<button class="host-desktop">' + (hostDesktopErr ? hostDesktopErr : 'View full desktop') + '</button>';
+      if (hostDesktopHint) html += '<div class="windows-hint">' + permHintHTML(hostDesktopHint) + '</div>';
       // Always show this browser's device fingerprint so it can be matched to a
       // row in `reminal owners` (or the web owners list) without a label.
       if (ownFp) html += '<div class="own-fp">This browser · <code>' + ownFp + '</code></div>';
@@ -5504,10 +5523,32 @@
       ));
     }
 
+    // Render a permission hint, turning the literal `reminal permissions` command
+    // into a monospace chip with a copy button — obvious, and one tap to copy on a
+    // phone. Returns an HTML string; caller assigns it to innerHTML.
+    function permHintHTML(text) {
+      const cmd = 'reminal permissions';
+      const chip = '<code class="cmd">' + cmd + '</code>' +
+        '<button class="copy-cmd" data-cmd="' + cmd + '" title="Copy command">copy</button>';
+      return escapeHtml(text).split(cmd).join(chip);
+    }
+
+    // Copy button (in permission hints). Capture-phase so it wins before any pane
+    // handler can swallow the click.
+    document.addEventListener('click', e => {
+      const b = e.target.closest && e.target.closest('.copy-cmd');
+      if (!b) return;
+      e.preventDefault();
+      const cmd = b.getAttribute('data-cmd') || '';
+      try { navigator.clipboard.writeText(cmd); } catch (_) { /* insecure ctx / denied */ }
+      const prev = b.textContent; b.textContent = 'copied';
+      setTimeout(() => { b.textContent = prev; }, 1200);
+    }, true);
+
     function renderWindows() {
       winListRoot.innerHTML = '';
       if (winHint) {
-        const h = document.createElement('div'); h.className = 'windows-hint'; h.textContent = winHint;
+        const h = document.createElement('div'); h.className = 'windows-hint'; h.innerHTML = permHintHTML(winHint);
         winListRoot.appendChild(h);
       }
       if (winList.length === 0) {
