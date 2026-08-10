@@ -64,7 +64,7 @@ jobs:
           swiftc -O -target ${{ matrix.swift_target }} -o reminal-capture native/reminal-capture/main.swift
           codesign --force --sign - reminal-capture || true
 
-      - name: Sign (macOS — self-signed, for a stable TCC identity)
+      - name: Assemble & sign reminal.app (macOS)
         if: matrix.goos == 'darwin'
         env:
           MACOS_CERT_P12: ${{ secrets.MACOS_CERT_P12 }}
@@ -72,21 +72,21 @@ jobs:
           MACOS_CERT_IDENTITY: ${{ secrets.MACOS_CERT_IDENTITY }}
         run: |
           set -euo pipefail
+          # Package the CLI + capture helper + icon into ONE signed reminal.app.
+          # macOS keys a Screen Recording (TCC) grant to a code identity and only
+          # shows a custom icon for an .app — so the bundle gives one identity
+          # (sh.reminal) the user grants once, which then covers the background
+          # daemon's ("+"-spawned) sessions too. build-app.sh signs the nested
+          # helper as sh.reminal.capture and seals the bundle as sh.reminal.
           if [ -z "${MACOS_CERT_P12}" ]; then
-            echo "No signing cert (secret MACOS_CERT_P12 empty) — leaving binaries ad-hoc signed."
-            echo "macOS TCC grants (e.g. Screen Recording for '+'-spawned sessions) won't persist"
-            echo "across versions until a cert is configured. See docs/macos-signing.md."
+            echo "No signing cert (secret MACOS_CERT_P12 empty) — assembling reminal.app ad-hoc."
+            echo "macOS Screen Recording grants won't persist across versions until a cert is set."
+            VERSION="$VERSION" bash scripts/build-app.sh . . -
             exit 0
           fi
-          # Sign with a self-signed code-signing cert (no Apple Developer account
-          # needed). The point isn't Gatekeeper trust — it's a STABLE identity:
-          # macOS anchors a TCC permission to the code's Designated Requirement
-          # (a fixed identifier + this certificate), which stays constant across
-          # every release signed with the same cert. So a user grants reminal once
-          # (e.g. Screen Recording, needed for background-host-spawned sessions
-          # that run outside the terminal's grant) instead of on every upgrade.
-          # Not notarized — fine, because Homebrew doesn't quarantine formula
-          # binaries, so Gatekeeper never gates them.
+          # Self-signed cert => STABLE Designated Requirement (fixed identifier +
+          # this cert), so a user's grant persists across every upgrade. Not
+          # notarized — install.sh strips quarantine, so Gatekeeper never gates it.
           KEYCHAIN="$RUNNER_TEMP/reminal-sign.keychain-db"
           KPW="$(openssl rand -base64 24)"
           CERT="$RUNNER_TEMP/cert.p12"
@@ -99,14 +99,10 @@ jobs:
           security set-key-partition-list -S apple-tool:,apple: -s -k "$KPW" "$KEYCHAIN" >/dev/null
           # Put our keychain first in the search list so codesign resolves the identity.
           security list-keychains -d user -s "$KEYCHAIN" $(security list-keychains -d user | sed 's/"//g')
-          # Stable identifiers → stable Designated Requirement across versions.
-          codesign --force --timestamp=none --identifier sh.reminal --sign "$MACOS_CERT_IDENTITY" reminal
-          if [ -f reminal-capture ]; then
-            codesign --force --timestamp=none --identifier sh.reminal.capture --sign "$MACOS_CERT_IDENTITY" reminal-capture
-          fi
+          VERSION="$VERSION" KEYCHAIN="$KEYCHAIN" bash scripts/build-app.sh . . "$MACOS_CERT_IDENTITY"
           echo "--- signature ---"
-          codesign -dvvv reminal 2>&1 | grep -Ei "Identifier|Authority|Signature|CDHash" || true
-          codesign --verify --strict --verbose=2 reminal
+          codesign -dvvv reminal.app 2>&1 | grep -Ei "Identifier|Authority|Signature" || true
+          codesign --verify --deep --strict --verbose=2 reminal.app
 
       - name: Package
         env:
@@ -114,9 +110,14 @@ jobs:
           GOARCH: ${{ matrix.goarch }}
         run: |
           ARCHIVE="reminal_${VERSION}_${GOOS}_${GOARCH}.tar.gz"
-          FILES="reminal"
-          [ -f reminal-capture ] && FILES="$FILES reminal-capture"
-          tar czf "${ARCHIVE}" $FILES
+          if [ "$GOOS" = "darwin" ] && [ -d reminal.app ]; then
+            # macOS ships the signed bundle; tar preserves the signature + icon.
+            tar czf "${ARCHIVE}" reminal.app
+          else
+            FILES="reminal"
+            [ -f reminal-capture ] && FILES="$FILES reminal-capture"
+            tar czf "${ARCHIVE}" $FILES
+          fi
           echo "ARCHIVE=${ARCHIVE}" >> "$GITHUB_ENV"
 
       - name: Write release notes
@@ -130,3 +131,7 @@ jobs:
         with:
           body_path: release-notes.md
           files: reminal_*.tar.gz
+          # Any tag with a hyphen (v2.2.0-rc.1, -beta…) is a prerelease, so it
+          # doesn't become /releases/latest — install.sh keeps resolving the last
+          # stable for everyone while we validate a candidate.
+          prerelease: ${{ contains(github.ref_name, '-') }}

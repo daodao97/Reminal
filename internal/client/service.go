@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"os/user"
+	"path/filepath"
 )
 
 // Service identifiers + the pure generators for the two platforms' service
@@ -107,6 +108,13 @@ func InstallDaemonService() error {
 	exe, err := os.Executable()
 	if err != nil {
 		return err
+	}
+	// Follow symlinks so the service runs the REAL binary. On macOS the installed
+	// CLI is a symlink into reminal.app; the daemon must exec the bundle's binary
+	// directly so it runs as the sh.reminal identity — the one whose Screen
+	// Recording grant covers the ("+") sessions the daemon spawns.
+	if resolved, rerr := filepath.EvalSymlinks(exe); rerr == nil {
+		exe = resolved
 	}
 	return installService(exe, u)
 }

@@ -121,6 +121,19 @@ func main() {
 				os.Exit(1)
 			}
 			return
+		case "permissions", "permission":
+			// macOS: surface the Screen Recording prompt for the reminal.app
+			// identity so one grant covers background ("+") sessions too.
+			if err := client.EnsureScreenRecording(); err != nil {
+				fmt.Fprintf(os.Stderr, "error: %v\n", err)
+				os.Exit(1)
+			}
+			return
+		case "__request-screen-recording":
+			// Hidden: runs INSIDE the LaunchServices-launched reminal.app (see
+			// `reminal permissions`) to trigger the TCC prompt as sh.reminal.
+			_ = client.RequestScreenRecordingViaHelper()
+			return
 		case "settings":
 			if err := runSettings(os.Args[2:]); err != nil {
 				fmt.Fprintf(os.Stderr, "error: %v\n", err)

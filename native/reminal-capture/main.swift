@@ -61,6 +61,24 @@ if args.count >= 2, args[1] == "scroll" {
     exit(0)
 }
 
+// Permission subcommand: `reminal-capture request` asks ScreenCaptureKit for
+// shareable content purely to surface the Screen Recording (TCC) prompt, then
+// reports. `reminal permissions` runs this via `open`ing the reminal.app, so the
+// prompt is attributed to the bundle identity (sh.reminal) — the one grant that
+// then covers the background daemon — instead of the terminal. Prints
+// "granted"/"denied" and exits 0/1.
+if args.count >= 2, args[1] == "request" {
+    let sem = DispatchSemaphore(value: 0)
+    var ok = false
+    SCShareableContent.getWithCompletionHandler { content, err in
+        ok = err == nil && content != nil
+        sem.signal()
+    }
+    _ = sem.wait(timeout: .now() + 120)
+    print(ok ? "granted" : "denied")
+    exit(ok ? 0 : 1)
+}
+
 func die(_ msg: String) -> Never {
     FileHandle.standardError.write(Data((msg + "\n").utf8))
     exit(1)

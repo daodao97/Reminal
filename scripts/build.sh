@@ -30,6 +30,14 @@ if [[ "$(uname)" == "Darwin" ]]; then
     swiftc -O -target "$(uname -m)-apple-macos12.3" -o "${HELPER}" native/reminal-capture/main.swift
     codesign --force --sign - "${HELPER}" >/dev/null 2>&1 || true
     echo "Built ${HELPER}"
+    # Assemble reminal.app so local builds match the release layout (one signed
+    # bundle: CLI + helper + icon). Ad-hoc signed here — an ad-hoc bundle can't
+    # persist a Screen Recording grant (releases use the stable cert), but it's
+    # enough to exercise the bundle path locally.
+    OUT_DIR="$(dirname "${OUTPUT}")"
+    if [ -f assets/reminal.icns ]; then
+      VERSION="${VERSION}" "$(dirname "$0")/build-app.sh" "${OUT_DIR}" "${OUT_DIR}" - >/dev/null && echo "Assembled ${OUT_DIR}/reminal.app"
+    fi
   else
     echo "swiftc not found — skipping capture helper (window mirror will use screencapture)"
   fi

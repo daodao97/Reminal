@@ -317,6 +317,7 @@ The mirroring you see above isn't macOS-only — window capture **and** full con
 | `reminal qr [id\|name]` | Print just the join QR (for a second screen) |
 | `reminal settings` | Settings page: keep the Mac unlocked for remote control; **closed-lid mode** (serve with the lid shut and nothing plugged in — disables clamshell sleep, auto-creates a virtual display while headless) |
 | `reminal doctor` | Self-diagnostic: version, relay reachability, terminal, shell |
+| `reminal permissions` | macOS: grant Screen Recording to reminal once, so background (`+`) sessions can mirror windows |
 | `reminal completion <bash\|zsh\|fish>` | Print a shell completion script |
 | `reminal upgrade` | Upgrade to the latest release |
 | `reminal relay [port]` | Start a local relay (development only) |

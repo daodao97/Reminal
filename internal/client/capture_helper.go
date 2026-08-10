@@ -71,6 +71,13 @@ func captureHelperPath() (string, error) {
 		return "", fmt.Errorf("REMINAL_CAPTURE_HELPER=%s not found", p)
 	}
 	if exe, err := os.Executable(); err == nil {
+		// Resolve symlinks: the release installs reminal.app and symlinks the CLI
+		// (~/.local/bin/reminal -> reminal.app/Contents/MacOS/reminal), so the
+		// helper lives next to the RESOLVED path (inside the bundle), not next to
+		// the symlink.
+		if resolved, rerr := filepath.EvalSymlinks(exe); rerr == nil {
+			exe = resolved
+		}
 		cand := filepath.Join(filepath.Dir(exe), "reminal-capture")
 		if st, err := os.Stat(cand); err == nil && !st.IsDir() {
 			return cand, nil

@@ -138,18 +138,43 @@ curl -fsSL -o "$TMPDIR/$TARBALL" "$URL"
 tar -xzf "$TMPDIR/$TARBALL" -C "$TMPDIR"
 
 mkdir -p "$INSTALL_DIR"
-mv "$TMPDIR/reminal" "$INSTALL_DIR/reminal"
-chmod +x "$INSTALL_DIR/reminal"
 
-# macOS: a binary downloaded via curl is not quarantined by Gatekeeper (only
-# downloads from browsers/Mail/etc. get the com.apple.quarantine xattr), but
-# strip it defensively in case a future install method re-introduces it.
-if [ "$OS" = "darwin" ]; then
-    xattr -d com.apple.quarantine "$INSTALL_DIR/reminal" 2>/dev/null || true
+# macOS ships reminal.app — a signed bundle holding the CLI, the ScreenCaptureKit
+# helper, and the icon under ONE code identity, so a single Screen Recording grant
+# also covers the background daemon (the "+" sessions). Install the bundle to
+# ~/Applications and symlink the CLI onto PATH so `reminal` works exactly as
+# before. Linux (and any older bare-binary release) installs the plain binary.
+APP_DIR="${REMINAL_APP_DIR:-$HOME/Applications}"
+if [ "$OS" = "darwin" ] && [ -d "$TMPDIR/reminal.app" ]; then
+    mkdir -p "$APP_DIR"
+    rm -rf "$APP_DIR/reminal.app"
+    mv "$TMPDIR/reminal.app" "$APP_DIR/reminal.app"
+    xattr -dr com.apple.quarantine "$APP_DIR/reminal.app" 2>/dev/null || true
+    ln -sf "$APP_DIR/reminal.app/Contents/MacOS/reminal" "$INSTALL_DIR/reminal"
+    # Register with LaunchServices so Finder/Settings show the icon.
+    _lsr="/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister"
+    [ -x "$_lsr" ] && "$_lsr" -f "$APP_DIR/reminal.app" >/dev/null 2>&1 || true
+    INSTALLED_DESC="${APP_DIR}/reminal.app (CLI: ${INSTALL_DIR}/reminal)"
+else
+    mv "$TMPDIR/reminal" "$INSTALL_DIR/reminal"
+    chmod +x "$INSTALL_DIR/reminal"
+    # macOS: a binary downloaded via curl is not quarantined by Gatekeeper (only
+    # downloads from browsers/Mail/etc. get the com.apple.quarantine xattr), but
+    # strip it defensively in case a future install method re-introduces it.
+    [ "$OS" = "darwin" ] && xattr -d com.apple.quarantine "$INSTALL_DIR/reminal" 2>/dev/null || true
+    INSTALLED_DESC="${INSTALL_DIR}/reminal"
 fi
 
 echo
-echo "Installed reminal v${VERSION} to ${INSTALL_DIR}/reminal"
+echo "Installed reminal v${VERSION} to ${INSTALLED_DESC}"
+
+# macOS: window mirroring from background ("+") sessions needs a one-time Screen
+# Recording grant to the reminal.app identity, surfaced by `reminal permissions`.
+if [ "$OS" = "darwin" ] && [ -d "$APP_DIR/reminal.app" ]; then
+    echo
+    echo "To mirror windows from background (\"+\") sessions, grant Screen Recording once:"
+    echo "  reminal permissions"
+fi
 
 # Set up shell integration: PATH + tab-completion (best-effort).
 setup_shell || true

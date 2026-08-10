@@ -322,10 +322,18 @@ func apply(url string) error {
 	defer gz.Close()
 	tr := tar.NewReader(gz)
 
-	// The darwin archives carry the reminal binary AND the reminal-capture native
-	// window-capture helper. Install both, each atomically. The helper is a
-	// best-effort sidecar: a failure to place it doesn't fail the upgrade (the
-	// window mirror just falls back to screencapture).
+	// macOS ships a signed reminal.app. Swap the WHOLE bundle so its code
+	// signature — and thus the user's Screen Recording grant, which is anchored to
+	// the bundle's Designated Requirement — stays intact. (Replacing just the
+	// inner binary would break the seal.)
+	if root := bundleRoot(bin); root != "" {
+		return applyBundle(tr, root)
+	}
+
+	// The (linux, or legacy darwin) archives carry the reminal binary AND the
+	// reminal-capture native window-capture helper. Install both, each atomically.
+	// The helper is a best-effort sidecar: a failure to place it doesn't fail the
+	// upgrade (the window mirror just falls back to screencapture).
 	dir := filepath.Dir(bin)
 	installedBin := false
 	for {
@@ -349,6 +357,101 @@ func apply(url string) error {
 	if !installedBin {
 		return errors.New("reminal binary not found in archive")
 	}
+	return nil
+}
+
+// bundleRoot returns the path to the enclosing reminal.app if bin lives inside a
+// macOS bundle (…/reminal.app/Contents/MacOS/reminal), else "". Used to decide
+// whether a self-update should swap a whole .app or a loose binary.
+func bundleRoot(bin string) string {
+	if runtime.GOOS != "darwin" {
+		return ""
+	}
+	macos := filepath.Dir(bin)      // …/Contents/MacOS
+	contents := filepath.Dir(macos) // …/Contents
+	app := filepath.Dir(contents)   // …/reminal.app
+	if filepath.Base(macos) == "MacOS" && filepath.Base(contents) == "Contents" &&
+		strings.HasSuffix(app, ".app") {
+		return app
+	}
+	return ""
+}
+
+// applyBundle installs a new reminal.app from the tar stream: extract it to a
+// staging dir beside the current bundle, then swap directories. The running
+// process keeps its old binary inode until it hot-restarts from the same bundle
+// path, so this is safe to do live. Rolls back the swap on failure.
+func applyBundle(tr *tar.Reader, appRoot string) error {
+	parent := filepath.Dir(appRoot)
+	staging, err := os.MkdirTemp(parent, ".reminal-app.new-*")
+	if err != nil {
+		return fmt.Errorf("staging dir: %w", err)
+	}
+	defer os.RemoveAll(staging)
+
+	const root = "reminal.app"
+	seen := false
+	for {
+		hdr, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return fmt.Errorf("tar: %w", err)
+		}
+		name := strings.TrimPrefix(filepath.Clean(hdr.Name), "./")
+		if name != root && !strings.HasPrefix(name, root+string(filepath.Separator)) {
+			continue // ignore anything outside the bundle
+		}
+		seen = true
+		target := filepath.Join(staging, name)
+		switch hdr.Typeflag {
+		case tar.TypeDir:
+			if err := os.MkdirAll(target, 0o755); err != nil {
+				return err
+			}
+		case tar.TypeSymlink:
+			if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+				return err
+			}
+			_ = os.Remove(target)
+			if err := os.Symlink(hdr.Linkname, target); err != nil {
+				return err
+			}
+		case tar.TypeReg:
+			if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+				return err
+			}
+			f, err := os.OpenFile(target, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, os.FileMode(hdr.Mode&0o777))
+			if err != nil {
+				return err
+			}
+			if _, err := io.Copy(f, tr); err != nil { //nolint:gosec // release asset, sized by CDN
+				_ = f.Close()
+				return err
+			}
+			if err := f.Close(); err != nil {
+				return err
+			}
+		}
+	}
+	if !seen {
+		return errors.New("reminal.app not found in archive")
+	}
+	newApp := filepath.Join(staging, root)
+
+	// Swap: move the old bundle aside, move the new one in, drop the old. The
+	// window between renames is tiny; roll back if the second rename fails.
+	backup := appRoot + ".old"
+	_ = os.RemoveAll(backup)
+	if err := os.Rename(appRoot, backup); err != nil {
+		return fmt.Errorf("move old bundle: %w", err)
+	}
+	if err := os.Rename(newApp, appRoot); err != nil {
+		_ = os.Rename(backup, appRoot) // roll back
+		return fmt.Errorf("install new bundle: %w", err)
+	}
+	_ = os.RemoveAll(backup)
 	return nil
 }
 
