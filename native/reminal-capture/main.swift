@@ -17,6 +17,7 @@
 // problems (permission denied, window gone) print one line to stderr and exit
 // non-zero, so the agent falls back to its screencapture path.
 
+import ApplicationServices
 import CoreImage
 import CoreMedia
 import CoreVideo
@@ -77,6 +78,18 @@ if args.count >= 2, args[1] == "request" {
     _ = sem.wait(timeout: .now() + 120)
     print(ok ? "granted" : "denied")
     exit(ok ? 0 : 1)
+}
+
+// Permission subcommand: `reminal-capture accessibility` surfaces the
+// Accessibility (TCC) prompt — needed because injected mouse/scroll/click events
+// (CGEvent → .cghidEventTap) are silently dropped without it. AXIsProcessTrusted
+// WithOptions(prompt:true) shows the "…would like to control this computer" dialog
+// when untrusted. Prints "granted"/"denied".
+if args.count >= 2, args[1] == "accessibility" {
+    let key = kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String
+    let trusted = AXIsProcessTrustedWithOptions([key: true] as CFDictionary)
+    print(trusted ? "granted" : "denied")
+    exit(trusted ? 0 : 1)
 }
 
 func die(_ msg: String) -> Never {

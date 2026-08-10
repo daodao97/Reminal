@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 // bundlePath returns the path to the containing reminal.app if this binary lives
@@ -34,43 +35,52 @@ func bundlePath() string {
 	return ""
 }
 
-// RequestScreenRecordingViaHelper runs the capture helper's `request` mode to
-// surface the Screen Recording (TCC) prompt, then returns. It's invoked by the
-// hidden `__request-screen-recording` subcommand, which runs INSIDE the
-// LaunchServices-launched .app — so the prompt is attributed to the bundle
-// identity (sh.reminal), the single grant that also covers the background daemon.
-func RequestScreenRecordingViaHelper() error {
-	helper, err := captureHelperPath()
-	if err != nil {
-		return err
+// RequestAllPermissions surfaces the three TCC prompts reminal needs — Screen
+// Recording (mirror windows/desktop), Accessibility (injected mouse/scroll/click
+// for remote control), and Automation (control "System Events" for typing +
+// window focus) — one after another. Invoked by the hidden `__request-permissions`
+// subcommand, which runs INSIDE the LaunchServices-launched .app so each prompt is
+// attributed to the bundle identity (sh.reminal); those grants then cover the
+// background daemon's ("+") sessions too.
+func RequestAllPermissions() error {
+	if helper, err := captureHelperPath(); err == nil {
+		_ = exec.Command(helper, "request").Run() // Screen Recording (SCK)
+		time.Sleep(600 * time.Millisecond)
+		_ = exec.Command(helper, "accessibility").Run() // Accessibility (CGEvent)
+		time.Sleep(600 * time.Millisecond)
 	}
-	// Blocks until the user responds or the helper's timeout — its stdout
-	// ("granted"/"denied") is informational; the visible prompt is the point.
-	_ = exec.Command(helper, "request").Run()
+	// Automation: a benign query to System Events triggers the "…wants to control
+	// System Events" prompt. Blocks until the user answers.
+	_ = exec.Command("/usr/bin/osascript", "-e",
+		`tell application "System Events" to get name of first process`).Run()
 	return nil
 }
 
-// EnsureScreenRecording implements `reminal permissions`. When reminal is
-// installed as reminal.app, a normal foreground `reminal` in a terminal rides the
-// TERMINAL's Screen Recording grant and never prompts for reminal's own identity,
-// and the background daemon can't prompt at all — so window mirroring silently
-// fails for daemon-spawned ("+") sessions. This re-launches the .app via
-// LaunchServices with a hidden flag so the prompt is attributed to sh.reminal;
-// granting it once covers every session, including the daemon's.
-func EnsureScreenRecording() error {
+// EnsurePermissions implements `reminal permissions`. When reminal is installed as
+// reminal.app, a normal foreground `reminal` in a terminal rides the TERMINAL's
+// grants and never prompts for reminal's own identity, and the background daemon
+// can't prompt at all — so viewing AND control silently fail for daemon-spawned
+// ("+") sessions. This re-launches the .app via LaunchServices with a hidden flag
+// so the prompts are attributed to sh.reminal; granting them once covers every
+// session, including the daemon's.
+func EnsurePermissions() error {
 	app := bundlePath()
 	if app == "" {
-		fmt.Println("Screen Recording permission only applies to the packaged reminal.app.")
-		fmt.Println("This build isn't a bundle, so window mirroring uses your terminal's grant.")
+		fmt.Println("These permissions only apply to the packaged reminal.app.")
+		fmt.Println("This build isn't a bundle, so it uses your terminal's grants.")
 		return nil
 	}
-	if err := exec.Command("/usr/bin/open", "-a", app, "--args", "__request-screen-recording").Run(); err != nil {
+	if err := exec.Command("/usr/bin/open", "-a", app, "--args", "__request-permissions").Run(); err != nil {
 		return fmt.Errorf("launch reminal.app: %w", err)
 	}
-	fmt.Println("A “reminal would like to record the screen” dialog should appear.")
-	fmt.Println("→ Click Open System Settings, then enable reminal under")
-	fmt.Println("  Privacy & Security ▸ Screen & System Audio Recording.")
+	fmt.Println("Three permission dialogs will appear — grant all of them so both")
+	fmt.Println("viewing AND remote control work from background (“+”) sessions:")
 	fmt.Println()
-	fmt.Println("That single grant lets background sessions (the “+” button) mirror windows.")
+	fmt.Println("  1. Screen Recording  — mirror windows and the desktop")
+	fmt.Println("  2. Accessibility     — move the cursor, click, scroll, drag")
+	fmt.Println("  3. Automation        — type text + focus windows (control “System Events”)")
+	fmt.Println()
+	fmt.Println("For #1 and #2, click Open System Settings and enable reminal; for #3 click OK.")
+	fmt.Println("Granting all three now avoids surprise prompts when you're away from the Mac.")
 	return nil
 }

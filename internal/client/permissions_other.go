@@ -7,12 +7,12 @@ package client
 
 import "fmt"
 
-// EnsureScreenRecording is a no-op off macOS — Screen Recording (TCC) is a macOS
-// concept. Linux window mirroring has no per-app screen-capture gate.
-func EnsureScreenRecording() error {
-	fmt.Println("Screen Recording permission is macOS-only; nothing to configure here.")
+// EnsurePermissions is a no-op off macOS — Screen Recording / Accessibility /
+// Automation (TCC) are macOS concepts. Linux window mirroring has no per-app gate.
+func EnsurePermissions() error {
+	fmt.Println("These permissions are macOS-only; nothing to configure here.")
 	return nil
 }
 
-// RequestScreenRecordingViaHelper is a no-op off macOS.
-func RequestScreenRecordingViaHelper() error { return nil }
+// RequestAllPermissions is a no-op off macOS.
+func RequestAllPermissions() error { return nil }
