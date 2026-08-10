@@ -26,6 +26,16 @@ const orphanTTL = 10 * time.Minute
 // fast on subsequent writes.
 const wsWriteWait = 30 * time.Second
 
+// Read deadlines bound how long a connection may sit silent before we drop it and
+// reclaim its goroutine. Without them a peer that connects and never speaks — never
+// even authenticating — leaks a goroutine forever (slow-loris). authWait is a tight
+// window to send the first Auth/Register frame; readWait is the steady-state
+// liveness budget once attached, comfortably above the clients' 30s ping cadence.
+var (
+	authWait = 20 * time.Second
+	readWait = 90 * time.Second
+)
+
 var upgrader = websocket.Upgrader{
 	ReadBufferSize:  4096,
 	WriteBufferSize: 4096,
@@ -117,7 +127,13 @@ func (s *Server) handleSessionConn(sessionID string, role protocol.Role, conn *w
 	defer conn.Close()
 	defer s.detach(sessionID, role, conn)
 
+	authed := false
 	for {
+		wait := authWait
+		if authed {
+			wait = readWait
+		}
+		_ = conn.SetReadDeadline(time.Now().Add(wait))
 		_, raw, err := conn.ReadMessage()
 		if err != nil {
 			return
@@ -152,6 +168,7 @@ func (s *Server) handleSessionConn(sessionID string, role protocol.Role, conn *w
 				return
 			}
 			p.authed = true
+			authed = true // loosen this conn's read deadline to the liveness budget
 			// Compute presence flags for notifications after unlock.
 			agentOnline := r.agent != nil && r.agent.authed
 			anyViewerOnline := false
@@ -296,6 +313,11 @@ func (s *Server) handleLegacyConn(conn *websocket.Conn) {
 	var role protocol.Role
 
 	for {
+		wait := authWait
+		if registered {
+			wait = readWait
+		}
+		_ = conn.SetReadDeadline(time.Now().Add(wait))
 		_, raw, err := conn.ReadMessage()
 		if err != nil {
 			break
