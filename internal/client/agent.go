@@ -1151,6 +1151,7 @@ type pendingUpload struct {
 	ttlSeconds int
 	total      int            // total chunks expected
 	chunks     map[int][]byte // index -> decoded bytes
+	bytes      int            // running sum of decoded chunk bytes (bounds memory)
 	startedAt  time.Time
 	staleTimer *time.Timer
 	// progress notice is sent at the start; final notice on completion
@@ -1172,6 +1173,15 @@ const maxUploadTTLSeconds = 365 * 24 * 60 * 60
 // chunks to stay well under the Cloudflare DO 1 MiB WS message limit
 // (with base64 + encryption overhead).
 const uploadChunkMaxBytes = 768 * 1024
+
+// maxUploadChunks bounds the viewer-supplied chunk count so make(map, Total)
+// can't be steered into a multi-GB preallocation (Total is attacker-controlled;
+// an unbounded value like 2e9 OOMs the host on the first chunk). Derived from a
+// conservative 64 KiB floor chunk so it never rejects a legitimate ≤100 MiB
+// upload even if a client chunks far smaller than the 256 KiB web default.
+// Accumulated bytes are bounded separately and exactly (see pendingUpload.bytes).
+const minUploadChunkFloor = 64 * 1024
+const maxUploadChunks = downloadMaxBytes / minUploadChunkFloor
 
 // handleUpload decrypts a TypeUpload message and either finalizes a
 // single-shot upload (no upload_id) or routes a chunk into the
@@ -1239,6 +1249,10 @@ func (a *Agent) handleUpload(encData string) {
 	}
 
 	// Chunked path. Validate then add to pending map.
+	if payload.Total > maxUploadChunks {
+		a.broadcastNotice(fmt.Sprintf("upload failed: too many chunks (%d; max %d)", payload.Total, maxUploadChunks))
+		return
+	}
 	if payload.Index < 0 || payload.Index >= payload.Total {
 		a.broadcastNotice(fmt.Sprintf("upload failed: bad chunk index %d/%d", payload.Index, payload.Total))
 		return
@@ -1272,7 +1286,19 @@ func (a *Agent) handleUpload(encData string) {
 	}
 	// Late chunks reset the stale timer. Duplicates are ignored.
 	if _, dup := up.chunks[payload.Index]; !dup {
+		// Bound accumulated memory exactly: a hostile client can claim a large
+		// Total (up to maxUploadChunks) and send full-size chunks, so the chunk
+		// count cap alone permits far more than downloadMaxBytes. Abort the
+		// upload the moment its decoded bytes would exceed the file cap.
+		if up.bytes+len(chunk) > downloadMaxBytes {
+			up.staleTimer.Stop()
+			delete(a.pendingUploads, payload.UploadID)
+			a.uploadsMu.Unlock()
+			a.broadcastNotice(fmt.Sprintf("upload %q aborted: exceeds %s", up.name, humanByteSize(downloadMaxBytes)))
+			return
+		}
 		up.chunks[payload.Index] = chunk
+		up.bytes += len(chunk)
 	}
 	up.staleTimer.Reset(uploadStaleTimeout)
 	complete := len(up.chunks) == up.total
