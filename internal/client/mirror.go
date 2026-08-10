@@ -306,6 +306,10 @@ func startMirrorCapture(id string, maxWidth, quality, fps int) (*winHelper, erro
 	go h.readLoop(conn)
 	select {
 	case <-h.dead:
+		// The daemon dropped the stream before it got going (permission/window
+		// gone). readLoop ended but doesn't own the conn — close it so we don't
+		// leak the fd (the happy path closes it via winHelper.stop()).
+		_ = conn.Close()
 		return nil, errors.New("screen-sharing service closed the stream")
 	case <-time.After(helperStartupGrace):
 		return h, nil
