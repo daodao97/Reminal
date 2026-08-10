@@ -107,6 +107,10 @@ func (a *Agent) listenControl() (cleanup func()) {
 					return
 				default:
 				}
+				// Transient error (not a stop): back off so a persistent one (e.g.
+				// EMFILE under fd pressure) can't busy-loop this goroutine at 100%
+				// CPU. Matches serveMirror's accept loop.
+				time.Sleep(50 * time.Millisecond)
 				continue
 			}
 			go a.handleControlConn(conn)
