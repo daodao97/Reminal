@@ -168,9 +168,26 @@ fi
 echo
 echo "Installed reminal v${VERSION} to ${INSTALLED_DESC}"
 
-# macOS: window mirroring from background ("+") sessions needs a one-time Screen
-# Recording grant to the reminal.app identity, surfaced by `reminal permissions`.
+# macOS bundle post-install:
 if [ "$OS" = "darwin" ] && [ -d "$APP_DIR/reminal.app" ]; then
+    # If this machine already runs the background-host daemon (it's owned), an
+    # UPGRADE from a bare-binary install left its LaunchAgent pointing at the old
+    # path. Re-point it at the bundle binary and restart, so background ("+")
+    # sessions run as the granted sh.reminal identity. Fresh installs have no
+    # daemon yet — it's set up later by `reminal own` (which points at the bundle).
+    DAEMON_PLIST="$HOME/Library/LaunchAgents/sh.reminal.daemon.plist"
+    if [ -f "$DAEMON_PLIST" ]; then
+        /usr/libexec/PlistBuddy -c "Set :ProgramArguments:0 $APP_DIR/reminal.app/Contents/MacOS/reminal" "$DAEMON_PLIST" 2>/dev/null || true
+        _u=$(id -u)
+        launchctl bootout "gui/$_u/sh.reminal.daemon" 2>/dev/null || true
+        # launchd needs a beat to release the label after bootout; retry the race.
+        _n=0; while [ "$_n" -lt 5 ]; do
+            launchctl bootstrap "gui/$_u" "$DAEMON_PLIST" 2>/dev/null && break
+            _n=$((_n + 1)); sleep 1
+        done
+    fi
+    # Stale loose helper from a previous bare install (the bundle carries its own).
+    rm -f "$INSTALL_DIR/reminal-capture" 2>/dev/null || true
     echo
     echo "To mirror windows from background (\"+\") sessions, grant Screen Recording once:"
     echo "  reminal permissions"
