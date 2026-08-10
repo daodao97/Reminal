@@ -23,6 +23,14 @@ import (
 // closed so we stop wasting sends on it; the viewer re-negotiates later.
 const rtcProbeWindow = 8 * time.Second
 
+// rtcHandshakeTimeout bounds how long a freshly-offered peer may sit before its
+// DataChannel opens. A viewer that requests an offer but never answers (crashed
+// tab, flaky mobile, or a viewer spamming hellos with distinct peer ids) leaves
+// a PeerConnection stuck in "new" — pion never fires Failed without a remote
+// description, and rtcSinks only reaps peers that DID open — so nothing else
+// collects it until the last viewer leaves. This reaps the un-opened peer.
+const rtcHandshakeTimeout = 30 * time.Second
+
 // Window frames are the relay's heaviest traffic, and the Cloudflare relay
 // bills every forwarded WebSocket message as a request. When a viewer can open
 // a WebRTC DataChannel, frames (and their acks) flow directly peer-to-peer over
@@ -271,6 +279,15 @@ func (a *Agent) handleWebRTCHello(conn *websocket.Conn, encData string) {
 	}
 	a.rtcPeers[hello.Peer] = peer
 	a.rtcMu.Unlock()
+
+	// Reap the peer if its DataChannel never opens (viewer never answered). Fire-
+	// and-forget: if it opened, open.Load() is true and this no-ops; dropRTCPeer's
+	// identity guard handles the case where a reconnect already replaced it.
+	time.AfterFunc(rtcHandshakeTimeout, func() {
+		if !peer.open.Load() {
+			a.dropRTCPeer(hello.Peer, peer)
+		}
+	})
 
 	a.sendWindowMsg(conn, protocol.TypeWebRTCOffer, rtcSDPMsg{Peer: hello.Peer, SDP: offer.SDP, ICE: viewerICE})
 }
