@@ -15,8 +15,10 @@ package client
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -248,4 +250,86 @@ func atoiOr(s string, def int) int {
 		return n
 	}
 	return def
+}
+
+// ---- session side (client) -------------------------------------------------
+
+// mirrorDialTimeout bounds how long a session waits to reach the daemon before
+// treating screen sharing as "service restarting."
+const mirrorDialTimeout = 2 * time.Second
+
+// startMirrorCapture (session side) dials the daemon's mirror socket and returns
+// a winHelper streaming the window's frames from the daemon (sh.reminal context).
+// The helper reads the same [len][JPEG] format as the direct exec path, so the
+// caller's streaming logic is unchanged. Errors when the daemon is unreachable —
+// callers surface "screen-sharing service restarting" rather than falling back to
+// a terminal-attributed capture.
+func startMirrorCapture(id string, maxWidth, quality, fps int) (*winHelper, error) {
+	sock, err := mirrorSockPath()
+	if err != nil {
+		return nil, err
+	}
+	conn, err := net.DialTimeout("unix", sock, mirrorDialTimeout)
+	if err != nil {
+		return nil, fmt.Errorf("screen-sharing service starting — retry: %w", err)
+	}
+	if _, err := fmt.Fprintf(conn, "capture %s %d %d %d\n", id, maxWidth, quality, fps); err != nil {
+		_ = conn.Close()
+		return nil, err
+	}
+	h := &winHelper{
+		conn:   conn,
+		sig:    make(chan struct{}, 1),
+		dead:   make(chan struct{}),
+		stderr: &bytes.Buffer{},
+	}
+	go h.readLoop(conn)
+	select {
+	case <-h.dead:
+		return nil, errors.New("screen-sharing service closed the stream")
+	case <-time.After(helperStartupGrace):
+		return h, nil
+	}
+}
+
+// mirrorForwardInput (session side) forwards one viewer input event (the decrypted
+// JSON) to the daemon, which injects it in the granted sh.reminal context. Best
+// effort — a missed click is better than blocking the input worker.
+func mirrorForwardInput(eventJSON string) {
+	sock, err := mirrorSockPath()
+	if err != nil {
+		return
+	}
+	conn, err := net.DialTimeout("unix", sock, mirrorDialTimeout)
+	if err != nil {
+		return
+	}
+	defer conn.Close()
+	_ = conn.SetDeadline(time.Now().Add(4 * time.Second))
+	if _, err := fmt.Fprintf(conn, "input %s\n", strings.TrimSpace(eventJSON)); err != nil {
+		return
+	}
+	var reply [16]byte
+	_, _ = conn.Read(reply[:]) // wait for ok/error so events stay ordered
+}
+
+// mirrorCheck (session side) asks the daemon whether Screen Recording is granted
+// in its context. Returns "ok"/"no", or "" when the daemon is unreachable.
+func mirrorCheck() string {
+	sock, err := mirrorSockPath()
+	if err != nil {
+		return ""
+	}
+	conn, err := net.DialTimeout("unix", sock, mirrorDialTimeout)
+	if err != nil {
+		return ""
+	}
+	defer conn.Close()
+	_ = conn.SetDeadline(time.Now().Add(4 * time.Second))
+	if _, err := fmt.Fprintln(conn, "check"); err != nil {
+		return ""
+	}
+	var buf [16]byte
+	n, _ := conn.Read(buf[:])
+	return strings.TrimSpace(string(buf[:n]))
 }

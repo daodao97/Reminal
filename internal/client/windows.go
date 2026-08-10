@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"image"
 	"image/color"
@@ -279,6 +280,13 @@ func (a *Agent) handleWindowCtl(encData string) {
 func (a *Agent) handleWindowInput(encData string) {
 	plaintext, err := a.box.Decrypt(encData)
 	if err != nil {
+		return
+	}
+	if runtime.GOOS == "darwin" {
+		// Inject in the daemon (sh.reminal) so one grant covers Accessibility +
+		// Automation for every session, terminal or "+". Runs on the serialized
+		// winOps worker, so forwarding synchronously keeps events ordered.
+		mirrorForwardInput(string(plaintext))
 		return
 	}
 	var ev struct {
@@ -890,6 +898,17 @@ func (s *winStream) waitCapacity() bool {
 	return true
 }
 
+// startCaptureHelper returns the frame source for a window. On macOS it dials the
+// daemon's mirror service — so ALL capture runs in the one granted sh.reminal
+// process and a single reminal.app grant covers every session (terminal or "+");
+// elsewhere it spawns the capture helper directly.
+func startCaptureHelper(id string, maxWidth, quality, fps int) (*winHelper, error) {
+	if runtime.GOOS == "darwin" {
+		return startMirrorCapture(id, maxWidth, quality, fps)
+	}
+	return startWinHelper(id, maxWidth, quality, fps)
+}
+
 // ensureHelper keeps the native capture helper alive: reaps one that died and
 // (re)starts it, subject to helperRetryCooldown after a failure.
 func (s *winStream) ensureHelper() {
@@ -912,7 +931,7 @@ func (s *winStream) ensureHelper() {
 	if time.Now().Before(s.helperRetryAt) {
 		return
 	}
-	if h, err := startWinHelper(s.w.ID, winMaxWidth, winCaptureQuality, winHelperFPS); err == nil {
+	if h, err := startCaptureHelper(s.w.ID, winMaxWidth, winCaptureQuality, winHelperFPS); err == nil {
 		s.helper = h
 		s.helperErr = ""
 	} else {
@@ -949,6 +968,17 @@ func (s *winStream) capture() (img []byte, err error) {
 	s.capNative = false
 	if menuActive {
 		return s.b.captureRegion(menu.x, menu.y, menu.w, menu.h)
+	}
+	if runtime.GOOS == "darwin" {
+		// No local screencapture fallback on macOS: capture must run in the daemon
+		// (sh.reminal) so one grant covers every session. A nil helper here means
+		// the daemon is unreachable — surface that instead of a terminal-attributed
+		// capture (decision: fail-and-retry, don't silently double-grant).
+		e := s.helperErr
+		if e == "" {
+			e = "screen-sharing service starting — retry"
+		}
+		return nil, errors.New(e)
 	}
 	return s.b.capture(s.w)
 }
@@ -990,7 +1020,7 @@ func (s *winStream) checkWindow(conn *websocket.Conn, changed bool) bool {
 		if resized && s.helper != nil {
 			s.helper.stop()
 			s.helper = nil
-			if h, err := startWinHelper(s.w.ID, winMaxWidth, winCaptureQuality, winHelperFPS); err == nil {
+			if h, err := startCaptureHelper(s.w.ID, winMaxWidth, winCaptureQuality, winHelperFPS); err == nil {
 				s.helper = h
 			} else {
 				s.helperRetryAt = time.Now().Add(helperRetryCooldown)
