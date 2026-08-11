@@ -5195,6 +5195,11 @@
       // --- long-press on the terminal to start a selection ---
       const LP_MS = 380, MOVE_CANCEL = 10;
       let lpTimer = null, lpStart = null, extending = false, downAt = 0;
+      // One-finger swipe scrolls the scrollback. The DOM renderer's .xterm-screen
+      // sits ON TOP of the scrollable .xterm-viewport, so a touch-drag never reaches
+      // the viewport — inside a full-frame TUI (Claude Code) that means you can't
+      // scroll at all. Drive xterm's own scrollLines() from the swipe delta instead.
+      let scrolling = false, scrollLastY = 0, scrollAcc = 0;
 
       function cancelLP() { if (lpTimer) { clearTimeout(lpTimer); lpTimer = null; } }
 
@@ -5202,6 +5207,7 @@
         if (e.touches.length !== 1) { cancelLP(); return; }
         const t = e.touches[0];
         downAt = Date.now();
+        scrolling = false; scrollLastY = t.clientY; scrollAcc = 0;
         lpStart = { x: t.clientX, y: t.clientY, cell: pointToCell(t.clientX, t.clientY), wasActive: active };
         cancelLP();
         lpTimer = setTimeout(() => {
@@ -5214,20 +5220,36 @@
       function onTouchMove(e) {
         const t = e.touches[0];
         if (!t) return;
-        if (lpTimer) {                              // still deciding: movement => it's a scroll
-          if (Math.abs(t.clientX - lpStart.x) > MOVE_CANCEL || Math.abs(t.clientY - lpStart.y) > MOVE_CANCEL) cancelLP();
-          return;
-        }
         if (extending) {                            // we own the gesture now — extend, don't scroll
           e.preventDefault();
           const aimY = t.clientY - 6;
           lastDragClient = { x: t.clientX, y: aimY };
           startAutoScroll(edgeDir(t.clientY));
           updateDragTo(t.clientX, aimY);
+          return;
+        }
+        if (lpTimer) {                              // still deciding: enough movement => it's a scroll
+          if (Math.abs(t.clientX - lpStart.x) > MOVE_CANCEL || Math.abs(t.clientY - lpStart.y) > MOVE_CANCEL) {
+            cancelLP();
+            scrolling = true;                       // commit to scrolling the scrollback
+            scrollLastY = t.clientY; scrollAcc = 0;
+          } else {
+            return;                                 // not enough movement to decide yet
+          }
+        }
+        if (scrolling && e.touches.length === 1) {  // one-finger swipe → scroll xterm's scrollback
+          const dy = scrollLastY - t.clientY;       // finger up => positive => scroll toward newer
+          scrollLastY = t.clientY;
+          scrollAcc += dy;
+          const h = cellDims().h || 16;
+          const lines = (scrollAcc / h) | 0;        // whole lines only; keep the remainder
+          if (lines) { term.scrollLines(lines); scrollAcc -= lines * h; }
+          e.preventDefault();                       // we own the vertical drag now
         }
       }
       function onTouchEnd(e) {
         cancelLP();
+        if (scrolling) { scrolling = false; return; }  // a swipe-scroll: not a tap/selection
         if (extending) {
           extending = false; dragWhich = null;
           stopAutoScroll();
@@ -5252,7 +5274,7 @@
       wrap.addEventListener('touchstart', onTouchStart, { passive: true });
       wrap.addEventListener('touchmove', onTouchMove, { passive: false });
       wrap.addEventListener('touchend', onTouchEnd, { passive: true });
-      wrap.addEventListener('touchcancel', () => { cancelLP(); if (extending) { extending = false; dragWhich = null; stopAutoScroll(); } }, { passive: true });
+      wrap.addEventListener('touchcancel', () => { cancelLP(); scrolling = false; if (extending) { extending = false; dragWhich = null; stopAutoScroll(); } }, { passive: true });
 
       // Native-style dismiss: a tap or click ANYWHERE outside the selection's
       // own controls (the copy/select-all bar and the two grips) clears it —
