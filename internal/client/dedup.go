@@ -54,6 +54,7 @@ func dedupBlank(s string) bool {
 // history doesn't accumulate blank gaps.
 func dedupBlocks(lines []string) []string {
 	seen := make(map[string]bool)
+	var seenParas [][]string
 	out := make([]string, 0, len(lines))
 	i := 0
 	for i < len(lines) {
@@ -70,6 +71,18 @@ func dedupBlocks(lines []string) []string {
 			j++
 		}
 		key := strings.Join(words, "\x00")
+		if len(words) >= dedupFrameRunMin && len(words) < dedupMinParaWords && isTruncatedPrefix(words, seenParas) {
+			// Repaint FRAGMENT: an interrupted re-emit commits just a paragraph's
+			// head — often with its final word cut mid-word — too short for the
+			// verbatim key above and possibly out of the live frame. A >=10-word
+			// prefix (last word tolerant) of a paragraph we already emitted is
+			// unambiguous: drop it like any other re-emitted copy.
+			if j < len(lines) && dedupBlank(lines[j]) {
+				j++
+			}
+			i = j
+			continue
+		}
 		if len(words) >= dedupMinParaWords && seen[key] {
 			// Re-emitted copy: drop it and absorb the ONE trailing blank that followed
 			// it, so the blank preceding it survives as the separator between its
@@ -82,11 +95,37 @@ func dedupBlocks(lines []string) []string {
 		}
 		if len(words) >= dedupMinParaWords {
 			seen[key] = true
+			seenParas = append(seenParas, words)
 		}
 		out = append(out, lines[i:j]...)
 		i = j
 	}
 	return out
+}
+
+// isTruncatedPrefix reports whether frag (>= dedupFrameRunMin words) is a prefix of
+// any paragraph in seen, tolerating a mid-word cut of its final token ("sur" matching
+// "surface"). Word-exact on everything before the last token, so legit short
+// paragraphs that merely open with similar phrasing don't reach it (they'd have to
+// share the first 9+ words verbatim AND the 10th as a prefix).
+func isTruncatedPrefix(frag []string, seen [][]string) bool {
+	n := len(frag)
+	for _, para := range seen {
+		if len(para) < n {
+			continue
+		}
+		match := true
+		for k := 0; k < n-1; k++ {
+			if para[k] != frag[k] {
+				match = false
+				break
+			}
+		}
+		if match && strings.HasPrefix(para[n-1], frag[n-1]) {
+			return true
+		}
+	}
+	return false
 }
 
 // Frame-matched dedup: the second, width-INDEPENDENT half of the resize story.
@@ -107,13 +146,28 @@ func dedupBlocks(lines []string) []string {
 // painted, in the frame, at the snapshot's bottom; nothing the user could scroll to
 // disappears. Content the app has scrolled PAST (no longer in its frame) is never
 // touched, no matter how similar.
-const (
-	dedupFrameShingle  = 8   // words per shingle; < dedupMinParaWords so every eligible paragraph has several
-	dedupFrameCoverage = 0.9 // fraction of a paragraph's shingles that must be in the frame to drop it
-)
+// dedupFrameShingle is the matched-run window: 8 words, below the run gate so
+// every gated stretch contains several windows.
+const dedupFrameShingle = 8
 
-// dedupAgainstFrame drops committed paragraphs that are stale re-emissions of the
-// app's current frame (see block comment above). screen is the live screen's rows.
+// dedupFrameRunMin gates matched runs. Lower than dedupMinParaWords because the
+// reference set here is only the live frame (an ordered 8+-word match against it is
+// already near-certain re-emission), and real truncated fragments are as short as a
+// header + one wrapped row (~10-11 words) — the 12-word gate let those survive.
+const dedupFrameRunMin = 10
+
+// dedupAgainstFrame drops committed lines that are stale re-emissions of the app's
+// current frame (see block comment above). screen is the live screen's rows.
+//
+// Granularity is LINE-within-matched-RUN, not whole paragraphs: resize repaints get
+// interrupted mid-frame, committing truncated fragments that sit contiguous with
+// unrelated leftover rows (old welcome-box borders etc.). A whole-paragraph coverage
+// test dilutes on that junk and misses the fragment. Instead we mark every history
+// word that lies inside an 8-word window also present (in order) in the frame's word
+// stream, keep only maximal covered stretches of >= dedupMinParaWords words, and drop
+// exactly the lines ALL of whose words are covered. Junk rows with words the frame
+// doesn't contain survive (they're not duplicates); short or coincidental overlaps
+// never reach the stretch gate.
 func dedupAgainstFrame(history, screen []string) []string {
 	var fw []string
 	for _, r := range screen {
@@ -126,40 +180,65 @@ func dedupAgainstFrame(history, screen []string) []string {
 	for i := 0; i+dedupFrameShingle <= len(fw); i++ {
 		shingles[strings.Join(fw[i:i+dedupFrameShingle], "\x00")] = true
 	}
-	out := make([]string, 0, len(history))
-	i := 0
-	for i < len(history) {
-		if dedupBlank(history[i]) {
-			out = append(out, history[i])
+
+	// History word stream, remembering which line each word came from.
+	var hw []string
+	var lineOf []int
+	for li, l := range history {
+		for _, w := range dedupWords(l) {
+			hw = append(hw, w)
+			lineOf = append(lineOf, li)
+		}
+	}
+	covered := make([]bool, len(hw))
+	for i := 0; i+dedupFrameShingle <= len(hw); i++ {
+		if shingles[strings.Join(hw[i:i+dedupFrameShingle], "\x00")] {
+			for k := i; k < i+dedupFrameShingle; k++ {
+				covered[k] = true
+			}
+		}
+	}
+	// Length gate: a covered stretch shorter than dedupFrameRunMin is a phrase that
+	// may legitimately recur, not an unambiguous re-emit — uncover it.
+	for i := 0; i < len(covered); {
+		if !covered[i] {
 			i++
 			continue
 		}
 		j := i
-		var words []string
-		for j < len(history) && !dedupBlank(history[j]) {
-			words = append(words, dedupWords(history[j])...)
+		for j < len(covered) && covered[j] {
 			j++
 		}
-		if len(words) >= dedupMinParaWords {
-			total, hit := 0, 0
-			for k := 0; k+dedupFrameShingle <= len(words); k++ {
-				total++
-				if shingles[strings.Join(words[k:k+dedupFrameShingle], "\x00")] {
-					hit++
-				}
-			}
-			if total > 0 && float64(hit) >= dedupFrameCoverage*float64(total) {
-				// Stale repaint copy of the live frame: drop it, absorbing the one
-				// trailing blank (same separator logic as dedupBlocks).
-				if j < len(history) && dedupBlank(history[j]) {
-					j++
-				}
-				i = j
-				continue
+		if j-i < dedupFrameRunMin {
+			for k := i; k < j; k++ {
+				covered[k] = false
 			}
 		}
-		out = append(out, history[i:j]...)
 		i = j
+	}
+
+	wordCount := make([]int, len(history))
+	covCount := make([]int, len(history))
+	for k, li := range lineOf {
+		wordCount[li]++
+		if covered[k] {
+			covCount[li]++
+		}
+	}
+	out := make([]string, 0, len(history))
+	justDropped := false
+	for li, l := range history {
+		if wordCount[li] > 0 && covCount[li] == wordCount[li] {
+			justDropped = true
+			continue
+		}
+		// Absorb ONE blank after a dropped block so separators don't pile up.
+		if justDropped && dedupBlank(l) && (len(out) == 0 || dedupBlank(out[len(out)-1])) {
+			justDropped = false
+			continue
+		}
+		justDropped = false
+		out = append(out, l)
 	}
 	return out
 }

@@ -3202,6 +3202,9 @@
       // shell's actual echo coming back — rendering it would double
       // the visible character.
       const u8 = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+      // Inside the post-resize dirty window every chunk re-arms the refresh
+      // debounce, so it fires once the repaint stream quiesces (see above).
+      if (resizeDirtyUntil && Date.now() < resizeDirtyUntil) scheduleSoftRefresh();
       const after = reconcilePredictions(u8);
       if (after.byteLength === 0) return;
       pendingChunks.push(after);
@@ -3254,17 +3257,30 @@
     // anything typed but not yet submitted are preserved (the app, not the viewer,
     // owns that text). Debounced so a drag fires it once, on settle.
     let softRefreshTimer = null;
+    // After a resize, the app's SIGWINCH repaint can land well AFTER our settle
+    // debounce — a refresh that fires first pulls a snapshot that predates the
+    // repaint, and the straggler re-stamps duplicates that then linger. So a
+    // resize marks a "dirty window": every data chunk inside it re-arms the
+    // debounce, making the refresh fire only once output quiesces (i.e. after
+    // the repaint). Cleared when the refresh actually fires so the arriving
+    // snapshot doesn't re-trigger it.
+    let resizeDirtyUntil = 0;
+    function markResizeDirty() { resizeDirtyUntil = Date.now() + 8000; }
     function scheduleSoftRefresh() {
       if (softRefreshTimer) clearTimeout(softRefreshTimer);
       softRefreshTimer = setTimeout(() => {
         softRefreshTimer = null;
         if (!agentLive || !ws || ws.readyState !== WebSocket.OPEN) return;
+        // Grace period: the fit/size-sync churn right after connect must not
+        // trigger a redundant refresh of the snapshot we just received.
+        if (!connectedAt || (Date.now() - connectedAt) < 1500) return;
         // Never yank the reader: if they've scrolled up into history, skip — a
         // snapshot repaint lands them at the bottom, which mid-scroll feels like the
         // scroll overshooting. Only refresh when the view is already at the bottom
         // (live). Next time they're at the bottom and resize, it cleans.
         const buf = term && term.buffer && term.buffer.active;
         if (buf && buf.viewportY < buf.baseY) return;
+        resizeDirtyUntil = 0;
         // Reset the seq so the agent resends its snapshot; the snapshot's own
         // clear (ED3) wipes the duplicated scrollback and repaints in one write,
         // so the old view stays put until the clean one lands — no blank flash,
@@ -3698,6 +3714,11 @@
               // dim "abc" + bright "abc".
               resetPredictionsSoft();
               term.resize(c, r);
+              // This is the path a phone joining/leaving resizes us through
+              // (fitTerminal never runs) — the app's SIGWINCH repaint stacks
+              // duplicates here too, so pull the clean snapshot on settle.
+              markResizeDirty();
+              scheduleSoftRefresh();
             }
           } catch (_) {}
           break;
@@ -4945,11 +4966,12 @@
       try { fitAddon.fit(); } catch (_) {}
       if (agentLive) {
         sendResize();
-        // NOTE: auto soft-refresh on resize is DISABLED for now — it was suspected of
-        // interfering with touch scrolling. Left the function defined but uncalled so
-        // it's easy to re-enable once the scroll behaviour is fully understood. Users
-        // get a clean de-duplicated view on manual reload / reconnect regardless.
-        void scheduleSoftRefresh;
+        // After a genuine grid resize, re-pull the clean deduped snapshot so
+        // resize-repaint duplicates don't linger until a manual reload. This was
+        // temporarily disabled while chasing the scroll-yank bug; the yank turned
+        // out to be the snapshot broadcast (fixed: position-preserving repaint),
+        // and scheduleSoftRefresh itself skips scrolled-up readers — so it's safe.
+        if (term.cols !== prevCols || term.rows !== prevRows) { markResizeDirty(); scheduleSoftRefresh(); }
       }
     }
     function scheduleFit() {

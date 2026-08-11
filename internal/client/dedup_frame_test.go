@@ -71,3 +71,75 @@ func TestDedupAgainstFrameShortParagraphsSafe(t *testing.T) {
 		t.Errorf("short paragraph dropped: %v", out)
 	}
 }
+
+// TestDedupAgainstFrameTruncatedFragment reproduces the live miss that motivated
+// line-level matching: a resize repaint commits a TRUNCATED copy of the frame's
+// paragraph, contiguous with leftover unrelated rows (welcome-box borders). The
+// fragment lines must go; the junk rows (words the frame doesn't contain) stay.
+func TestDedupAgainstFrameTruncatedFragment(t *testing.T) {
+	para := "oceans cover most of our planet holding nearly all its water in constant motion waves rise and fall across vast distances shaped by wind and gravity beneath the surface currents carry warmth between distant continents"
+	frame := append([]string{"⏺ MARKER-AAA"}, dfWrap(para, 90)...)
+
+	fragment := append([]string{"⏺ MARKER-AAA"}, dfWrap(para, 55)[:2]...) // truncated: first 2 wrapped rows only
+	junk := []string{
+		"│                       │ Tips for getting started        │",
+		"│                       │ Run /init to create CLAUDE.md   │",
+	}
+	history := append(append(append([]string{}, fragment...), junk...), "")
+
+	out := dedupAgainstFrame(history, frame)
+	joined := strings.Join(out, "\n")
+	if strings.Contains(joined, "MARKER-AAA") || strings.Contains(joined, "oceans cover most") {
+		t.Errorf("truncated fragment survived:\n%s", joined)
+	}
+	if !strings.Contains(joined, "Tips for getting started") {
+		t.Errorf("non-duplicate junk row was deleted:\n%s", joined)
+	}
+}
+
+// TestDedupAgainstFrameOneLineFragment: the shortest real fragment — a header plus a
+// single truncated wrapped row (~11 words) — must be dropped (this survived the old
+// 12-word gate in live testing).
+func TestDedupAgainstFrameOneLineFragment(t *testing.T) {
+	para := "mountains rise where tectonic plates collide folding rock upward over millions of years into peaks that catch snow feeding rivers below"
+	frame := append([]string{"⏺ MARKER-AAA"}, dfWrap(para, 90)...)
+	fragment := []string{"⏺ MARKER-AAA", dfWrap(para, 60)[0]}
+	junk := []string{"│                │ Tips for getting started │"}
+	history := append(append(append([]string{}, fragment...), junk...), "")
+
+	out := dedupAgainstFrame(history, frame)
+	joined := strings.Join(out, "\n")
+	if strings.Contains(joined, "MARKER-AAA") {
+		t.Errorf("one-line truncated fragment survived:\n%s", joined)
+	}
+	if !strings.Contains(joined, "Tips for getting") {
+		t.Errorf("junk row deleted:\n%s", joined)
+	}
+}
+
+// TestDedupBlocksTruncatedPrefixFragment: a repaint fragment (10-11 words, final word
+// cut mid-word) of an ALREADY-COMMITTED paragraph must be dropped even when the
+// content is no longer in the live frame (the narrow-width overflow case).
+func TestDedupBlocksTruncatedPrefixFragment(t *testing.T) {
+	full := dfWrap("deserts cover roughly a fifth of earths land surface defined not by heat but by scarce rainfall some like antarcticas dry valleys are bitterly cold", 52)
+	frag := []string{"MARKER-X", "  deserts cover roughly a fifth of earths land sur,"}
+	distinct := []string{"  deserts cover roughly a fifth of mars land surface today"} // 10 words, diverges at word 8
+
+	var history []string
+	history = append(history, "MARKER-X")
+	history = append(history, full...)
+	history = append(history, "")
+	history = append(history, frag...)
+	history = append(history, "")
+	history = append(history, distinct...)
+	history = append(history, "")
+
+	out := dedupBlocks(history)
+	joined := strings.Join(out, "\n")
+	if n := strings.Count(joined, "deserts cover roughly a fifth of earths land sur"); n != 1 {
+		t.Errorf("truncated fragment not collapsed: %d occurrences (want 1 — the full paragraph)\n%s", n, joined)
+	}
+	if !strings.Contains(joined, "mars land surface") {
+		t.Errorf("legitimately distinct paragraph deleted:\n%s", joined)
+	}
+}
