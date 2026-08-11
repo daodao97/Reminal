@@ -3231,6 +3231,12 @@
       softRefreshTimer = setTimeout(() => {
         softRefreshTimer = null;
         if (!agentLive || !ws || ws.readyState !== WebSocket.OPEN) return;
+        // Never yank the reader: if they've scrolled up into history, skip — a
+        // snapshot repaint lands them at the bottom, which mid-scroll feels like the
+        // scroll overshooting. Only refresh when the view is already at the bottom
+        // (live). Next time they're at the bottom and resize, it cleans.
+        const buf = term && term.buffer && term.buffer.active;
+        if (buf && buf.viewportY < buf.baseY) return;
         // Reset the seq so the agent resends its snapshot; the snapshot's own
         // clear (ED3) wipes the duplicated scrollback and repaints in one write,
         // so the old view stays put until the clean one lands — no blank flash,
@@ -4911,11 +4917,12 @@
       try { fitAddon.fit(); } catch (_) {}
       if (agentLive) {
         sendResize();
-        // After a genuine terminal-grid resize (not the initial fit on connect),
-        // re-pull the clean snapshot so resize-repaint duplicates don't linger in
-        // scrollback until the user manually reloads. Gated on connectedAt so the
-        // fit that runs while connecting doesn't trigger a redundant refresh.
-        if ((term.cols !== prevCols || term.rows !== prevRows) &&
+        // Re-pull the clean snapshot ONLY after a WIDTH change — that's the resize
+        // that causes the un-dedup-able repaint duplication. Height-only changes must
+        // NOT trigger it: on a tablet, touch-scrolling hides the address bar (a height
+        // change), and repainting there snaps the view to the bottom mid-scroll — i.e.
+        // you can't scroll. Gated on connectedAt so the connect-time fit is ignored.
+        if (term.cols !== prevCols &&
             connectedAt && (Date.now() - connectedAt) > 1500) {
           scheduleSoftRefresh();
         }
