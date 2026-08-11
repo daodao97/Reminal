@@ -75,10 +75,10 @@ func TestNativeSnapshotCommittedCleanThroughWiden(t *testing.T) {
 	a.record([]byte(b.String()))
 	prev := len(fr)
 
-	// widths: start, narrower (small viewer joins), then progressively WIDER (it leaves)
+	// widths: start, narrower (small viewer joins), then progressively WIDER (it leaves).
+	// Uses the real resizeScreen path so the frame-anchor watermarks are exercised.
 	for _, w := range []int{44, 70, 90, 50, 110} {
-		a.buf.AppendResize(w, 24)
-		a.screen.Resize(w, 24)
+		a.resizeScreen(uint16(w), 24)
 		var rb strings.Builder
 		fmt.Fprintf(&rb, "\x1b[%dA", prev) // home to frame top
 		fr = nsWrap2(frame, w)
@@ -103,7 +103,7 @@ func TestNativeSnapshotCommittedCleanThroughWiden(t *testing.T) {
 	dst.Write(pt)
 	rows := strings.Split(strings.ReplaceAll(dst.Render(), "\r\n", "\n"), "\n")
 
-	re := regexp.MustCompile(`COMMIT-\d{4}`)
+	re := regexp.MustCompile(`(COMMIT|RECENT)-\d{4}`)
 	counts := map[string]int{}
 	for _, r := range rows {
 		for _, m := range re.FindAllString(r, -1) {
@@ -120,12 +120,30 @@ func TestNativeSnapshotCommittedCleanThroughWiden(t *testing.T) {
 			dup++
 		}
 	}
-	t.Logf("committed lines: %d distinct, missing=%d duplicated=%d (through 5 width changes incl. widen)", len(counts), missing, dup)
-	if missing > 0 {
-		t.Errorf("committed history lost %d/60 lines through resizes (want 0)", missing)
+	// The frame (RECENT) overflows the 24-row screen at the narrow widths, so its
+	// re-emits pile into scrollback; frame-anchoring drops all but the latest copy plus
+	// at most one pre-band copy (the frame already overflowed before the first resize
+	// opened the band). Bound it — the point is it's collapsed from ~one-per-resize.
+	frameMax, frameMissing := 0, 0
+	for i := 1; i <= 18; i++ {
+		c := counts[fmt.Sprintf("RECENT-%04d", i)]
+		if c == 0 {
+			frameMissing++
+		}
+		if c > frameMax {
+			frameMax = c
+		}
 	}
-	if dup > 0 {
-		t.Errorf("committed history duplicated %d/60 lines through resizes (want 0)", dup)
+	t.Logf("committed: %d distinct, missing=%d duplicated=%d | frame: maxCopies=%d missing=%d (5 width changes incl. widen)",
+		len(counts), missing, dup, frameMax, frameMissing)
+	if missing > 0 || dup > 0 {
+		t.Errorf("committed history not pristine through resizes: missing=%d duplicated=%d (want 0,0)", missing, dup)
+	}
+	if frameMissing > 0 {
+		t.Errorf("frame content lost: %d/18 RECENT lines missing (want 0)", frameMissing)
+	}
+	if frameMax > 2 {
+		t.Errorf("frame band not collapsed: max %d copies (want <=2 after frame-anchoring)", frameMax)
 	}
 }
 

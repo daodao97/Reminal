@@ -105,6 +105,16 @@ type Agent struct {
 	screen          *vt.Emulator
 	screenMu        sync.Mutex
 	scrollbackLines int // history lines included in a snapshot (0 = screen only)
+	// Frame-anchored dedup (see frameAnchoredHistory): an inline TUI repaints its
+	// bounded frame on every resize, and when that frame is taller than the viewer the
+	// overflow scrolls a fresh copy into scrollback each time. Across a burst of resizes
+	// (a reconnect, a window drag) that stacks duplicate copies of the recent transcript.
+	// These mark the scrollback region [start,lastResize) holding every copy but the
+	// latest so the snapshot can drop it. Guarded by screenMu.
+	frameBandActive     bool
+	frameBandStart      int       // scrollback index where the stale overflow band begins
+	frameBandLastResize int       // scrollback index at the latest resize (start of the CURRENT frame's overflow — kept)
+	lastResizeAt        time.Time // to tell a resize repaint (immediate) from genuine new output (later)
 	// rebuildEmu is the persistent tall emulator snapshots replay history
 	// through (see rebuildView). Guarded by rebuildMu; lazily created.
 	rebuildEmu      *vt.Emulator
@@ -1705,13 +1715,32 @@ func (a *Agent) initScreen() {
 func (a *Agent) record(p []byte) {
 	a.screenMu.Lock()
 	if a.screen != nil {
+		before := 0
+		if a.frameBandActive {
+			if sb := a.screen.Scrollback(); sb != nil {
+				before = sb.Len()
+			}
+		}
 		_, _ = a.screen.Write(p)
+		// Output that grows scrollback well after the last resize is genuine new
+		// content, not the resize repaint (which arrives immediately) — close the frame
+		// band so this content is never mistaken for a stale overflow copy and dropped.
+		if a.frameBandActive && time.Since(a.lastResizeAt) > frameRepaintWindow {
+			if sb := a.screen.Scrollback(); sb != nil && sb.Len() > before {
+				a.frameBandActive = false
+			}
+		}
 	}
 	if enc, err := a.box.Encrypt(p); err == nil {
 		a.buf.Append(enc)
 	}
 	a.screenMu.Unlock()
 }
+
+// frameRepaintWindow bounds how long after a resize we still treat scrollback growth as
+// the app's frame repaint (overflow) rather than genuine new output. Repaints land within
+// tens of ms; real new content (typing, a model response) comes much later.
+const frameRepaintWindow = 750 * time.Millisecond
 
 // resizeScreen keeps the emulator's dimensions in step with the PTY so the
 // snapshot matches the size viewers render at.
@@ -1727,6 +1756,21 @@ func (a *Agent) resizeScreen(cols, rows uint16) {
 		// record()'s appends.
 		a.buf.AppendResize(int(cols), int(rows))
 	}
+	// Watermark where this resize's frame-overflow will land. The band opens at the
+	// first resize of a burst (frameBandStart = committed level) and every resize moves
+	// its far edge, so [start,lastResize) ends up holding every stale copy the burst
+	// stamped, leaving the latest frame's overflow (after lastResize) intact. See
+	// frameAnchoredHistory.
+	cur := 0
+	if sb := a.screen.Scrollback(); sb != nil {
+		cur = sb.Len()
+	}
+	if !a.frameBandActive {
+		a.frameBandActive = true
+		a.frameBandStart = cur
+	}
+	a.frameBandLastResize = cur
+	a.lastResizeAt = time.Now()
 	a.screenMu.Unlock()
 }
 
@@ -1901,6 +1945,39 @@ func (a *Agent) rebuildView() (history, screen []string, ok bool) {
 // and the seq it represents (everything through that seq). Built under screenMu
 // with the latest seq read in the same critical section, so the frame and seq
 // are consistent. Returns ("", 0) if snapshots are disabled or building fails.
+// frameAnchoredHistory renders the emulator's scrollback with the stale frame-overflow
+// band dropped. An inline TUI repaints its whole (bounded) frame on every resize; when
+// the frame is taller than the viewer, the overflow scrolls a fresh copy into scrollback
+// each time, so a burst of resizes stacks duplicate copies of the recent transcript.
+// [frameBandStart, frameBandLastResize) captures every copy but the latest — the live
+// screen plus the scrollback tail after frameBandLastResize carry the current frame, and
+// committed history before the band is untouched. The drop is skipped (plain native
+// history) when no band is tracked or the scrollback has trimmed past the marks (their
+// indices would be stale). Caller holds screenMu.
+func (a *Agent) frameAnchoredHistory() []string {
+	lines := renderScrollback(a.screen, 0) // all scrollback lines, uncapped
+	full := len(lines)
+	// The marks are absolute scrollback indices; they stay valid only while nothing has
+	// been evicted from the front. Scrollback below its cap => no eviction => marks good.
+	trimSafe := a.scrollbackLines <= 0 || full < a.scrollbackLines
+	if a.frameBandActive && trimSafe &&
+		a.frameBandStart >= 0 &&
+		a.frameBandLastResize > a.frameBandStart &&
+		a.frameBandLastResize <= full {
+		kept := make([]string, 0, a.frameBandStart+full-a.frameBandLastResize)
+		kept = append(kept, lines[:a.frameBandStart]...)
+		kept = append(kept, lines[a.frameBandLastResize:]...)
+		lines = kept
+	}
+	if a.scrollbackLines > 0 && len(lines) > a.scrollbackLines {
+		lines = lines[len(lines)-a.scrollbackLines:]
+	}
+	// Collapse any verbatim paragraph re-emits the band drop didn't cover (e.g. same-
+	// width height resizes); keep-first, word-keyed, so differently-worded legitimate
+	// repeats survive.
+	return dedupBlocks(lines)
+}
+
 func (a *Agent) snapshotFrame() (string, uint64) {
 	if a.screen == nil {
 		return "", 0
@@ -1914,11 +1991,7 @@ func (a *Agent) snapshotFrame() (string, uint64) {
 	// (Verified against real Claude Code: on resize it repaints only its bounded frame,
 	// ~one screen, not the whole session — so scrolled-off history is genuinely clean.)
 	a.screenMu.Lock()
-	// dedupBlocks collapses whole paragraphs the app re-emitted verbatim across resizes
-	// (word-keyed, so re-wrapped copies at different widths still match; keep-first).
-	// On clean native rows it's safe: differently-worded legitimate repeats (drafts,
-	// retries) have different keys and survive; only verbatim re-emits collapse.
-	history := dedupBlocks(renderScrollback(a.screen, a.scrollbackLines))
+	history := a.frameAnchoredHistory()
 	// Clamp the plaintext budget so the ENCRYPTED frame fits the relay's 1 MiB WS
 	// limit. The snapshot is sent as ONE un-chunked frame (unlike uploads/downloads),
 	// box.Encrypt base64-inflates it ~4/3, and the screen + message wrapper add more —
