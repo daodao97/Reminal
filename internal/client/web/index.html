@@ -5287,13 +5287,20 @@
             return;                                 // not enough movement to decide yet
           }
         }
-        if (scrolling && e.touches.length === 1) {  // one-finger swipe → scroll xterm's scrollback
+        if (scrolling && e.touches.length === 1) {  // one-finger swipe → same pipeline as the wheel
           const dy = scrollLastY - t.clientY;       // finger up => positive => scroll toward newer
           scrollLastY = t.clientY;
-          scrollAcc += dy;
-          const h = cellDims().h || 16;
-          const lines = (scrollAcc / h) | 0;        // whole lines only; keep the remainder
-          if (lines) { term.scrollLines(lines); scrollAcc -= lines * h; }
+          // Feed the drag into xterm's OWN wheel path instead of scrollLines:
+          // whatever the trackpad would do right now — scroll the scrollback,
+          // or forward to the app when it has mouse reporting on — touch does
+          // identically. One code path, no touch/trackpad behavior split.
+          const screenEl = (term._core && term._core.screenElement) || document.querySelector('.xterm-screen');
+          if (screenEl && dy) {
+            screenEl.dispatchEvent(new WheelEvent('wheel', {
+              deltaY: dy, deltaMode: 0, bubbles: true, cancelable: true,
+              clientX: t.clientX, clientY: t.clientY,
+            }));
+          }
           e.preventDefault();                       // we own the vertical drag now
         }
       }
