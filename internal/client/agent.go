@@ -1905,12 +1905,20 @@ func (a *Agent) snapshotFrame() (string, uint64) {
 	if a.screen == nil {
 		return "", 0
 	}
-	history, rebuiltScreen, ok := a.rebuildView()
+	// Native reconstruction: a.screen faithfully emulates the real terminal, so its
+	// scrollback + screen reproduce exactly what a viewer saw. Committed history that
+	// scrolled past the app's re-render window is 1× by construction (never re-emitted),
+	// and rows are clean — unlike the retired vviewWriter tall-replay, whose row
+	// translation merged characters across resizes ("…resize eventme line…"). The
+	// seam-cut in buildSnapshot trims the live frame's echo off the history tail.
+	// (Verified against real Claude Code: on resize it repaints only its bounded frame,
+	// ~one screen, not the whole session — so scrolled-off history is genuinely clean.)
 	a.screenMu.Lock()
-	if !ok {
-		history = renderScrollback(a.screen, a.scrollbackLines)
-		rebuiltScreen = nil
-	}
+	// dedupBlocks collapses whole paragraphs the app re-emitted verbatim across resizes
+	// (word-keyed, so re-wrapped copies at different widths still match; keep-first).
+	// On clean native rows it's safe: differently-worded legitimate repeats (drafts,
+	// retries) have different keys and survive; only verbatim re-emits collapse.
+	history := dedupBlocks(renderScrollback(a.screen, a.scrollbackLines))
 	// Clamp the plaintext budget so the ENCRYPTED frame fits the relay's 1 MiB WS
 	// limit. The snapshot is sent as ONE un-chunked frame (unlike uploads/downloads),
 	// box.Encrypt base64-inflates it ~4/3, and the screen + message wrapper add more —
@@ -1922,7 +1930,7 @@ func (a *Agent) snapshotFrame() (string, uint64) {
 	if budget <= 0 || budget > maxSnapshotPlaintext {
 		budget = maxSnapshotPlaintext
 	}
-	snap := buildSnapshot(a.screen, history, rebuiltScreen, budget, false)
+	snap := buildSnapshot(a.screen, history, nil, budget, false)
 	latest := a.buf.LatestSeq()
 	a.screenMu.Unlock()
 	if snap == "" {
