@@ -4917,15 +4917,11 @@
       try { fitAddon.fit(); } catch (_) {}
       if (agentLive) {
         sendResize();
-        // Re-pull the clean snapshot ONLY after a WIDTH change — that's the resize
-        // that causes the un-dedup-able repaint duplication. Height-only changes must
-        // NOT trigger it: on a tablet, touch-scrolling hides the address bar (a height
-        // change), and repainting there snaps the view to the bottom mid-scroll — i.e.
-        // you can't scroll. Gated on connectedAt so the connect-time fit is ignored.
-        if (term.cols !== prevCols &&
-            connectedAt && (Date.now() - connectedAt) > 1500) {
-          scheduleSoftRefresh();
-        }
+        // NOTE: auto soft-refresh on resize is DISABLED for now — it was suspected of
+        // interfering with touch scrolling. Left the function defined but uncalled so
+        // it's easy to re-enable once the scroll behaviour is fully understood. Users
+        // get a clean de-duplicated view on manual reload / reconnect regardless.
+        void scheduleSoftRefresh;
       }
     }
     function scheduleFit() {
