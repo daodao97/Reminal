@@ -1884,6 +1884,13 @@ func (a *Agent) rebuildView() (history, screen []string, ok bool) {
 		squeezed = append(squeezed, ln)
 	}
 	history = squeezed
+	// Collapse whole paragraphs the app re-emitted verbatim on resize repaints —
+	// the reconnect scrollback-duplication bug. Inline TUIs (Ink) pre-wrap and
+	// reprint their entire transcript on SIGWINCH, so over a session of resizes a
+	// block stacks up many times; dedupBlocks keeps the first copy and drops the
+	// re-emitted ones (word-level, so re-wrapped copies still match; paragraph-level
+	// and length-gated, so legitimate short repeats are never eaten).
+	history = dedupBlocks(history)
 	if a.scrollbackLines > 0 && len(history) > a.scrollbackLines {
 		history = history[len(history)-a.scrollbackLines:]
 	}
