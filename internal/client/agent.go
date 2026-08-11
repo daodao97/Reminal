@@ -204,6 +204,12 @@ type Agent struct {
 	lastAppliedCol uint16
 	lastAppliedRow uint16
 
+	// szMu guards the viewer-resize coalescing state (coalesceViewerResize).
+	szMu               sync.Mutex
+	szMinC, szMinR     uint16 // elementwise-min of requests in the open shrink window
+	szLastC, szLastR   uint16 // latest request (grow candidate)
+	szShrinkT, szGrowT *time.Timer
+
 	// headless disables every interaction with the host terminal: no raw
 	// mode, no host indicator (cursor color / window title / banner),
 	// no host stdin pump, no Ctrl-] escape. The agent still owns its
@@ -792,6 +798,79 @@ func (a *Agent) recordViewerSize(cols, rows uint16) {
 	a.viewerCols = cols
 	a.viewerRows = rows
 	a.viewerSizeMu.Unlock()
+}
+
+// coalesceViewerResize absorbs viewer resize jitter before it reaches the PTY.
+//
+// Mobile browsers report a new viewport on nearly every scroll gesture (the
+// address bar shows/hides), and each applied change SIGWINCHes the app into a
+// full frame repaint — which, when its frame overflows a small screen, stamps
+// another copy of the frame into committed scrollback. A few minutes of
+// scrolling stamped Claude's welcome box ~70 times (live-observed, ~2100 junk
+// lines). Two rules kill the factory while keeping resizes correct:
+//
+//   - SHRINKS apply fast (300ms elementwise-min window): a viewer must never
+//     render wider/taller than the PTY for long, and a burst of shrinking
+//     reports collapses into a single resize at the smallest requested size.
+//   - GROWS apply only after the reported size has been STABLE for 2s: on a
+//     phone the address bar almost always re-shrinks on the next gesture, so
+//     transient grows would each cost a full repaint for nothing. A real,
+//     settled grow (rotation, bar gone while reading, window truly resized)
+//     still lands — just once.
+//
+// The very first size from a viewer applies immediately (join must be snappy).
+func (a *Agent) coalesceViewerResize(cols, rows uint16) {
+	if cols == 0 || rows == 0 {
+		return
+	}
+	a.viewerSizeMu.Lock()
+	firstSize := a.viewerCols == 0 || a.viewerRows == 0
+	curC, curR := a.lastAppliedCol, a.lastAppliedRow
+	a.viewerSizeMu.Unlock()
+	if firstSize {
+		a.recordViewerSize(cols, rows)
+		a.applyEffectiveSize()
+		return
+	}
+
+	a.szMu.Lock()
+	defer a.szMu.Unlock()
+	a.szLastC, a.szLastR = cols, rows
+	if a.szMinC == 0 || cols < a.szMinC {
+		a.szMinC = cols
+	}
+	if a.szMinR == 0 || rows < a.szMinR {
+		a.szMinR = rows
+	}
+	shrinks := cols < curC || rows < curR
+	if shrinks && a.szShrinkT == nil {
+		a.szShrinkT = time.AfterFunc(300*time.Millisecond, func() {
+			a.szMu.Lock()
+			c, r := a.szMinC, a.szMinR
+			a.szShrinkT = nil
+			a.szMinC, a.szMinR = 0, 0
+			a.szMu.Unlock()
+			if c > 0 && r > 0 {
+				a.recordViewerSize(c, r)
+				a.applyEffectiveSize()
+			}
+		})
+	}
+	// Any new report restarts the grow-stability clock.
+	if a.szGrowT != nil {
+		a.szGrowT.Stop()
+	}
+	a.szGrowT = time.AfterFunc(2*time.Second, func() {
+		a.szMu.Lock()
+		c, r := a.szLastC, a.szLastR
+		a.szGrowT = nil
+		a.szMinC, a.szMinR = 0, 0
+		a.szMu.Unlock()
+		if c > 0 && r > 0 {
+			a.recordViewerSize(c, r)
+			a.applyEffectiveSize()
+		}
+	})
 }
 
 // resetViewerSize clears the viewer min — called when the last viewer
@@ -2240,8 +2319,7 @@ func (a *Agent) runReader(conn *websocket.Conn, cursorCh chan uint64) error {
 			// but everyone (phone + laptop) sees correctly formatted
 			// content. Reset happens when viewer count drops to 0
 			// (handled in TypeClosed below).
-			a.recordViewerSize(rs.Cols, rs.Rows)
-			a.applyEffectiveSize()
+			a.coalesceViewerResize(rs.Cols, rs.Rows)
 			// If the PTY size didn't actually change but the sender
 			// asked for something different, still tell them (and
 			// everyone) the authoritative size — otherwise a viewer
