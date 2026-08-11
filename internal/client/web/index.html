@@ -3217,6 +3217,29 @@
       ws.send(JSON.stringify({ type: 'resume', from_seq: lastSeq }));
     }
 
+    // Soft-refresh: once the viewport has finished resizing, re-pull a clean,
+    // de-duplicated snapshot from the agent — no page reload. Resizing makes an
+    // inline TUI (Claude Code, etc.) repaint its frame; when that frame is taller
+    // than the viewport, the overflow stacks duplicate copies into scrollback.
+    // Resuming from_seq:0 tells the agent to resend its snapshot, which is
+    // de-duplicated AND rendered from the app's live frame — so the input line and
+    // anything typed but not yet submitted are preserved (the app, not the viewer,
+    // owns that text). Debounced so a drag fires it once, on settle.
+    let softRefreshTimer = null;
+    function scheduleSoftRefresh() {
+      if (softRefreshTimer) clearTimeout(softRefreshTimer);
+      softRefreshTimer = setTimeout(() => {
+        softRefreshTimer = null;
+        if (!agentLive || !ws || ws.readyState !== WebSocket.OPEN) return;
+        // Reset the seq so the agent resends its snapshot; the snapshot's own
+        // clear (ED3) wipes the duplicated scrollback and repaints in one write,
+        // so the old view stays put until the clean one lands — no blank flash,
+        // and the input line is never momentarily missing.
+        lastSeq = 0;
+        sendResume();
+      }, 450);
+    }
+
     function cancelReconnect() {
       if (reconnectTimer !== null) {
         clearTimeout(reconnectTimer);
@@ -4884,8 +4907,19 @@
       // Erase any in-flight dim predictions before fit() reflows the
       // buffer (cell columns may move). No-op while predictions are off.
       if (term && predictions.length > 0) resetPredictionsSoft();
+      const prevCols = term.cols, prevRows = term.rows;
       try { fitAddon.fit(); } catch (_) {}
-      if (agentLive) sendResize();
+      if (agentLive) {
+        sendResize();
+        // After a genuine terminal-grid resize (not the initial fit on connect),
+        // re-pull the clean snapshot so resize-repaint duplicates don't linger in
+        // scrollback until the user manually reloads. Gated on connectedAt so the
+        // fit that runs while connecting doesn't trigger a redundant refresh.
+        if ((term.cols !== prevCols || term.rows !== prevRows) &&
+            connectedAt && (Date.now() - connectedAt) > 1500) {
+          scheduleSoftRefresh();
+        }
+      }
     }
     function scheduleFit() {
       if (fitFrame) return;            // coalesce a burst into one fit per frame
