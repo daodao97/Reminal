@@ -121,9 +121,9 @@ func TestNativeSnapshotCommittedCleanThroughWiden(t *testing.T) {
 		}
 	}
 	// The frame (RECENT) overflows the 24-row screen at the narrow widths, so its
-	// re-emits pile into scrollback; frame-anchoring drops all but the latest copy plus
-	// at most one pre-band copy (the frame already overflowed before the first resize
-	// opened the band). Bound it — the point is it's collapsed from ~one-per-resize.
+	// re-emits pile into scrollback. We do NOT dedup those cross-width copies (the
+	// positional band-drop that used to was removed — it could delete real scrollback);
+	// the guarantee is only that COMMITTED history stays clean and NOTHING is ever lost.
 	frameMax, frameMissing := 0, 0
 	for i := 1; i <= 18; i++ {
 		c := counts[fmt.Sprintf("RECENT-%04d", i)]
@@ -140,10 +140,7 @@ func TestNativeSnapshotCommittedCleanThroughWiden(t *testing.T) {
 		t.Errorf("committed history not pristine through resizes: missing=%d duplicated=%d (want 0,0)", missing, dup)
 	}
 	if frameMissing > 0 {
-		t.Errorf("frame content lost: %d/18 RECENT lines missing (want 0)", frameMissing)
-	}
-	if frameMax > 2 {
-		t.Errorf("frame band not collapsed: max %d copies (want <=2 after frame-anchoring)", frameMax)
+		t.Errorf("frame content lost: %d/18 RECENT lines missing (want 0) — nothing may ever be dropped", frameMissing)
 	}
 }
 

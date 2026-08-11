@@ -1945,36 +1945,19 @@ func (a *Agent) rebuildView() (history, screen []string, ok bool) {
 // and the seq it represents (everything through that seq). Built under screenMu
 // with the latest seq read in the same critical section, so the frame and seq
 // are consistent. Returns ("", 0) if snapshots are disabled or building fails.
-// frameAnchoredHistory renders the emulator's scrollback with the stale frame-overflow
-// band dropped. An inline TUI repaints its whole (bounded) frame on every resize; when
-// the frame is taller than the viewer, the overflow scrolls a fresh copy into scrollback
-// each time, so a burst of resizes stacks duplicate copies of the recent transcript.
-// [frameBandStart, frameBandLastResize) captures every copy but the latest — the live
-// screen plus the scrollback tail after frameBandLastResize carry the current frame, and
-// committed history before the band is untouched. The drop is skipped (plain native
-// history) when no band is tracked or the scrollback has trimmed past the marks (their
-// indices would be stale). Caller holds screenMu.
-func (a *Agent) frameAnchoredHistory() []string {
-	lines := renderScrollback(a.screen, 0) // all scrollback lines, uncapped
-	full := len(lines)
-	// The marks are absolute scrollback indices; they stay valid only while nothing has
-	// been evicted from the front. Scrollback below its cap => no eviction => marks good.
-	trimSafe := a.scrollbackLines <= 0 || full < a.scrollbackLines
-	if a.frameBandActive && trimSafe &&
-		a.frameBandStart >= 0 &&
-		a.frameBandLastResize > a.frameBandStart &&
-		a.frameBandLastResize <= full {
-		kept := make([]string, 0, a.frameBandStart+full-a.frameBandLastResize)
-		kept = append(kept, lines[:a.frameBandStart]...)
-		kept = append(kept, lines[a.frameBandLastResize:]...)
-		lines = kept
-	}
-	if a.scrollbackLines > 0 && len(lines) > a.scrollbackLines {
-		lines = lines[len(lines)-a.scrollbackLines:]
-	}
-	// Collapse any verbatim paragraph re-emits the band drop didn't cover (e.g. same-
-	// width height resizes); keep-first, word-keyed, so differently-worded legitimate
-	// repeats survive.
+// snapshotHistory renders the emulator's native scrollback for the reconnect snapshot.
+//
+// It ONLY collapses whole paragraphs the app re-emitted VERBATIM across resizes
+// (dedupBlocks: word-keyed, keep-first, length-gated — it can never delete unique
+// content). It does NOT drop any positional "frame band": the earlier watermark-based
+// drop (frameBandStart..frameBandLastResize) was removed because it could silently delete
+// real scrollback — on a fresh agent (e.g. right after a hot-restart) the band opened at
+// index 0 and a later resize extended it to cover the whole buffer, leaving the viewer
+// with "nothing to scroll". Losing history is far worse than the residual frame-overflow
+// duplication on narrow screens that the band was trimming, so we keep the safe path.
+// Caller holds screenMu.
+func (a *Agent) snapshotHistory() []string {
+	lines := renderScrollback(a.screen, a.scrollbackLines)
 	return dedupBlocks(lines)
 }
 
@@ -1991,7 +1974,7 @@ func (a *Agent) snapshotFrame() (string, uint64) {
 	// (Verified against real Claude Code: on resize it repaints only its bounded frame,
 	// ~one screen, not the whole session — so scrolled-off history is genuinely clean.)
 	a.screenMu.Lock()
-	history := a.frameAnchoredHistory()
+	history := a.snapshotHistory()
 	// Clamp the plaintext budget so the ENCRYPTED frame fits the relay's 1 MiB WS
 	// limit. The snapshot is sent as ONE un-chunked frame (unlike uploads/downloads),
 	// box.Encrypt base64-inflates it ~4/3, and the screen + message wrapper add more —
