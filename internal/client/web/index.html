@@ -1455,6 +1455,7 @@
     term.loadAddon(new WebLinksAddon.WebLinksAddon());
     term.open(document.getElementById('terminal'));
     fitAddon.fit();
+    window.__term = term; // debug/test handle (harmless; used by automated viewer tests)
 
     // Defang the hidden helper textarea that xterm.js routes keystrokes
     // through. Without this, Android Chrome's IME (Gboard etc.) treats
@@ -3166,7 +3167,34 @@
         off += c.byteLength;
       }
       pendingChunks.length = 0;
-      term.write(merged);
+      // Position-preserving repaint: the agent's snapshot (sent whenever ANY
+      // viewer attaches or falls behind — the relay broadcasts it to everyone)
+      // begins with ED2+ED3, wiping this viewer's scrollback and repainting.
+      // If the user is scrolled up reading, that yanks them off their spot
+      // (worst with a TUI generating output, when this viewer is momentarily
+      // behind the snapshot's seq so the dedup-by-seq doesn't drop it). Detect
+      // the wipe signature and restore the same distance-from-bottom after the
+      // write lands. A genuine in-app clear (ESC[2J ESC[3J) leaves no history,
+      // so the restore clamps to the bottom there — indistinguishable from
+      // today's behavior.
+      const bufA = term.buffer.active;
+      const distUp = bufA.baseY - bufA.viewportY;
+      if (distUp > 0 && hasWipeSignature(merged)) {
+        term.write(merged, () => {
+          const b2 = term.buffer.active;
+          term.scrollLines((b2.baseY - distUp) - b2.viewportY); // xterm clamps at the top
+        });
+      } else {
+        term.write(merged);
+      }
+    }
+    // ESC[2J ESC[3J — the scrollback-wipe prefix every agent snapshot carries.
+    function hasWipeSignature(u8) {
+      for (let i = 0, n = u8.length - 7; i < n; i++) {
+        if (u8[i] === 0x1b && u8[i + 1] === 0x5b && u8[i + 2] === 0x32 && u8[i + 3] === 0x4a &&
+            u8[i + 4] === 0x1b && u8[i + 5] === 0x5b && u8[i + 6] === 0x33 && u8[i + 7] === 0x4a) return true;
+      }
+      return false;
     }
     function enqueueData(bytes) {
       // Skip any prefix the user already saw via local echo (mosh-

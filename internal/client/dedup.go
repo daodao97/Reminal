@@ -88,3 +88,78 @@ func dedupBlocks(lines []string) []string {
 	}
 	return out
 }
+
+// Frame-matched dedup: the second, width-INDEPENDENT half of the resize story.
+//
+// dedupBlocks above only collapses paragraphs re-emitted at the SAME width (identical
+// word key). But an inline TUI repaints its frame on EVERY SIGWINCH — so a session
+// that bounced between widths stamps copies of the CURRENT frame's content into
+// committed scrollback re-wrapped differently each time. Those copies have identical
+// words but different paragraph boundaries (blank/wrap structure shifts with width),
+// so no paragraph-key scheme can pair them with each other.
+//
+// What CAN be paired is each copy against the live frame itself: every stale copy is,
+// by definition, a re-emission of content the app is showing RIGHT NOW. So we match
+// committed paragraphs against the current screen's word stream using word shingles
+// (order-preserving 8-word windows — immune to wrapping, blank lines, and per-line
+// chrome). A paragraph whose shingles are almost entirely present in the frame is a
+// stale repaint copy: drop it. This is provably lossless — the dropped words are still
+// painted, in the frame, at the snapshot's bottom; nothing the user could scroll to
+// disappears. Content the app has scrolled PAST (no longer in its frame) is never
+// touched, no matter how similar.
+const (
+	dedupFrameShingle  = 8   // words per shingle; < dedupMinParaWords so every eligible paragraph has several
+	dedupFrameCoverage = 0.9 // fraction of a paragraph's shingles that must be in the frame to drop it
+)
+
+// dedupAgainstFrame drops committed paragraphs that are stale re-emissions of the
+// app's current frame (see block comment above). screen is the live screen's rows.
+func dedupAgainstFrame(history, screen []string) []string {
+	var fw []string
+	for _, r := range screen {
+		fw = append(fw, dedupWords(r)...)
+	}
+	if len(fw) < dedupFrameShingle {
+		return history
+	}
+	shingles := make(map[string]bool, len(fw))
+	for i := 0; i+dedupFrameShingle <= len(fw); i++ {
+		shingles[strings.Join(fw[i:i+dedupFrameShingle], "\x00")] = true
+	}
+	out := make([]string, 0, len(history))
+	i := 0
+	for i < len(history) {
+		if dedupBlank(history[i]) {
+			out = append(out, history[i])
+			i++
+			continue
+		}
+		j := i
+		var words []string
+		for j < len(history) && !dedupBlank(history[j]) {
+			words = append(words, dedupWords(history[j])...)
+			j++
+		}
+		if len(words) >= dedupMinParaWords {
+			total, hit := 0, 0
+			for k := 0; k+dedupFrameShingle <= len(words); k++ {
+				total++
+				if shingles[strings.Join(words[k:k+dedupFrameShingle], "\x00")] {
+					hit++
+				}
+			}
+			if total > 0 && float64(hit) >= dedupFrameCoverage*float64(total) {
+				// Stale repaint copy of the live frame: drop it, absorbing the one
+				// trailing blank (same separator logic as dedupBlocks).
+				if j < len(history) && dedupBlank(history[j]) {
+					j++
+				}
+				i = j
+				continue
+			}
+		}
+		out = append(out, history[i:j]...)
+		i = j
+	}
+	return out
+}

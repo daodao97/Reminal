@@ -1947,18 +1947,24 @@ func (a *Agent) rebuildView() (history, screen []string, ok bool) {
 // are consistent. Returns ("", 0) if snapshots are disabled or building fails.
 // snapshotHistory renders the emulator's native scrollback for the reconnect snapshot.
 //
-// It ONLY collapses whole paragraphs the app re-emitted VERBATIM across resizes
-// (dedupBlocks: word-keyed, keep-first, length-gated — it can never delete unique
-// content). It does NOT drop any positional "frame band": the earlier watermark-based
-// drop (frameBandStart..frameBandLastResize) was removed because it could silently delete
+// Two content-matched dedup passes run over it, both lossless by construction:
+//   - dedupBlocks: collapses paragraphs the app re-emitted VERBATIM (same word key);
+//     keep-first, length-gated — it can never delete unique content.
+//   - dedupAgainstFrame: drops committed paragraphs that are stale re-emissions of the
+//     app's CURRENT frame (resize repaints re-wrapped at other widths — cross-width
+//     copies no paragraph key can pair). The content still paints in the frame at the
+//     snapshot's bottom, so nothing the user could scroll to disappears.
+//
+// It does NOT drop any positional "frame band": the earlier watermark-based drop
+// (frameBandStart..frameBandLastResize) was removed because it could silently delete
 // real scrollback — on a fresh agent (e.g. right after a hot-restart) the band opened at
 // index 0 and a later resize extended it to cover the whole buffer, leaving the viewer
-// with "nothing to scroll". Losing history is far worse than the residual frame-overflow
-// duplication on narrow screens that the band was trimming, so we keep the safe path.
+// with "nothing to scroll". Losing history is far worse; only content-matched dedup is safe.
 // Caller holds screenMu.
 func (a *Agent) snapshotHistory() []string {
 	lines := renderScrollback(a.screen, a.scrollbackLines)
-	return dedupBlocks(lines)
+	lines = dedupBlocks(lines)
+	return dedupAgainstFrame(lines, strings.Split(a.screen.Render(), "\n"))
 }
 
 func (a *Agent) snapshotFrame() (string, uint64) {
