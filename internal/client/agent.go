@@ -843,10 +843,21 @@ func (a *Agent) coalesceViewerResize(cols, rows uint16) {
 		a.szMinR = rows
 	}
 	shrinks := cols < curC || rows < curR
-	if shrinks && a.szShrinkT == nil {
+	// Only a SMALL rows-only grow is address-bar jitter (~2-4 rows, cols
+	// unchanged) — that's all the 2s stability damper is for. Everything
+	// else is a real layout change the user is waiting on — the on-screen
+	// keyboard collapsing (rows jump by ~10+), rotation, a genuine window
+	// resize — and must apply on the fast path like a shrink does.
+	jitterGrow := cols == curC && rows > curR && rows-curR <= 5
+	if (shrinks || !jitterGrow) && a.szShrinkT == nil {
 		a.szShrinkT = time.AfterFunc(300*time.Millisecond, func() {
 			a.szMu.Lock()
-			c, r := a.szMinC, a.szMinR
+			var c, r uint16
+			if a.szMinC < a.szLastC || a.szMinR < a.szLastR {
+				c, r = a.szMinC, a.szMinR // a shrink was seen: smallest wins
+			} else {
+				c, r = a.szLastC, a.szLastR // pure grow burst: settle at the latest
+			}
 			a.szShrinkT = nil
 			a.szMinC, a.szMinR = 0, 0
 			a.szMu.Unlock()
