@@ -1463,6 +1463,9 @@
     window.__winStats = () => [...panes.values()].map((p) => ({
       id: p.w.id, cap: p.capSrc || null, aus: p.h264AUs || 0,
       gaps: p.h264Gaps || 0, errs: p.h264Errs || 0, batches: p.h264Batches || 0,
+      paintMs: (() => { const g = (p.paintGaps || []).slice().sort((a, b) => a - b);
+        return g.length ? Math.round(g[Math.floor(g.length / 2)]) : 0; })(),
+      queued: (p.renderQ || []).length,
       fps: (p.frameTimes || []).length, seq: p.lastSeq || 0,
     }));
 
@@ -5875,6 +5878,12 @@
     // JSON-encoded and encrypted into data; otherwise a bare {type} goes out
     // (used for the window_list request, which carries no payload).
     async function sendWin(type, obj) {
+      // Interacting with a pane means latency now matters more than smoothness:
+      // stop playing buffered frames out and jump to the newest.
+      if (type === 'window_input' && obj && obj.id) {
+        const ip = panes.get(obj.id);
+        if (ip) dropQueuedFrames(ip);
+      }
       if (!ws || ws.readyState !== WebSocket.OPEN || !cryptoKey) return;
       const frame = { type };
       if (obj !== undefined) frame.data = await encrypt(cryptoKey, JSON.stringify(obj));
@@ -6388,6 +6397,8 @@
       sendWin('window_ctl', { action: 'stop', id });
       if (p.lastUrl) URL.revokeObjectURL(p.lastUrl);
       try { if (p.vdec && p.vdec.state !== 'closed') p.vdec.close(); } catch (_) {}
+      if (p.renderRAF) { cancelAnimationFrame(p.renderRAF); p.renderRAF = 0; }
+      while (p.renderQ && p.renderQ.length) { try { p.renderQ.shift().f.close(); } catch (_) {} }
       p.el.remove();
       panes.delete(id);
       if (focusedPaneId === id) focusedPaneId = null;
@@ -6908,8 +6919,9 @@
         p.h264Synced = true;
       }
       p.h264AUs = (p.h264AUs || 0) + 1;
-      if (ackSeq !== undefined) (p.h264Seqs || (p.h264Seqs = [])).push(ackSeq);
-      else (p.h264Seqs || (p.h264Seqs = [])).push(null); // batch: acked by caller
+      // ackSeq is set only on the per-message path; a batch is acked once by
+      // its caller, and its frames are the ones that need paced playout.
+      (p.h264Seqs || (p.h264Seqs = [])).push({ ack: ackSeq !== undefined ? ackSeq : null, paced: ackSeq === undefined })
       try {
         p.vdec.decode(new EncodedVideoChunk({
           type: key ? 'key' : 'delta',
@@ -6920,6 +6932,82 @@
         p.h264Seqs.pop();
         h264Fail(p, e);
       }
+    }
+
+    // paintVideoFrame draws one decoded frame onto the pane's canvas. Shared by
+    // the immediate and the paced paths, and deliberately identical to what the
+    // JPEG path does so pop-out aspect and the cursor overlay behave the same.
+    function paintVideoFrame(p, frame) {
+      const cv = p.img, sw = frame.displayWidth, sh = frame.displayHeight;
+      if (cv.width !== sw || cv.height !== sh) { cv.width = sw; cv.height = sh; }
+      if (p.popup && p.popupAspect && !p.popupMatched) {
+        p.popupMatched = true;
+        try { p.popupAspect(); } catch (_) {}
+      }
+      p.ctx.drawImage(frame, 0, 0, sw, sh);
+      if (p.placeCursor && p.cursor) p.placeCursor();
+      // Inter-paint spacing is what motion actually looks like, as distinct
+      // from how many frames arrived — the two came apart badly once batching
+      // landed, so it's measured.
+      const now = performance.now();
+      if (p.lastPaintAt) (p.paintGaps || (p.paintGaps = [])).push(now - p.lastPaintAt);
+      if (p.paintGaps && p.paintGaps.length > 120) p.paintGaps.shift();
+      p.lastPaintAt = now;
+    }
+
+    // queueVideoFrame schedules a batched frame for its turn on screen instead
+    // of painting it instantly. Spacing self-tunes to the delivery cadence
+    // (batch period / frames per batch) so playout matches the capture rate.
+    function queueVideoFrame(p, frame) {
+      const now = performance.now();
+      // Play out at the rate frames are ARRIVING, which markFrameTime already
+      // tracks as a rolling one-second count. Pacing off the batch cadence
+      // instead was wrong: one late batch inflated the estimate, playout fell
+      // behind arrival, and the buffer grew without bound. A deep buffer is
+      // pure latency, so drain harder the deeper it gets.
+      const rate = (p.frameTimes || []).length || 30;
+      let spacing = 1000 / rate;
+      if (p.renderQ && p.renderQ.length > 6) spacing *= 0.8;
+      spacing = Math.max(8, Math.min(60, spacing));
+      if (!p.nextShowAt || p.nextShowAt < now) p.nextShowAt = now;
+      (p.renderQ || (p.renderQ = [])).push({ f: frame, at: p.nextShowAt });
+      p.nextShowAt += spacing;
+      // A backgrounded or overloaded tab must not accumulate GPU frames or
+      // drift ever further behind: collapse to the newest and resume live.
+      if (p.renderQ.length > 16) {
+        while (p.renderQ.length > 1) p.renderQ.shift().f.close();
+        p.nextShowAt = now;
+      }
+      pumpRenderQ(p);
+    }
+
+    // pumpRenderQ paints whatever is due on each animation frame. Anything that
+    // came due within the same tick is superseded — only the newest is drawn,
+    // since the display can show exactly one.
+    function pumpRenderQ(p) {
+      if (p.renderRAF) return;
+      p.renderRAF = requestAnimationFrame(() => {
+        p.renderRAF = 0;
+        const now = performance.now();
+        let due = null;
+        while (p.renderQ && p.renderQ.length && p.renderQ[0].at <= now) {
+          if (due) due.close();
+          due = p.renderQ.shift().f;
+        }
+        if (due) { paintVideoFrame(p, due); due.close(); }
+        if (p.renderQ && p.renderQ.length) pumpRenderQ(p);
+      });
+    }
+
+    // dropQueuedFrames abandons pending playout and shows the newest frame at
+    // once. Called on input: while you are watching, smooth motion wins; the
+    // moment you interact, latency does.
+    function dropQueuedFrames(p) {
+      if (!p.renderQ || !p.renderQ.length) return;
+      while (p.renderQ.length > 1) p.renderQ.shift().f.close();
+      p.renderQ[0].at = 0;
+      p.nextShowAt = 0;
+      pumpRenderQ(p);
     }
 
     // ensureH264Decoder lazily builds the pane's VideoDecoder. Output frames
@@ -6933,20 +7021,16 @@
       try {
         p.vdec = new VideoDecoder({
           output: (frame) => {
-            const seq = (p.h264Seqs && p.h264Seqs.length) ? p.h264Seqs.shift() : null;
-            try {
-              const cv = p.img, sw = frame.displayWidth, sh = frame.displayHeight;
-              if (cv.width !== sw || cv.height !== sh) { cv.width = sw; cv.height = sh; }
-              if (p.popup && p.popupAspect && !p.popupMatched) {
-                p.popupMatched = true;
-                try { p.popupAspect(); } catch (_) {}
-              }
-              p.ctx.drawImage(frame, 0, 0, sw, sh);
-              if (p.placeCursor && p.cursor) p.placeCursor();
-            } finally {
-              frame.close();
-            }
-            if (seq != null) sendWindowAck(p.w.id, seq, true);
+            const e = (p.h264Seqs && p.h264Seqs.length) ? p.h264Seqs.shift() : null;
+            // Frames that arrived one-per-message are already spaced by the
+            // network — paint on arrival, lowest latency. Frames unpacked from
+            // a relay batch all land within a millisecond of each other, so
+            // they must be played OUT over time or the display (one refresh per
+            // 16ms) only ever shows the last of each group: honest 30fps by the
+            // counter, visibly 5fps to a human.
+            if (e && e.paced) queueVideoFrame(p, frame);
+            else { paintVideoFrame(p, frame); frame.close(); }
+            if (e && e.ack != null) sendWindowAck(p.w.id, e.ack, true);
           },
           error: (e) => h264Fail(p, e),
         });
