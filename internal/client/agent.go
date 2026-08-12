@@ -105,16 +105,16 @@ type Agent struct {
 	screen          *vt.Emulator
 	screenMu        sync.Mutex
 	scrollbackLines int // history lines included in a snapshot (0 = screen only)
-	// Frame-anchored dedup (see frameAnchoredHistory): an inline TUI repaints its
-	// bounded frame on every resize, and when that frame is taller than the viewer the
-	// overflow scrolls a fresh copy into scrollback each time. Across a burst of resizes
-	// (a reconnect, a window drag) that stacks duplicate copies of the recent transcript.
-	// These mark the scrollback region [start,lastResize) holding every copy but the
-	// latest so the snapshot can drop it. Guarded by screenMu.
-	frameBandActive     bool
-	frameBandStart      int       // scrollback index where the stale overflow band begins
-	frameBandLastResize int       // scrollback index at the latest resize (start of the CURRENT frame's overflow — kept)
-	lastResizeAt        time.Time // to tell a resize repaint (immediate) from genuine new output (later)
+	// Captured-frame resize segments (see dropResizeRepaints): an inline TUI repaints
+	// its bounded frame on every resize; when that frame is taller than the viewer the
+	// overflow scrolls a stale copy into scrollback. Each segment records WHERE that
+	// resize's overflow can land (position: the emulator never reflows scrollback, so
+	// indices are stable) and WHAT it can contain (the words on screen at that exact
+	// resize — the only content its repaint can re-emit). Dropping requires BOTH to
+	// match, so genuine output interleaved with a resize burst is untouchable — the
+	// flaw that sank the v2.3.0 position-only band (it swallowed everything between
+	// two resizes, including a fresh agent's entire history). Guarded by screenMu.
+	resizeSegs []resizeSeg
 	// rebuildEmu is the persistent tall emulator snapshots replay history
 	// through (see rebuildView). Guarded by rebuildMu; lazily created.
 	rebuildEmu      *vt.Emulator
@@ -1805,21 +1805,7 @@ func (a *Agent) initScreen() {
 func (a *Agent) record(p []byte) {
 	a.screenMu.Lock()
 	if a.screen != nil {
-		before := 0
-		if a.frameBandActive {
-			if sb := a.screen.Scrollback(); sb != nil {
-				before = sb.Len()
-			}
-		}
 		_, _ = a.screen.Write(p)
-		// Output that grows scrollback well after the last resize is genuine new
-		// content, not the resize repaint (which arrives immediately) — close the frame
-		// band so this content is never mistaken for a stale overflow copy and dropped.
-		if a.frameBandActive && time.Since(a.lastResizeAt) > frameRepaintWindow {
-			if sb := a.screen.Scrollback(); sb != nil && sb.Len() > before {
-				a.frameBandActive = false
-			}
-		}
 	}
 	if enc, err := a.box.Encrypt(p); err == nil {
 		a.buf.Append(enc)
@@ -1827,10 +1813,33 @@ func (a *Agent) record(p []byte) {
 	a.screenMu.Unlock()
 }
 
-// frameRepaintWindow bounds how long after a resize we still treat scrollback growth as
-// the app's frame repaint (overflow) rather than genuine new output. Repaints land within
-// tens of ms; real new content (typing, a model response) comes much later.
-const frameRepaintWindow = 750 * time.Millisecond
+// resizeSeg is one resize's repaint fingerprint: the scrollback position where its
+// frame-overflow can land, a generous bound on how far it can reach, and the word
+// stream of the screen that was being repainted (see Agent.resizeSegs).
+type resizeSeg struct {
+	start   int      // scrollback length at the resize — overflow lands at/after here
+	maxOver int      // overflow can't exceed this many lines (frame height, re-wrap slack)
+	words   []string // word stream of the screen captured at the resize
+}
+
+// regionWords returns the word stream of lines[from:to] (bounds clamped).
+func regionWords(lines []string, from, to int) []string {
+	if from < 0 {
+		from = 0
+	}
+	if to > len(lines) {
+		to = len(lines)
+	}
+	var w []string
+	for _, l := range lines[from:to] {
+		w = append(w, dedupWords(l)...)
+	}
+	return w
+}
+
+// maxResizeSegs bounds the fingerprint list; beyond it the oldest segments are
+// forgotten (their copies, if any, just stay — bounded imperfection, never loss).
+const maxResizeSegs = 32
 
 // resizeScreen keeps the emulator's dimensions in step with the PTY so the
 // snapshot matches the size viewers render at.
@@ -1839,6 +1848,24 @@ func (a *Agent) resizeScreen(cols, rows uint16) {
 		return
 	}
 	a.screenMu.Lock()
+	// Fingerprint the frame the app is ABOUT to repaint: capture the pre-resize
+	// screen's words (width-invariant — re-wrapping moves line breaks, not words)
+	// and where in scrollback the repaint's overflow would land. The overflow of a
+	// re-wrapped frame can exceed the old row count (narrower = taller), so the
+	// positional bound is generous — the WORD match is what makes dropping safe.
+	prevRows := a.screen.Height()
+	var fw []string
+	for _, r := range strings.Split(a.screen.Render(), "\n") {
+		fw = append(fw, dedupWords(r)...)
+	}
+	cur := 0
+	if sb := a.screen.Scrollback(); sb != nil {
+		cur = sb.Len()
+	}
+	a.resizeSegs = append(a.resizeSegs, resizeSeg{start: cur, maxOver: prevRows*4 + 8, words: fw})
+	if len(a.resizeSegs) > maxResizeSegs {
+		a.resizeSegs = a.resizeSegs[len(a.resizeSegs)-maxResizeSegs:]
+	}
 	a.screen.Resize(int(cols), int(rows))
 	if a.buf != nil {
 		// Marker for the history rebuild: bytes after this point were emitted
@@ -1846,21 +1873,6 @@ func (a *Agent) resizeScreen(cols, rows uint16) {
 		// record()'s appends.
 		a.buf.AppendResize(int(cols), int(rows))
 	}
-	// Watermark where this resize's frame-overflow will land. The band opens at the
-	// first resize of a burst (frameBandStart = committed level) and every resize moves
-	// its far edge, so [start,lastResize) ends up holding every stale copy the burst
-	// stamped, leaving the latest frame's overflow (after lastResize) intact. See
-	// frameAnchoredHistory.
-	cur := 0
-	if sb := a.screen.Scrollback(); sb != nil {
-		cur = sb.Len()
-	}
-	if !a.frameBandActive {
-		a.frameBandActive = true
-		a.frameBandStart = cur
-	}
-	a.frameBandLastResize = cur
-	a.lastResizeAt = time.Now()
 	a.screenMu.Unlock()
 }
 
@@ -2052,9 +2064,80 @@ func (a *Agent) rebuildView() (history, screen []string, ok bool) {
 // with "nothing to scroll". Losing history is far worse; only content-matched dedup is safe.
 // Caller holds screenMu.
 func (a *Agent) snapshotHistory() []string {
-	lines := renderScrollback(a.screen, a.scrollbackLines)
+	lines := renderScrollback(a.screen, 0) // uncapped: segment indices are absolute
+	lines = a.dropResizeRepaints(lines)
+	if a.scrollbackLines > 0 && len(lines) > a.scrollbackLines {
+		lines = lines[len(lines)-a.scrollbackLines:]
+	}
 	lines = dedupBlocks(lines)
 	return dedupAgainstFrame(lines, strings.Split(a.screen.Render(), "\n"))
+}
+
+// dropResizeRepaints removes, for every resize EXCEPT the newest, the lines its frame
+// repaint stamped into scrollback: within that resize's positional segment, exactly
+// the lines whose words match the frame captured at that resize (see resizeSegs).
+// The newest segment is the CURRENT frame's own overflow — the frame's top rows above
+// the live screen — which the viewer needs, so it is never touched. Position bounds
+// the search, captured-frame content decides — genuine output never matches, so it
+// can never be dropped, no matter how it interleaves with a resize burst.
+// Skipped entirely once the emulator may have evicted from the front of scrollback
+// (absolute indices would be stale). Caller holds screenMu.
+func (a *Agent) dropResizeRepaints(lines []string) []string {
+	if len(a.resizeSegs) < 2 {
+		return lines
+	}
+	if a.scrollbackLines > 0 && len(lines) >= a.scrollbackLines {
+		a.resizeSegs = nil // eviction possible: indices stale, start fresh
+		return lines
+	}
+	drop := make([]bool, len(lines))
+	// Existence corpus, built newest-to-oldest: a row may be dropped only if its
+	// content provably appears again LATER — in a newer segment's region or on the
+	// live screen. Stale repaint copies always do (that's what makes them stale);
+	// a row pushed off the screen by a repaint (content ABOVE the app's frame,
+	// whose pushed copy is the ONLY copy) never does, so it can never be lost —
+	// even for apps whose repaint covers less than the captured screen.
+	var scw []string
+	for _, r := range strings.Split(a.screen.Render(), "\n") {
+		scw = append(scw, dedupWords(r)...)
+	}
+	last := a.resizeSegs[len(a.resizeSegs)-1]
+	corpus := buildShingles(scw)
+	corpusWords := make(map[string]bool, len(scw))
+	addWords := func(ws []string) {
+		for _, w := range ws {
+			corpusWords[w] = true
+		}
+	}
+	addWords(scw)
+	lastRegion := regionWords(lines, last.start, len(lines))
+	addShingles(corpus, lastRegion)
+	addWords(lastRegion)
+	for i := len(a.resizeSegs) - 2; i >= 0; i-- {
+		seg := a.resizeSegs[i]
+		end := seg.start + seg.maxOver
+		if nxt := a.resizeSegs[i+1].start; nxt < end {
+			end = nxt
+		}
+		if end > len(lines) {
+			end = len(lines)
+		}
+		if seg.start < 0 || seg.start >= end {
+			continue
+		}
+		capMask := frameMatchedDropMask(lines[seg.start:end], seg.words)
+		laterMask := coverageDropMask(lines[seg.start:end], corpus, corpusWords)
+		for k := range capMask {
+			if capMask[k] && laterMask[k] {
+				drop[seg.start+k] = true
+			}
+		}
+		// This segment's region is now "later" for every older segment.
+		segRegion := regionWords(lines, seg.start, end)
+		addShingles(corpus, segRegion)
+		addWords(segRegion)
+	}
+	return compactDropped(lines, drop)
 }
 
 func (a *Agent) snapshotFrame() (string, uint64) {

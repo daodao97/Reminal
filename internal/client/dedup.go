@@ -150,35 +150,56 @@ func isTruncatedPrefix(frag []string, seen [][]string) bool {
 // every gated stretch contains several windows.
 const dedupFrameShingle = 8
 
-// dedupFrameRunMin gates matched runs. Lower than dedupMinParaWords because the
-// reference set here is only the live frame (an ordered 8+-word match against it is
-// already near-certain re-emission), and real truncated fragments are as short as a
-// header + one wrapped row (~10-11 words) — the 12-word gate let those survive.
-const dedupFrameRunMin = 10
+// dedupFrameRunMin gates matched runs at one full shingle: an ordered 8-word match
+// against a specific frame is already near-certain re-emission, and resize
+// truncation corrupts the LAST word of most committed rows ("unwrapped"→"unwrapp",
+// "land"→"landg"), shattering runs to ~9 words — a higher gate let whole stale
+// copies survive. Coincidence is further excluded where this matters most: the
+// resize-segment path only drops lines that ALSO provably re-occur later.
+const dedupFrameRunMin = 8
 
-// dedupAgainstFrame drops committed lines that are stale re-emissions of the app's
-// current frame (see block comment above). screen is the live screen's rows.
+// frameMatchedDropMask marks the lines of history that are re-emissions of refWords
+// (an ordered word stream — a captured or live app frame).
 //
 // Granularity is LINE-within-matched-RUN, not whole paragraphs: resize repaints get
 // interrupted mid-frame, committing truncated fragments that sit contiguous with
 // unrelated leftover rows (old welcome-box borders etc.). A whole-paragraph coverage
 // test dilutes on that junk and misses the fragment. Instead we mark every history
-// word that lies inside an 8-word window also present (in order) in the frame's word
-// stream, keep only maximal covered stretches of >= dedupMinParaWords words, and drop
+// word that lies inside an 8-word window also present (in order) in the reference
+// stream, keep only maximal covered stretches of >= dedupFrameRunMin words, and mark
 // exactly the lines ALL of whose words are covered. Junk rows with words the frame
 // doesn't contain survive (they're not duplicates); short or coincidental overlaps
 // never reach the stretch gate.
-func dedupAgainstFrame(history, screen []string) []string {
-	var fw []string
-	for _, r := range screen {
-		fw = append(fw, dedupWords(r)...)
+func frameMatchedDropMask(history []string, refWords []string) []bool {
+	set := make(map[string]bool, len(refWords))
+	for _, w := range refWords {
+		set[w] = true
 	}
-	if len(fw) < dedupFrameShingle {
-		return history
+	return coverageDropMask(history, buildShingles(refWords), set)
+}
+
+// buildShingles indexes an ordered word stream by its 8-word windows.
+func buildShingles(words []string) map[string]bool {
+	m := make(map[string]bool, len(words))
+	for i := 0; i+dedupFrameShingle <= len(words); i++ {
+		m[strings.Join(words[i:i+dedupFrameShingle], "\x00")] = true
 	}
-	shingles := make(map[string]bool, len(fw))
-	for i := 0; i+dedupFrameShingle <= len(fw); i++ {
-		shingles[strings.Join(fw[i:i+dedupFrameShingle], "\x00")] = true
+	return m
+}
+
+// addShingles extends an existing shingle index with another word stream.
+func addShingles(m map[string]bool, words []string) {
+	for i := 0; i+dedupFrameShingle <= len(words); i++ {
+		m[strings.Join(words[i:i+dedupFrameShingle], "\x00")] = true
+	}
+}
+
+// coverageDropMask marks history lines whose words are covered by matched runs
+// against a pre-built shingle index (see frameMatchedDropMask's doc above).
+func coverageDropMask(history []string, shingles map[string]bool, refWords map[string]bool) []bool {
+	mask := make([]bool, len(history))
+	if len(shingles) == 0 {
+		return mask
 	}
 
 	// History word stream, remembering which line each word came from.
@@ -225,14 +246,67 @@ func dedupAgainstFrame(history, screen []string) []string {
 			covCount[li]++
 		}
 	}
-	out := make([]string, 0, len(history))
+	// Locate each line's single uncovered word (when there is exactly one).
+	lastWord := make([]string, len(history))
+	uncovered := make([]string, len(history))
+	uncoveredIsLast := make([]bool, len(history))
+	{
+		idx := make([]int, len(history)) // words seen per line while walking the stream
+		for k, li := range lineOf {
+			idx[li]++
+			lastWord[li] = hw[k]
+			if !covered[k] {
+				uncovered[li] = hw[k]
+				uncoveredIsLast[li] = idx[li] == wordCount[li]
+			}
+		}
+	}
+	for li := range history {
+		if wordCount[li] == 0 {
+			continue
+		}
+		if covCount[li] == wordCount[li] {
+			mask[li] = true
+			continue
+		}
+		// Splice tolerance — NARROW by design: resize truncation corrupts a row's
+		// FINAL word into a prefix/extension of the real one ("unwrapped"→"unwrapp",
+		// "land"→"landg"). Forgive exactly that: one uncovered word, at the END of
+		// the line, that is a truncation-relative of a real reference word. An
+		// arbitrary differing token (a list number, an ID) is NOT forgiven — that
+		// is what distinguishes a corrupted copy from genuinely distinct content.
+		if wordCount[li] >= 5 && covCount[li] == wordCount[li]-1 && uncoveredIsLast[li] &&
+			spliceRelative(uncovered[li], refWords) {
+			mask[li] = true
+		}
+	}
+	return mask
+}
+
+// spliceRelative reports whether w looks like a truncation artifact of some real
+// reference word: one is a strict prefix of the other, both at least 3 chars.
+func spliceRelative(w string, refWords map[string]bool) bool {
+	if len(w) < 3 {
+		return false
+	}
+	for r := range refWords {
+		if len(r) >= 3 && r != w && (strings.HasPrefix(r, w) || strings.HasPrefix(w, r)) {
+			return true
+		}
+	}
+	return false
+}
+
+// compactDropped removes mask-marked lines, absorbing ONE blank after each dropped
+// block so separators don't pile up.
+func compactDropped(lines []string, drop []bool) []string {
+	out := make([]string, 0, len(lines))
 	justDropped := false
-	for li, l := range history {
-		if wordCount[li] > 0 && covCount[li] == wordCount[li] {
+	for i, l := range lines {
+		if drop[i] {
 			justDropped = true
 			continue
 		}
-		// Absorb ONE blank after a dropped block so separators don't pile up.
 		if justDropped && dedupBlank(l) && (len(out) == 0 || dedupBlank(out[len(out)-1])) {
 			justDropped = false
 			continue
@@ -241,4 +315,14 @@ func dedupAgainstFrame(history, screen []string) []string {
 		out = append(out, l)
 	}
 	return out
+}
+
+// dedupAgainstFrame drops committed lines that are stale re-emissions of the app's
+// current frame (see block comment above). screen is the live screen's rows.
+func dedupAgainstFrame(history, screen []string) []string {
+	var fw []string
+	for _, r := range screen {
+		fw = append(fw, dedupWords(r)...)
+	}
+	return compactDropped(history, frameMatchedDropMask(history, fw))
 }
