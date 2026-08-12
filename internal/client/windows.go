@@ -18,6 +18,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -435,11 +436,29 @@ func (a *Agent) handleWindowAck(encData string) {
 	var ev struct {
 		ID  string `json:"id"`
 		Seq uint64 `json:"seq"`
+		Key bool   `json:"key"`
 	}
 	if json.Unmarshal(plaintext, &ev) != nil {
 		return
 	}
+	if ev.Key {
+		a.requestWindowKey(ev.ID)
+	}
 	a.deliverWindowAck(ev.ID, ev.Seq)
+}
+
+// requestWindowKey marks a window's stream as needing an immediate keyframe.
+// A viewer raises this when it detects a gap in the frame sequence: its decoder
+// has diverged from the encoder and will render smears until a self-contained
+// IDR arrives. Coalesced into a single flag — ten gapped frames need one key,
+// not ten. No-op for an unknown id or a JPEG stream (every frame is a key).
+func (a *Agent) requestWindowKey(id string) {
+	a.winMu.Lock()
+	f := a.winKeyReq[id]
+	a.winMu.Unlock()
+	if f != nil {
+		f.Store(true)
+	}
 }
 
 // deliverWindowAck feeds a decoded (id, seq) ack to the window's pacing channel.
@@ -507,6 +526,7 @@ func (a *Agent) startWindowStream(id string) {
 	if a.winStreams == nil {
 		a.winStreams = map[string]chan struct{}{}
 		a.winAck = map[string]chan uint64{}
+		a.winKeyReq = map[string]*atomic.Bool{}
 	}
 	if _, ok := a.winStreams[id]; ok {
 		a.winMu.Unlock() // already streaming this window
@@ -516,8 +536,10 @@ func (a *Agent) startWindowStream(id string) {
 	// Buffered so an incoming ack never blocks the reader goroutine; streamWindow
 	// only cares about the newest seq, so a slot or two is plenty.
 	ack := make(chan uint64, 4)
+	keyReq := &atomic.Bool{}
 	a.winStreams[id] = stop
 	a.winAck[id] = ack
+	a.winKeyReq[id] = keyReq
 	// First window under mirror → keep the display awake so the host can't
 	// idle-lock and strand remote control (see winAwake).
 	if a.winAwake == nil {
@@ -525,7 +547,7 @@ func (a *Agent) startWindowStream(id string) {
 	}
 	a.winMu.Unlock()
 
-	go a.streamWindow(w, stop, ack)
+	go a.streamWindow(w, stop, ack, keyReq)
 }
 
 // stopWindowStream ends the stream for one window id (its pane was closed).
@@ -538,10 +560,12 @@ func (a *Agent) stopWindowStream(id string) {
 			delete(a.winStreams, k)
 		}
 		a.winAck = map[string]chan uint64{}
+		a.winKeyReq = map[string]*atomic.Bool{}
 	} else if ch, ok := a.winStreams[id]; ok {
 		close(ch)
 		delete(a.winStreams, id)
 		delete(a.winAck, id)
+		delete(a.winKeyReq, id)
 	}
 	// Last window stopped → let the display sleep/lock again. Capture and run the
 	// stop func outside the lock (it kills+waits a child process).
@@ -792,6 +816,9 @@ type winStream struct {
 	w    winInfo
 	stop <-chan struct{}
 	ack  <-chan uint64
+	// keyReq is raised by a viewer that saw a sequence gap and needs a fresh
+	// IDR to resync its decoder (see requestWindowKey).
+	keyReq *atomic.Bool
 
 	// Frame source: the native SCK helper when available (hardware capture +
 	// JPEG at winHelperFPS with its own change detection), else per-frame
@@ -839,8 +866,8 @@ type winStream struct {
 // the viewer acks one over them. The stream is ack-paced: at most
 // maxFramesInFlight unacknowledged frames, so latency can't accumulate on a
 // slow link and the rate adapts to what the viewer actually consumes.
-func (a *Agent) streamWindow(w winInfo, stop <-chan struct{}, ack <-chan uint64) {
-	s := &winStream{a: a, b: a.windows(), w: w, stop: stop, ack: ack, lastGeoCheck: time.Now()}
+func (a *Agent) streamWindow(w winInfo, stop <-chan struct{}, ack <-chan uint64, keyReq *atomic.Bool) {
+	s := &winStream{a: a, b: a.windows(), w: w, stop: stop, ack: ack, keyReq: keyReq, lastGeoCheck: time.Now()}
 	defer s.cleanup()
 	s.run()
 }
@@ -857,6 +884,7 @@ func (s *winStream) cleanup() {
 	if ch, ok := a.winStreams[s.w.ID]; ok && ch == s.stop {
 		delete(a.winStreams, s.w.ID)
 		delete(a.winAck, s.w.ID)
+		delete(a.winKeyReq, s.w.ID)
 	}
 	delete(a.winMenu, s.w.ID)
 	// A stream that exits on its own — window closed, viewer went silent —
@@ -885,6 +913,11 @@ func (s *winStream) run() {
 			return
 		}
 		s.negotiateCodec()
+		// A viewer lost sync (gap in the sequence): re-key before capturing, so
+		// the very next AU it receives is a self-contained entry point.
+		if s.keyReq != nil && s.keyReq.Swap(false) && s.helper != nil && s.codec == "h264" {
+			s.helper.rekey()
+		}
 		start := time.Now()
 		f, err := s.capture()
 		switch {

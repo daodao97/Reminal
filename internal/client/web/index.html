@@ -1456,6 +1456,14 @@
     term.open(document.getElementById('terminal'));
     fitAddon.fit();
     window.__term = term; // debug/test handle (harmless; used by automated viewer tests)
+    // Per-pane video health, for automated tests and field diagnosis: AUs
+    // decoded, sequence gaps seen (each one means the host's stream and this
+    // decoder diverged), and decoder errors. Cheap counters, no behaviour.
+    window.__winStats = () => [...panes.values()].map((p) => ({
+      id: p.w.id, cap: p.capSrc || null, aus: p.h264AUs || 0,
+      gaps: p.h264Gaps || 0, errs: p.h264Errs || 0,
+      fps: (p.frameTimes || []).length, seq: p.lastSeq || 0,
+    }));
 
     // Wheel routing, same rule as touch: an app only receives scroll when it
     // is a full-screen (alternate-buffer) app with mouse reporting on. An
@@ -6773,9 +6781,21 @@
 
       const key = !!(flags & 1);
       if (!ensureH264Decoder(p)) return;
+      // Gap detection. Deltas are meaningless without every predecessor, so a
+      // missing seq means the decoder's reference has diverged from the
+      // encoder's — which renders as drifting smears and speckles that persist
+      // until the next keyframe, NOT as a clean error. Nothing downstream can
+      // detect it, so catch it here: stop feeding deltas and ask the host for
+      // an immediate IDR.
+      if (!key && p.h264NextSeq != null && seq !== p.h264NextSeq) {
+        p.h264Gaps = (p.h264Gaps || 0) + 1;
+        p.h264Synced = false;
+        requestH264Key(p);
+      }
+      p.h264NextSeq = seq + 1;
       // A decoder can only start (or recover) from a key AU; the agent opens
-      // every stream with one and re-keys after any gap, so a skipped delta
-      // here is transient, not a freeze.
+      // every stream with one and re-keys on request, so a skipped delta here
+      // is transient, not a freeze.
       if (!p.h264Synced) {
         if (!key) return;
         p.h264Synced = true;
@@ -6789,6 +6809,7 @@
       noteTransport(true);
       p.capSrc = 'h264';
       p.capErr = null;
+      p.h264AUs = (p.h264AUs || 0) + 1;
       (p.frameTimes || (p.frameTimes = [])).push(p.lastFrameAt);
       while (p.frameTimes.length && p.lastFrameAt - p.frameTimes[0] > 1000) p.frameTimes.shift();
       updatePaneOverlay(p);
@@ -6847,7 +6868,20 @@
     // clear the capability, drop the peer, and re-hello — the agent sees a
     // peer without h264 and streams JPEGs. The pane keeps its last picture
     // until they arrive; nothing is lost but compression.
+    // Ask the host for an immediate keyframe (rides the ack channel, which the
+    // agent already routes to the right stream). Rate-limited: a burst of
+    // gapped frames must not become a burst of IDR requests, each of which
+    // costs ~4x a delta on the wire.
+    function requestH264Key(p) {
+      const now = performance.now();
+      if (p.h264KeyAskAt && now - p.h264KeyAskAt < 250) return;
+      p.h264KeyAskAt = now;
+      if (rtcActive()) { try { rtcDc.send(JSON.stringify({ id: p.w.id, seq: p.lastSeq || 0, key: true })); return; } catch (_) {} }
+      sendWin('window_ack', { id: p.w.id, seq: p.lastSeq || 0, key: true });
+    }
+
     function h264Fail(p, e) {
+      p.h264Errs = (p.h264Errs || 0) + 1;
       if (DEBUG) dbg('h264 decode failed: ' + e);
       try { if (p.vdec && p.vdec.state !== 'closed') p.vdec.close(); } catch (_) {}
       p.vdec = null;

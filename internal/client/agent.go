@@ -262,6 +262,11 @@ type Agent struct {
 	// are delivered on, so streamWindow can pace to the viewer (see streamWindow).
 	// Guarded by winMu.
 	winAck map[string]chan uint64
+	// winKeyReq maps a streaming window's id to a flag a viewer raises when it
+	// detects a gap in the H.264 frame sequence and needs a fresh keyframe to
+	// resync. A flag rather than a channel: many gapped frames coalesce into
+	// one key request. Guarded by winMu.
+	winKeyReq map[string]*atomic.Bool
 	// winMenu marks a window whose right-click just opened a context menu. macOS
 	// draws menus as SEPARATE windows, so a capture-by-window-id misses them; for
 	// a short interval after a right-click we instead capture that window's screen

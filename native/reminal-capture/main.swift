@@ -382,7 +382,12 @@ final class H264Encoder {
         VTSessionSetProperty(session, key: kVTCompressionPropertyKey_RealTime, value: kCFBooleanTrue)
         VTSessionSetProperty(session, key: kVTCompressionPropertyKey_ProfileLevel, value: kVTProfileLevel_H264_Main_AutoLevel)
         VTSessionSetProperty(session, key: kVTCompressionPropertyKey_AllowFrameReordering, value: kCFBooleanFalse)
-        VTSessionSetProperty(session, key: kVTCompressionPropertyKey_MaxKeyFrameIntervalDuration, value: 10 as CFNumber)
+        // Periodic IDR as a SAFETY NET, not the recovery mechanism: a viewer
+        // that loses sync asks for a key immediately (see requestWindowKey), so
+        // this only bounds how long corruption could persist if that request
+        // itself went missing. 2s costs ~4% (one ~30 KB IDR per 120 deltas);
+        // the 10s it replaced meant a lost AU could smear for ten seconds.
+        VTSessionSetProperty(session, key: kVTCompressionPropertyKey_MaxKeyFrameIntervalDuration, value: 2 as CFNumber)
         VTSessionSetProperty(session, key: kVTCompressionPropertyKey_ExpectedFrameRate, value: fps as CFNumber)
         VTSessionSetProperty(session, key: kVTCompressionPropertyKey_AverageBitRate, value: avgBitrate as CFNumber)
         // Hard ceiling ~1.4× average over any 1s window so keyframe spikes stay
