@@ -6,6 +6,7 @@ package client
 import (
 	"bytes"
 	"encoding/base64"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -589,6 +590,14 @@ const ackWaitTimeout = 800 * time.Millisecond
 // still bounded — it can't accumulate past this many frames on a slow link.
 const maxFramesInFlight = 2
 
+// maxFramesInFlightH264 is the same gate for h264 streams. Video frames are
+// ~10× smaller than JPEGs (a delta AU is a few KB), so a deeper pipeline costs
+// little buffered latency but keeps the stream flowing when the ack round-trip
+// is slower than a frame interval. The window must cover RTT×fps or throughput
+// becomes RTT-bound (2-in-flight at 100ms RTT caps ~20fps); at 60fps this
+// covers a 200ms round trip, and it's a ceiling — only reached on a slow link.
+const maxFramesInFlightH264 = 12
+
 // wsFrameMinInterval caps the window-frame rate on the BILLED WebSocket relay
 // path, independent of the peer-to-peer DataChannel rate. The native capture
 // helper can push ~30fps, and P2P viewers get all of it for free — but every WS
@@ -794,6 +803,10 @@ type winStream struct {
 	helperRetryAt time.Time
 	helperErr     string
 	capNative     bool
+	codec         string    // "" (jpeg), or "h264" when every viewer can decode it
+	h264Broken    bool      // h264 failed on this stream (old daemon, no encoder) — stay jpeg
+	lastCodecSwitch time.Time // upswitch hysteresis anchor
+	helperStarted   time.Time // when the current helper came up (fast-death detection)
 
 	// Ack pacing: seq stamps sent frames, acked tracks the viewer's highest
 	// confirmation. sentSinceAck counts ack-expected frames sent since the last
@@ -871,21 +884,36 @@ func (s *winStream) run() {
 		if !s.waitCapacity() {
 			return
 		}
+		s.negotiateCodec()
 		start := time.Now()
-		img, err := s.capture()
+		f, err := s.capture()
 		switch {
-		case err != nil || (len(img) == 0 && !s.capNative):
+		case err != nil || (len(f.Data) == 0 && !s.capNative):
 			// No pixels from the subprocess path: closed window, or capture
 			// genuinely broken (permissions). The helper path never lands here —
 			// an empty helper read just means "no change this interval".
 			if !s.captureFailure(conn, err) {
 				return
 			}
+		case f.H264:
+			// Compressed-video path: every non-empty AU is new content by
+			// construction (SCK only emits changes) and MUST ship in order —
+			// drop policy lives in dispatchH264/winHelper, never here.
+			s.fails = 0
+			if !s.checkWindow(conn, len(f.Data) > 0) {
+				return
+			}
+			if len(f.Data) > 0 {
+				s.dispatchH264(conn, f)
+			} else if time.Since(s.lastSent) >= winHeartbeat {
+				confirmed, probing, _ := s.a.rtcSinks()
+				s.sendHeartbeat(conn, confirmed, probing, s.a.currentViewerCount())
+			}
 		default:
 			s.fails = 0
-			changed := s.detectChange(img)
-			if len(img) > 0 {
-				s.lastImg = img
+			changed := s.detectChange(f.Data)
+			if len(f.Data) > 0 {
+				s.lastImg = f.Data
 			}
 			if !s.checkWindow(conn, changed) {
 				return
@@ -905,6 +933,58 @@ func (s *winStream) run() {
 			}
 		}
 	}
+}
+
+// desiredCodec picks the frame codec the CURRENT sink topology supports.
+// H.264 needs every receiver to decode it, and it only rides DataChannels
+// (the billed relay path stays JPEG at its capped rate), so video engages
+// exactly when every live viewer has a confirmed channel that declared
+// WebCodecs support, and nothing is probing (a probing channel needs JPEG
+// probe frames to prove itself). Anything else — old viewers, a WS-only
+// viewer, a joining viewer — means JPEG for everyone: one encoder, no dual
+// streams.
+func (s *winStream) desiredCodec() string {
+	if s.h264Broken || os.Getenv("REMINAL_NO_H264") != "" {
+		return ""
+	}
+	confirmed, probing, allH264 := s.a.rtcSinks()
+	vc := s.a.currentViewerCount()
+	if len(confirmed) > 0 && len(probing) == 0 && allH264 && vc <= len(confirmed) {
+		return "h264"
+	}
+	return ""
+}
+
+// captureFPS is the frame-rate ceiling for the stream's current codec — video
+// can afford far more frames than JPEG for the same bandwidth.
+func (s *winStream) captureFPS() int {
+	if s.codec == "h264" {
+		return winHelperFPSH264
+	}
+	return winHelperFPS
+}
+
+// negotiateCodec restarts the frame source when the desired codec changed.
+// Downswitch (h264→jpeg) is immediate — a JPEG-needing sink is waiting for
+// frames right now. Upswitch is held off briefly after any switch so a
+// flapping transport (probe → confirm → demote…) can't thrash helper
+// restarts.
+func (s *winStream) negotiateCodec() {
+	want := s.desiredCodec()
+	if want == s.codec {
+		return
+	}
+	if want == "h264" && time.Since(s.lastCodecSwitch) < 3*time.Second {
+		return
+	}
+	s.codec = want
+	s.lastCodecSwitch = time.Now()
+	if s.helper != nil {
+		s.helper.stop()
+		s.helper = nil
+	}
+	s.helperErr = ""
+	s.helperRetryAt = time.Time{} // a codec switch never inherits a failure cooldown
 }
 
 // consumeAck folds one viewer ack into the pacing state.
@@ -936,7 +1016,11 @@ func (s *winStream) drainAcks() {
 // closed, or a viewer that used to ack has been silent past
 // streamAckIdleTimeout (it vanished uncleanly; don't stream to nobody).
 func (s *winStream) waitCapacity() bool {
-	for s.seq-s.acked >= maxFramesInFlight {
+	limit := uint64(maxFramesInFlight)
+	if s.codec == "h264" {
+		limit = maxFramesInFlightH264
+	}
+	for s.seq-s.acked >= limit {
 		select {
 		case v := <-s.ack:
 			s.consumeAck(v)
@@ -968,15 +1052,20 @@ func (a *Agent) releaseWindowInput() {
 // daemon's mirror service — so ALL capture runs in the one granted sh.reminal
 // process and a single reminal.app grant covers every session (terminal or "+");
 // elsewhere it spawns the capture helper directly.
-func startCaptureHelper(id string, maxWidth, quality, fps int) (*winHelper, error) {
+func startCaptureHelper(id string, maxWidth, quality, fps int, codec string) (*winHelper, error) {
 	if runtime.GOOS == "darwin" {
-		return startMirrorCapture(id, maxWidth, quality, fps)
+		return startMirrorCapture(id, maxWidth, quality, fps, codec)
 	}
-	return startWinHelper(id, maxWidth, quality, fps)
+	return startWinHelper(id, maxWidth, quality, fps, codec)
 }
 
 // ensureHelper keeps the native capture helper alive: reaps one that died and
-// (re)starts it, subject to helperRetryCooldown after a failure.
+// (re)starts it, subject to helperRetryCooldown after a failure. An h264 helper
+// that died FAST (bad framing from an old daemon that ignored the codec arg, no
+// VT encoder on this machine, instant handshake failures) marks h264 broken for
+// this stream and drops straight back to JPEG — without the fast-death guard the
+// stream would flap h264→die→cooldown→h264 forever. A LONG-lived h264 helper
+// dying is transient (daemon restart, window churn) and retries as h264.
 func (s *winStream) ensureHelper() {
 	if os.Getenv("REMINAL_NO_CAPTURE_HELPER") != "" {
 		return
@@ -990,16 +1079,37 @@ func (s *winStream) ensureHelper() {
 			msg = "capture helper exited"
 		}
 		s.helperErr = msg
+		badFraming := s.helper.badFraming.Load()
 		s.helper.stop()
 		s.helper = nil
 		s.helperRetryAt = time.Now().Add(helperRetryCooldown)
+		if s.codec == "h264" && (badFraming || time.Since(s.helperStarted) < 3*time.Second) {
+			s.h264Broken = true
+			s.codec = ""
+			s.helperRetryAt = time.Time{} // retry as jpeg right away
+		}
 	}
 	if time.Now().Before(s.helperRetryAt) {
 		return
 	}
-	if h, err := startCaptureHelper(s.w.ID, winMaxWidth, winCaptureQuality, winHelperFPS); err == nil {
+	if h, err := startCaptureHelper(s.w.ID, winMaxWidth, winCaptureQuality, s.captureFPS(), s.codec); err == nil {
 		s.helper = h
 		s.helperErr = ""
+		s.helperStarted = time.Now()
+	} else if s.codec == "h264" {
+		// Couldn't even start in h264 mode (helper missing under an old daemon,
+		// VTCompressionSession unavailable). Fall back to JPEG immediately —
+		// the viewer is waiting for frames.
+		s.h264Broken = true
+		s.codec = ""
+		s.helperErr = err.Error()
+		if h, jerr := startCaptureHelper(s.w.ID, winMaxWidth, winCaptureQuality, winHelperFPS, ""); jerr == nil {
+			s.helper = h
+			s.helperErr = ""
+			s.helperStarted = time.Now()
+		} else {
+			s.helperRetryAt = time.Now().Add(helperRetryCooldown)
+		}
 	} else {
 		s.helperErr = err.Error()
 		s.helperRetryAt = time.Now().Add(helperRetryCooldown)
@@ -1020,24 +1130,31 @@ func (a *Agent) activeMenu(id string) (winMenuState, bool) {
 }
 
 // capture produces the next frame. Helper path: blocks up to winHeartbeat for a
-// changed frame (an empty result = the window was static this interval).
+// changed frame (an empty result = the window was static this interval; its
+// H264 flag still reflects the stream codec so run() takes the right branch).
 // Subprocess path (helper unavailable, or a context menu needs a region grab):
-// one screencapture, change-detected by the caller via frame signatures.
-func (s *winStream) capture() (img []byte, err error) {
+// one screencapture JPEG, change-detected by the caller via frame signatures —
+// menu region grabs interleave as JPEG even mid-h264 (the viewer paints either).
+func (s *winStream) capture() (f winFrame, err error) {
 	menu, menuActive := s.a.activeMenu(s.w.ID)
 	s.ensureHelper()
 	if s.helper != nil && !menuActive {
 		s.capNative = true
-		img, _ = s.helper.next(s.stop, winHeartbeat)
-		return img, nil
+		f, _ = s.helper.next(s.stop, winHeartbeat)
+		if s.codec == "h264" {
+			f.H264 = true
+		}
+		return f, nil
 	}
 	s.capNative = false
 	if menuActive {
 		if runtime.GOOS == "darwin" {
 			// Region-capture (for the right-click menu) also runs in the daemon.
-			return mirrorCaptureRegion(menu.x, menu.y, menu.w, menu.h)
+			img, rerr := mirrorCaptureRegion(menu.x, menu.y, menu.w, menu.h)
+			return winFrame{Data: img}, rerr
 		}
-		return s.b.captureRegion(menu.x, menu.y, menu.w, menu.h)
+		img, rerr := s.b.captureRegion(menu.x, menu.y, menu.w, menu.h)
+		return winFrame{Data: img}, rerr
 	}
 	if runtime.GOOS == "darwin" {
 		// No local screencapture fallback on macOS: capture must run in the daemon
@@ -1048,9 +1165,10 @@ func (s *winStream) capture() (img []byte, err error) {
 		if e == "" {
 			e = "screen-sharing service starting — retry"
 		}
-		return nil, errors.New(e)
+		return winFrame{}, errors.New(e)
 	}
-	return s.b.capture(s.w)
+	img, cerr := s.b.capture(s.w)
+	return winFrame{Data: img}, cerr
 }
 
 // detectChange reports whether img is new content. The helper only ever emits
@@ -1090,7 +1208,7 @@ func (s *winStream) checkWindow(conn *websocket.Conn, changed bool) bool {
 		if resized && s.helper != nil {
 			s.helper.stop()
 			s.helper = nil
-			if h, err := startCaptureHelper(s.w.ID, winMaxWidth, winCaptureQuality, winHelperFPS); err == nil {
+			if h, err := startCaptureHelper(s.w.ID, winMaxWidth, winCaptureQuality, s.captureFPS(), s.codec); err == nil {
 				s.helper = h
 			} else {
 				s.helperRetryAt = time.Now().Add(helperRetryCooldown)
@@ -1145,7 +1263,7 @@ func (s *winStream) captureFailure(conn *websocket.Conn, err error) bool {
 // heartbeat when it's time. All send-rate decisions live in the sink resolution
 // here — nowhere else.
 func (s *winStream) dispatch(conn *websocket.Conn, changed bool) {
-	confirmed, probing := s.a.rtcSinks()
+	confirmed, probing, _ := s.a.rtcSinks()
 	vc := s.a.currentViewerCount()
 
 	// Demote confirmed channels only on EVIDENCE of a dead link: several
@@ -1155,7 +1273,7 @@ func (s *winStream) dispatch(conn *websocket.Conn, changed bool) {
 	// network change.)
 	if s.gotAnyAck && s.sentSinceAck >= 3 && time.Since(s.lastAck) > streamAckIdleTimeout/2 {
 		s.a.unconfirmRTC()
-		confirmed, probing = s.a.rtcSinks()
+		confirmed, probing, _ = s.a.rtcSinks()
 	}
 
 	probeDue := len(probing) > 0 && time.Since(s.lastProbe) >= winProbeFrame
@@ -1258,6 +1376,106 @@ func (s *winStream) sendFrame(conn *websocket.Conn, sinks winSinks) {
 		s.lastSig, s.haveSig = s.pendingSig, s.pendingSigOK
 	}
 	s.lastSent = time.Now()
+}
+
+// Binary DataChannel frame framing (agent→viewer). Every other DC message is
+// JSON (first byte '{'); a binary h264 frame starts with winBinMagic instead:
+//
+//	[0]      winBinMagic (0xF2)
+//	[1]      flags: bit0 = key AU, bit1 = more chunks of this AU follow
+//	[2]      id length L
+//	[3:3+L]  window id
+//	[+8]     seq   (BE uint64)
+//	[+4]     w     (BE uint32, logical window width — pane sizing)
+//	[+4]     h     (BE uint32)
+//	[rest]   Annex-B H.264 access unit (or one chunk of it)
+//
+// Chunking keeps every message under winDCMaxMsg (an oversized message KILLS
+// the channel per spec). Chunks of one AU share a seq and are reassembled in
+// order — the channel is reliable+ordered, so no gaps and no interleaving.
+const (
+	winBinMagic    = 0xF2
+	winBinFlagKey  = 1 << 0
+	winBinFlagMore = 1 << 1
+)
+
+// dispatchH264 ships one H.264 access unit to the confirmed DataChannels, or —
+// when the transport shifted under us (demote, viewer left) — drops it and
+// re-keys so the stream resumes from a clean IDR once negotiateCodec settles
+// things. Unlike the JPEG path there is no WS sink and no probe: h264 only
+// engages when every viewer is on a confirmed channel.
+func (s *winStream) dispatchH264(conn *websocket.Conn, f winFrame) {
+	confirmed, _, allH264 := s.a.rtcSinks()
+
+	// Same demote-on-evidence rule as the JPEG path.
+	if s.gotAnyAck && s.sentSinceAck >= 3 && time.Since(s.lastAck) > streamAckIdleTimeout/2 {
+		s.a.unconfirmRTC()
+		confirmed = nil
+	}
+	if len(confirmed) == 0 || !allH264 {
+		if s.helper != nil {
+			s.helper.rekey()
+		}
+		return
+	}
+	s.sendFrameH264(f, confirmed)
+	_ = conn // relay is intentionally not a video sink
+}
+
+// sendFrameH264 frames one AU as binary DC messages (chunked under winDCMaxMsg)
+// and sends it to every sink. One seq per AU regardless of chunk count — the
+// viewer acks per AU after decode, same pacing loop as JPEG.
+func (s *winStream) sendFrameH264(f winFrame, sinks []*webrtc.DataChannel) {
+	if len(f.Data) == 0 {
+		return
+	}
+	msgs := buildWinBinMsgs(s.w.ID, s.seq+1, s.w.W, s.w.H, f.Key, f.Data, winDCMaxMsg)
+	if len(msgs) == 0 {
+		return
+	}
+	s.seq++
+	for _, msg := range msgs {
+		for _, dc := range sinks {
+			_ = dc.Send(msg)
+		}
+	}
+	s.sentSinceAck++
+	s.lastSent = time.Now()
+}
+
+// buildWinBinMsgs encodes one access unit into winBinMagic messages, each at
+// most maxMsg bytes (an oversized DataChannel message kills the channel, so
+// this bound is hard). All chunks of an AU share seq; every chunk except the
+// last carries winBinFlagMore.
+func buildWinBinMsgs(id string, seq uint64, w, h int, key bool, data []byte, maxMsg int) [][]byte {
+	idb := []byte(id)
+	hdrLen := 3 + len(idb) + 8 + 4 + 4
+	if len(idb) > 255 || len(data) == 0 || maxMsg <= hdrLen {
+		return nil
+	}
+	maxData := maxMsg - hdrLen
+	var msgs [][]byte
+	for len(data) > 0 {
+		n := min(len(data), maxData)
+		chunk := data[:n]
+		data = data[n:]
+		flags := byte(0)
+		if key {
+			flags |= winBinFlagKey
+		}
+		if len(data) > 0 {
+			flags |= winBinFlagMore
+		}
+		msg := make([]byte, 0, hdrLen+n)
+		msg = append(msg, winBinMagic, flags, byte(len(idb)))
+		msg = append(msg, idb...)
+		msg = binary.BigEndian.AppendUint64(msg, seq)
+		msg = binary.BigEndian.AppendUint32(msg, uint32(w))
+		msg = binary.BigEndian.AppendUint32(msg, uint32(h))
+		msg = append(msg, chunk...)
+		msgs = append(msgs, msg)
+	}
+	return msgs
 }
 
 // sendHeartbeat pings viewers over every live path so an idle (0 fps) window

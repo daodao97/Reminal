@@ -152,6 +152,7 @@ type rtcPeer struct {
 	id        string
 	pc        *webrtc.PeerConnection
 	dc        *webrtc.DataChannel
+	h264      bool        // viewer declared WebCodecs H.264 decode in its hello
 	open      atomic.Bool // true once the DataChannel is ready to carry frames
 	confirmed atomic.Bool // true once the viewer acked a frame OVER this channel
 	// (proving big frames actually traverse it — small acks alone can't)
@@ -176,6 +177,10 @@ func (p *rtcPeer) probeAge() time.Duration {
 // signal payloads (the JSON inside each webrtc_* message's encrypted Data).
 type rtcHelloMsg struct {
 	Peer string `json:"peer"`
+	// H264 declares the viewer can decode H.264 via WebCodecs, so frames on
+	// this peer's DataChannel may be compressed video instead of JPEGs (7-10×
+	// less bandwidth at the same quality). Old viewers omit it → JPEG forever.
+	H264 bool `json:"h264,omitempty"`
 }
 type rtcSDPMsg struct {
 	Peer string          `json:"peer"`
@@ -211,7 +216,7 @@ func (a *Agent) handleWebRTCHello(conn *websocket.Conn, encData string) {
 	if err != nil {
 		return // frames stay on the WS fallback
 	}
-	peer := &rtcPeer{id: hello.Peer, pc: pc}
+	peer := &rtcPeer{id: hello.Peer, pc: pc, h264: hello.H264}
 
 	// Reliable, ordered channel — same delivery guarantees as the WS path, so
 	// the viewer's render/ack loop is unchanged.
@@ -400,8 +405,11 @@ func (a *Agent) closeAllRTCPeers() {
 // being probed (send over these AND WS until one proves itself). A channel that
 // has been probed past rtcProbeWindow without ever confirming is closed here —
 // it connected but can't carry frames (cellular MTU), so we stop probing it and
-// let the viewer re-negotiate later.
-func (a *Agent) rtcSinks() (confirmed, probing []*webrtc.DataChannel) {
+// let the viewer re-negotiate later. allH264 reports whether every CONFIRMED
+// peer declared WebCodecs H.264 decode (vacuously true with none confirmed) —
+// the gate for switching a stream from JPEG to compressed video.
+func (a *Agent) rtcSinks() (confirmed, probing []*webrtc.DataChannel, allH264 bool) {
+	allH264 = true
 	a.rtcMu.Lock()
 	var stale []*rtcPeer
 	for id, p := range a.rtcPeers {
@@ -410,6 +418,9 @@ func (a *Agent) rtcSinks() (confirmed, probing []*webrtc.DataChannel) {
 			// not ready yet
 		case p.confirmed.Load():
 			confirmed = append(confirmed, p.dc)
+			if !p.h264 {
+				allH264 = false
+			}
 		case p.probeAge() < rtcProbeWindow:
 			probing = append(probing, p.dc)
 		default:
@@ -421,7 +432,7 @@ func (a *Agent) rtcSinks() (confirmed, probing []*webrtc.DataChannel) {
 	for _, p := range stale {
 		_ = p.pc.Close()
 	}
-	return confirmed, probing
+	return confirmed, probing, allH264
 }
 
 // unconfirmRTC demotes every confirmed peer back to probing (resetting its probe

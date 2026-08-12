@@ -18,14 +18,25 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
-// winHelperFPS is the frame-rate ceiling handed to the reminal-capture helper.
-// 30fps is buttery for a window mirror and bounds host CPU (each frame is a
-// ~7ms hardware JPEG encode; the helper only produces on actual change). The WS
-// relay path is capped far below this independently — see wsFrameMinInterval.
+// winHelperFPS is the frame-rate ceiling handed to the reminal-capture helper
+// for JPEG streams. Each frame is an independent ~60 KB image, so the rate is
+// bounded by wire cost, not by the encoder: 30fps of JPEG already costs ~20
+// Mbps on busy content. The WS relay path is capped far below this
+// independently — see wsFrameMinInterval.
 const winHelperFPS = 30
+
+// winHelperFPSH264 is the ceiling for compressed-video streams. H.264 only
+// runs peer-to-peer over a DataChannel (never the billed relay), and temporal
+// compression makes extra frames nearly free — measured on a full-motion
+// 1100×700 window: 30fps = 1.7 Mbps, 60fps = 2.6 Mbps for the same picture,
+// where the JPEG path would need ~41 Mbps for that frame rate. 60 is the
+// ceiling rather than the panel's 120 because the gain past 60 isn't visible
+// on a window mirror and every frame still costs host encode + viewer decode.
+const winHelperFPSH264 = 60
 
 // winCaptureQuality is the JPEG quality (0-100) the helper encodes at, matching
 // the old sips path so frame sizes and looks are unchanged.
@@ -36,30 +47,59 @@ const winCaptureQuality = 45
 // SCShareableContent rejects fast, so a helper still alive after this is healthy.
 const helperStartupGrace = 700 * time.Millisecond
 
-// winHelper streams one window's JPEG frames from the reminal-capture helper
-// process. It keeps only the newest frame (a mirror only ever wants the latest
-// picture) and signals next() when one arrives.
+// winFrame is one frame off the capture helper: a JPEG (H264 false), or an
+// H.264 Annex-B access unit (H264 true; Key marks a self-contained IDR AU —
+// SPS/PPS inline — that a decoder can start from).
+type winFrame struct {
+	Data []byte
+	H264 bool
+	Key  bool
+}
+
+// winH264QueueMax bounds the pending-frame queue in h264 mode. JPEG mode keeps
+// only the newest frame (each is independently decodable), but H.264 deltas
+// depend on every predecessor, so frames must queue. If the consumer falls this
+// far behind (~2s at 30fps), the queue is cleared and a fresh IDR is requested
+// instead — bounded memory and bounded staleness, at the cost of one keyframe.
+const winH264QueueMax = 64
+
+// winHelper streams one window's frames from the reminal-capture helper
+// process. In JPEG mode it keeps only the newest frame (a mirror only ever
+// wants the latest picture); in h264 mode it queues frames in order (deltas
+// are worthless without their predecessors) and re-keys after any gap. next()
+// is signalled when content arrives.
 type winHelper struct {
 	cmd *exec.Cmd
-	// stdin is held open (never written) purely as a lifeline: the helper exits
-	// on stdin EOF, so it can't outlive the agent even when the agent dies
-	// without running defers — SIGKILL, a crash, or the hot-restart syscall.Exec
-	// (which closes this fd via CLOEXEC). Without it, a helper on a static
-	// window would linger forever: it only notices a dead peer when a frame
-	// WRITE fails, and a static window never writes.
+	// stdin is held open purely as a lifeline: the helper exits on stdin EOF,
+	// so it can't outlive the agent even when the agent dies without running
+	// defers — SIGKILL, a crash, or the hot-restart syscall.Exec (which closes
+	// this fd via CLOEXEC). Without it, a helper on a static window would
+	// linger forever: it only notices a dead peer when a frame WRITE fails, and
+	// a static window never writes. In h264 mode it doubles as the command
+	// channel ("key\n" → force an IDR).
 	stdin io.WriteCloser
 
 	// conn is set instead of cmd/stdin when the frames come from the daemon's
 	// mirror socket (the session-delegates-to-daemon path). Closing it stops the
-	// daemon-side capture, so it doubles as the lifeline.
+	// daemon-side capture, so it doubles as the lifeline; writes to it reach the
+	// helper's stdin (the daemon forwards them).
 	conn net.Conn
 
-	mu     sync.Mutex
-	latest []byte // newest frame not yet consumed by next(); nil once taken
+	codec string // "jpeg" (default) or "h264" — selects the stdout framing
+
+	mu           sync.Mutex
+	latest       []byte     // jpeg: newest frame not yet consumed; nil once taken
+	queue        []winFrame // h264: pending frames in decode order
+	dropUntilKey bool       // h264: discard deltas until the next IDR arrives
 
 	sig    chan struct{} // buffered(1): coalesced "new frame available"
 	dead   chan struct{} // closed when the reader loop ends (process/pipe gone)
 	stderr *bytes.Buffer
+
+	// badFraming is set when an h264 stream delivered bytes that aren't the
+	// h264 framing — the signature of an OLD daemon that ignored the codec arg
+	// and streamed JPEGs. The consumer uses it to stop asking for h264.
+	badFraming atomic.Bool
 }
 
 // captureHelperPath finds the reminal-capture binary: an explicit override
@@ -97,13 +137,19 @@ func captureHelperPath() (string, error) {
 
 // startWinHelper spawns the helper for window id and returns it once it's proven
 // healthy (survived the startup grace without dying). Returns an error — with
-// the helper's stderr when it exited — so the caller falls back to screencapture.
-func startWinHelper(id string, maxWidth, quality, fps int) (*winHelper, error) {
+// the helper's stderr when it exited — so the caller falls back to screencapture
+// (or from h264 to jpeg). codec "" means jpeg; the codec argv is only appended
+// for h264, keeping the jpeg spawn byte-identical to what old helpers expect.
+func startWinHelper(id string, maxWidth, quality, fps int, codec string) (*winHelper, error) {
 	path, err := captureHelperPath()
 	if err != nil {
 		return nil, err
 	}
-	cmd := exec.Command(path, id, strconv.Itoa(maxWidth), strconv.Itoa(quality), strconv.Itoa(fps))
+	args := []string{id, strconv.Itoa(maxWidth), strconv.Itoa(quality), strconv.Itoa(fps)}
+	if codec == "h264" {
+		args = append(args, codec)
+	}
+	cmd := exec.Command(path, args...)
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return nil, err
@@ -121,6 +167,7 @@ func startWinHelper(id string, maxWidth, quality, fps int) (*winHelper, error) {
 	h := &winHelper{
 		cmd:    cmd,
 		stdin:  stdin,
+		codec:  codec,
 		sig:    make(chan struct{}, 1),
 		dead:   make(chan struct{}),
 		stderr: &stderr,
@@ -141,8 +188,13 @@ func startWinHelper(id string, maxWidth, quality, fps int) (*winHelper, error) {
 	}
 }
 
-// readLoop reads [uint32 big-endian length][JPEG] frames off the helper's
-// stdout, keeping only the newest, until the pipe closes.
+// readLoop reads [uint32 big-endian length][payload] frames off the helper's
+// stdout until the pipe closes. JPEG mode: payload is the JPEG, keep only the
+// newest. h264 mode: payload is [1 flag byte][Annex-B AU] — flag 1 delta, 2
+// key — queued in decode order. Any other flag value means the peer is NOT
+// speaking the h264 framing (an old daemon that ignored the codec arg streams
+// plain JPEGs, whose first byte is 0xFF) — end the stream so the caller falls
+// back to jpeg mode instead of feeding garbage to a decoder.
 func (h *winHelper) readLoop(stdout io.Reader) {
 	defer close(h.dead)
 	r := bufio.NewReaderSize(stdout, 512*1024)
@@ -161,9 +213,17 @@ func (h *winHelper) readLoop(stdout io.Reader) {
 		if _, err := io.ReadFull(r, buf); err != nil {
 			return
 		}
-		h.mu.Lock()
-		h.latest = buf
-		h.mu.Unlock()
+		if h.codec == "h264" {
+			if n < 2 || (buf[0] != 1 && buf[0] != 2) {
+				h.badFraming.Store(true)
+				return // framing mismatch — see doc comment
+			}
+			h.pushH264(winFrame{Data: buf[1:], H264: true, Key: buf[0] == 2})
+		} else {
+			h.mu.Lock()
+			h.latest = buf
+			h.mu.Unlock()
+		}
 		select {
 		case h.sig <- struct{}{}:
 		default: // a pending signal already covers this newer frame
@@ -171,23 +231,111 @@ func (h *winHelper) readLoop(stdout io.Reader) {
 	}
 }
 
-// next returns the newest unsent frame, blocking up to timeout for a fresh one.
-// ok is false on timeout (no new frame — the window was static this interval),
-// on stop, or when the helper died. A returned frame is always new content: the
-// helper only emits frames whose picture actually changed.
-func (h *winHelper) next(stop <-chan struct{}, timeout time.Duration) (img []byte, ok bool) {
-	select {
-	case <-h.sig:
+// pushH264 queues one decoded-order frame, honoring the drop-until-key gate and
+// the bounded queue. On overflow the queue is cleared and a fresh IDR requested
+// — the consumer then resumes from the next key with no undecodable gap.
+func (h *winHelper) pushH264(f winFrame) {
+	h.mu.Lock()
+	if h.dropUntilKey {
+		if !f.Key {
+			h.mu.Unlock()
+			return
+		}
+		h.dropUntilKey = false
+	}
+	if len(h.queue) >= winH264QueueMax {
+		h.queue = h.queue[:0]
+		h.dropUntilKey = !f.Key // an overflowing key frame can still start fresh
+		if h.dropUntilKey {
+			h.mu.Unlock()
+			h.requestKey()
+			return
+		}
+	}
+	h.queue = append(h.queue, f)
+	h.mu.Unlock()
+}
+
+// next returns the next unconsumed frame, blocking up to timeout for a fresh
+// one. ok is false on timeout (no new frame — the window was static this
+// interval), on stop, or when the helper died. A returned frame is always new
+// content: the helper only emits frames whose picture actually changed. In
+// h264 mode frames come off a queue in decode order, and the caller MUST ship
+// every frame it takes (a skipped delta corrupts the stream — use rekey() when
+// dropping is unavoidable).
+func (h *winHelper) next(stop <-chan struct{}, timeout time.Duration) (f winFrame, ok bool) {
+	deadline := time.After(timeout)
+	for {
 		h.mu.Lock()
-		img, h.latest = h.latest, nil
+		f, ok = h.popLocked()
 		h.mu.Unlock()
-		return img, img != nil
-	case <-time.After(timeout):
-		return nil, false
-	case <-stop:
-		return nil, false
-	case <-h.dead:
-		return nil, false
+		if ok {
+			return f, true
+		}
+		// The sig channel is coalesced (buffered 1), so a wake-up with nothing
+		// to pop is possible — e.g. the signal for a frame that was already
+		// taken via the queue-first path. Loop rather than report a false
+		// "static interval".
+		select {
+		case <-h.sig:
+		case <-deadline:
+			return winFrame{}, false
+		case <-stop:
+			return winFrame{}, false
+		case <-h.dead:
+			return winFrame{}, false
+		}
+	}
+}
+
+// popLocked takes the next frame under h.mu: queue head in h264 mode, the
+// newest JPEG otherwise. Re-signals when queued frames remain so the consumer
+// keeps draining without waiting on the producer.
+func (h *winHelper) popLocked() (winFrame, bool) {
+	if h.codec == "h264" {
+		if len(h.queue) == 0 {
+			return winFrame{}, false
+		}
+		f := h.queue[0]
+		h.queue = h.queue[1:]
+		if len(h.queue) > 0 {
+			select {
+			case h.sig <- struct{}{}:
+			default:
+			}
+		}
+		return f, true
+	}
+	img := h.latest
+	h.latest = nil
+	return winFrame{Data: img}, img != nil
+}
+
+// rekey discards all pending h264 frames and requests a fresh IDR from the
+// encoder. Call whenever the consumer had to drop a frame (backpressure) or a
+// new viewer needs an entry point — the next frame out of next() will be a
+// self-contained keyframe. No-op in jpeg mode.
+func (h *winHelper) rekey() {
+	if h.codec != "h264" {
+		return
+	}
+	h.mu.Lock()
+	h.queue = h.queue[:0]
+	h.dropUntilKey = true
+	h.mu.Unlock()
+	h.requestKey()
+}
+
+// requestKey asks the running helper for an immediate IDR ("key\n" on its
+// command channel — stdin when spawned directly, the daemon conn otherwise;
+// the daemon forwards conn bytes to the helper's stdin). Best effort.
+func (h *winHelper) requestKey() {
+	if h.conn != nil {
+		_, _ = h.conn.Write([]byte("key\n"))
+		return
+	}
+	if h.stdin != nil {
+		_, _ = io.WriteString(h.stdin, "key\n")
 	}
 }
 
