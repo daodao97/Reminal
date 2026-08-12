@@ -1848,7 +1848,22 @@ func regionWords(lines []string, from, to int) []string {
 
 // maxResizeSegs bounds the fingerprint list; beyond it the oldest segments are
 // forgotten (their copies, if any, just stay — bounded imperfection, never loss).
-const maxResizeSegs = 32
+//
+// Sizing: a segment must live as long as the stamps it guards remain in
+// scrollback, and long-lived mobile sessions burn resizes fast (a keyboard
+// open/close per message, plus reconnects — a 32-segment window was exhausted
+// within minutes of heavy use, leaving old stamps permanent). Each segment
+// stores one screen's words (~500 words ≈ 4 KB), so 1024 segments cost a few
+// MB of memory at worst; snapshot-time matching stays cheap because segment
+// regions partition the scrollback (total region work is O(lines), and the
+// per-segment shingle build is bounded by maxResizeSegWords). Measured: a
+// snapshot over 20k lines with 1024 live segments builds in well under 100ms,
+// and snapshots only run on reconnect / quiesce-refresh, never per keystroke.
+const maxResizeSegs = 1024
+
+// maxResizeSegWords caps one segment's captured word stream so an exotic
+// (very tall) screen can't make segments arbitrarily heavy.
+const maxResizeSegWords = 1200
 
 // resizeScreen keeps the emulator's dimensions in step with the PTY so the
 // snapshot matches the size viewers render at.
@@ -1866,6 +1881,10 @@ func (a *Agent) resizeScreen(cols, rows uint16) {
 	var fw []string
 	for _, r := range strings.Split(a.screen.Render(), "\n") {
 		fw = append(fw, dedupWords(r)...)
+		if len(fw) >= maxResizeSegWords {
+			fw = fw[:maxResizeSegWords]
+			break
+		}
 	}
 	cur := 0
 	if sb := a.screen.Scrollback(); sb != nil {
@@ -2058,19 +2077,20 @@ func (a *Agent) rebuildView() (history, screen []string, ok bool) {
 // are consistent. Returns ("", 0) if snapshots are disabled or building fails.
 // snapshotHistory renders the emulator's native scrollback for the reconnect snapshot.
 //
-// Two content-matched dedup passes run over it, both lossless by construction:
-//   - dedupBlocks: collapses paragraphs the app re-emitted VERBATIM (same word key);
-//     keep-first, length-gated — it can never delete unique content.
-//   - dedupAgainstFrame: drops committed paragraphs that are stale re-emissions of the
-//     app's CURRENT frame (resize repaints re-wrapped at other widths — cross-width
-//     copies no paragraph key can pair). The content still paints in the frame at the
-//     snapshot's bottom, so nothing the user could scroll to disappears.
+// Three dedup passes run over it, in order, all lossless by construction:
+//  1. dropResizeRepaints: per-resize captured-frame segments — position bounds the
+//     search, content decides, and a row is dropped only if it also provably
+//     re-occurs later. Kills cross-width resize-repaint stamps (see resizeSegs).
+//  2. dedupBlocks: collapses paragraphs the app re-emitted VERBATIM (same word key);
+//     keep-first, length-gated, plus truncated-prefix fragments of seen paragraphs.
+//  3. dedupAgainstFrame: drops committed lines that are stale re-emissions of the
+//     app's CURRENT frame. The content still paints in the frame at the snapshot's
+//     bottom, so nothing the user could scroll to disappears.
 //
-// It does NOT drop any positional "frame band": the earlier watermark-based drop
-// (frameBandStart..frameBandLastResize) was removed because it could silently delete
-// real scrollback — on a fresh agent (e.g. right after a hot-restart) the band opened at
-// index 0 and a later resize extended it to cover the whole buffer, leaving the viewer
-// with "nothing to scroll". Losing history is far worse; only content-matched dedup is safe.
+// History note: a position-ONLY band drop (no content check) shipped once and was
+// removed — on a fresh agent it swallowed the entire buffer ("nothing to scroll").
+// TestSnapshotNeverDropsScrollback guards against that class regressing. Every drop
+// rule since requires a content match; pure position is never sufficient.
 // Caller holds screenMu.
 func (a *Agent) snapshotHistory() []string {
 	lines := renderScrollback(a.screen, 0) // uncapped: segment indices are absolute
