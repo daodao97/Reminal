@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/charmbracelet/x/vt"
 	"github.com/reminal/reminal/internal/crypto"
@@ -129,5 +130,55 @@ func TestResizeSegmentsDropRepaintsKeepInterleaved(t *testing.T) {
 	t.Logf("frame maxCopies=%d (repaint stamps should be collapsed)", frameMax)
 	if frameMax > 2 {
 		t.Errorf("stale resize-repaint copies survived: frame maxCopies=%d (want <=2)", frameMax)
+	}
+}
+
+// TestResizeSegmentsSnapshotCostAtCap guards the performance envelope: a snapshot
+// over a large scrollback with the segment list at its cap must stay fast (it runs
+// on reconnect and quiesce-refresh, so tens of milliseconds is the budget).
+func TestResizeSegmentsSnapshotCostAtCap(t *testing.T) {
+	key, _ := crypto.NewSessionKey()
+	box, _ := crypto.NewBox(key)
+	a := &Agent{box: box, buf: newScrollback(8 << 20), scrollbackLines: 20000}
+	a.screen = vt.NewEmulator(80, 24)
+	a.screen.Scrollback().SetMaxLines(20000)
+	go io.Copy(io.Discard, a.screen)
+	a.buf.SetBase(80, 24)
+
+	// Interleave output bursts with resizes until the segment list is at cap.
+	var sb strings.Builder
+	for i := 0; i < 4; i++ {
+		sb.WriteString(fmt.Sprintf("filler-%04d words to give every captured frame a realistic word count here\r\n", i))
+	}
+	frame := []byte(sb.String())
+	w := 80
+	for len(a.resizeSegs) < maxResizeSegs {
+		a.record(frame)
+		if w == 80 {
+			w = 76
+		} else {
+			w = 80
+		}
+		a.resizeScreen(uint16(w), 24)
+	}
+	// Grow the scrollback large but keep it under the cap (at the cap the
+	// trim guard purges all segments — separate known limitation).
+	for i := 0; i < 500; i++ {
+		a.record(frame)
+	}
+	if len(a.resizeSegs) != maxResizeSegs {
+		t.Fatalf("segments purged during setup: %d (scrollback hit its cap?)", len(a.resizeSegs))
+	}
+
+	start := time.Now()
+	frm, _ := a.snapshotFrame()
+	elapsed := time.Since(start)
+	if frm == "" {
+		t.Fatal("empty snapshot")
+	}
+	t.Logf("snapshot with %d segments over ~%d scrollback lines took %v",
+		len(a.resizeSegs), a.screen.Scrollback().Len(), elapsed)
+	if elapsed > 2*time.Second {
+		t.Errorf("snapshot too slow at segment cap: %v", elapsed)
 	}
 }

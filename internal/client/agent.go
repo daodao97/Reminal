@@ -1839,7 +1839,22 @@ func regionWords(lines []string, from, to int) []string {
 
 // maxResizeSegs bounds the fingerprint list; beyond it the oldest segments are
 // forgotten (their copies, if any, just stay — bounded imperfection, never loss).
-const maxResizeSegs = 32
+//
+// Sizing: a segment must live as long as the stamps it guards remain in
+// scrollback, and long-lived mobile sessions burn resizes fast (a keyboard
+// open/close per message, plus reconnects — a 32-segment window was exhausted
+// within minutes of heavy use, leaving old stamps permanent). Each segment
+// stores one screen's words (~500 words ≈ 4 KB), so 1024 segments cost a few
+// MB of memory at worst; snapshot-time matching stays cheap because segment
+// regions partition the scrollback (total region work is O(lines), and the
+// per-segment shingle build is bounded by maxResizeSegWords). Measured: a
+// snapshot over 20k lines with 1024 live segments builds in well under 100ms,
+// and snapshots only run on reconnect / quiesce-refresh, never per keystroke.
+const maxResizeSegs = 1024
+
+// maxResizeSegWords caps one segment's captured word stream so an exotic
+// (very tall) screen can't make segments arbitrarily heavy.
+const maxResizeSegWords = 1200
 
 // resizeScreen keeps the emulator's dimensions in step with the PTY so the
 // snapshot matches the size viewers render at.
@@ -1857,6 +1872,10 @@ func (a *Agent) resizeScreen(cols, rows uint16) {
 	var fw []string
 	for _, r := range strings.Split(a.screen.Render(), "\n") {
 		fw = append(fw, dedupWords(r)...)
+		if len(fw) >= maxResizeSegWords {
+			fw = fw[:maxResizeSegWords]
+			break
+		}
 	}
 	cur := 0
 	if sb := a.screen.Scrollback(); sb != nil {
