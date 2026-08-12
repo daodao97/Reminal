@@ -1457,6 +1457,34 @@
     fitAddon.fit();
     window.__term = term; // debug/test handle (harmless; used by automated viewer tests)
 
+    // Wheel routing, same rule as touch: an app only receives scroll when it
+    // is a full-screen (alternate-buffer) app with mouse reporting on. An
+    // inline TUI on the normal screen (Claude Code) also turns mouse mode on,
+    // and xterm would forward the wheel to it — but its per-report full-frame
+    // repaint scrolls in flickery 3-line steps, while the native scrollback
+    // holds the same (deduped) transcript and scrolls smoothly. Intercept
+    // exactly that case, before xterm's own wheel handler sees the event.
+    (function routeWheel() {
+      const host = document.getElementById('terminal');
+      if (!host) return;
+      let acc = 0;
+      host.addEventListener('wheel', (e) => {
+        let mainScreenMouseApp = false;
+        try {
+          mainScreenMouseApp = term.buffer.active.type !== 'alternate' &&
+                               term._core.coreMouseService.activeProtocol !== 'NONE';
+        } catch (_) {}
+        if (!mainScreenMouseApp) return;            // let xterm handle it normally
+        let h = 16;
+        try { const c = term._core._renderService.dimensions.css.cell.height; if (c > 0) h = c; } catch (_) {}
+        acc += (e.deltaMode === 1 ? e.deltaY * h : e.deltaY);
+        const lines = (acc / h) | 0;
+        if (lines) { term.scrollLines(lines); acc -= lines * h; }
+        e.preventDefault();
+        e.stopImmediatePropagation();
+      }, { capture: true, passive: false });
+    })();
+
     // Defang the hidden helper textarea that xterm.js routes keystrokes
     // through. Without this, Android Chrome's IME (Gboard etc.) treats
     // each shell command as an English word — autocorrect rewrites it
@@ -5258,6 +5286,15 @@
       // scroll, but every repaint gets time to finish before the next tick.
       // The queue is capped so a wild flick can't wind up seconds of
       // after-scroll; the tail past the cap is dropped deliberately.
+      // Scroll routing: the app gets the scroll only when it's a full-screen
+      // (alternate-buffer) app with mouse reporting on. Inline TUIs on the
+      // normal screen scroll the native scrollback instead (see onTouchMove).
+      function scrollForwardToApp() {
+        try {
+          return term.buffer.active.type === 'alternate' &&
+                 term._core.coreMouseService.activeProtocol !== 'NONE';
+        } catch (_) { return false; }
+      }
       let notchQueue = 0, notchPump = null, notchSize = 48, notchAt = { x: 200, y: 200 };
       let notchLastAt = 0;
       function queueNotches(n, notch, cx, cy) {
@@ -5375,18 +5412,14 @@
           //    event). Apps scroll a fixed amount per REPORT (not per pixel),
           //    and a report is sent per EVENT — raw streaming over-scrolled
           //    them by event count; notches match a physical wheel's cadence.
-          const screenEl = (term._core && term._core.screenElement) || document.querySelector('.xterm-screen');
-          let mouseModeOn = null;
-          try { mouseModeOn = term._core.coreMouseService.activeProtocol !== 'NONE'; } catch (_) {}
-          if (mouseModeOn === false) {
-            scrollAcc = 0;                          // raw path: nothing held back
-            if (screenEl && dy) {
-              screenEl.dispatchEvent(new WheelEvent('wheel', {
-                deltaY: dy, deltaMode: 0, bubbles: true, cancelable: true,
-                clientX: t.clientX, clientY: t.clientY,
-              }));
-            }
-          } else {
+          // Forward scroll to the app ONLY on the alternate screen (vim, less,
+          // htop — no scrollback exists there, the app's scroll is the only
+          // one). On the normal screen the scrollback holds the full, deduped
+          // transcript, so native scrolling shows the same content pixel-glued
+          // and flicker-free — even when an inline TUI (Claude) has mouse
+          // reporting on. Its per-report frame repaint (3-line steps + full
+          // redraw flicker) is what made in-app scrolling feel bad.
+          if (scrollForwardToApp()) {
             scrollAcc += dy;
             const h = cellDims().h || 16;
             const notch = 3 * h;
@@ -5394,6 +5427,14 @@
             if (notches) {
               scrollAcc -= notches * notch;
               queueNotches(notches, notch, t.clientX, t.clientY);
+            }
+          } else {
+            scrollAcc += dy;
+            const h = cellDims().h || 16;
+            let lines = (scrollAcc / h) | 0;        // whole lines; keep remainder for glue
+            if (lines) {
+              scrollAcc -= lines * h;
+              term.scrollLines(lines);              // direct: bypasses the app entirely
             }
           }
           e.preventDefault();                       // we own the vertical drag now
@@ -5414,21 +5455,14 @@
           // lift (large on fast flicks) plus any held remainder would
           // otherwise be dropped — each fast swipe fell short of the finger.
           if (ourTouch) scrollAcc += scrollLastY - ourTouch.clientY;
-          const screenEl = (term._core && term._core.screenElement) || document.querySelector('.xterm-screen');
-          let mouseModeOn = null;
-          try { mouseModeOn = term._core.coreMouseService.activeProtocol !== 'NONE'; } catch (_) {}
-          if (mouseModeOn === false) {
-            if (screenEl && scrollAcc) {
-              screenEl.dispatchEvent(new WheelEvent('wheel', {
-                deltaY: scrollAcc, deltaMode: 0, bubbles: true, cancelable: true,
-                clientX: ourTouch ? ourTouch.clientX : 200, clientY: ourTouch ? ourTouch.clientY : 200,
-              }));
-            }
-          } else {
-            const h = cellDims().h || 16;
+          const h = cellDims().h || 16;
+          if (scrollForwardToApp()) {
             const notch = 3 * h;
             const notches = Math.round(scrollAcc / notch);
             if (notches) queueNotches(notches, notch, ourTouch ? ourTouch.clientX : 200, ourTouch ? ourTouch.clientY : 200);
+          } else {
+            const lines = Math.round(scrollAcc / h);
+            if (lines) term.scrollLines(lines);
           }
           scrollAcc = 0;
           return;
