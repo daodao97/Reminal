@@ -3207,10 +3207,11 @@
       // today's behavior.
       const bufA = term.buffer.active;
       const distUp = bufA.baseY - bufA.viewportY;
-      if (distUp > 0 && hasWipeSignature(merged)) {
+      if (hasWipeSignature(merged)) {
         term.write(merged, () => {
           const b2 = term.buffer.active;
-          term.scrollLines((b2.baseY - distUp) - b2.viewportY); // xterm clamps at the top
+          cleanBaseY = b2.baseY;                     // buffer just laundered
+          if (distUp > 0) term.scrollLines((b2.baseY - distUp) - b2.viewportY); // clamps at top
         });
       } else {
         term.write(merged);
@@ -3230,6 +3231,7 @@
       // shell's actual echo coming back — rendering it would double
       // the visible character.
       const u8 = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+      lastDataAt = Date.now();
       // Inside the post-resize dirty window every chunk re-arms the refresh
       // debounce, so it fires once the repaint stream quiesces (see above).
       if (resizeDirtyUntil && Date.now() < resizeDirtyUntil) scheduleSoftRefresh();
@@ -3285,6 +3287,25 @@
     // anything typed but not yet submitted are preserved (the app, not the viewer,
     // owns that text). Debounced so a drag fires it once, on settle.
     let softRefreshTimer = null;
+    // Burst-quiesce refresh: resize is not the only thing that dirties the
+    // live buffer. On a phone, every message typed into an inline TUI opens
+    // and closes the keyboard; with the keyboard up the app's frame overflows
+    // the short screen and every repaint stamps its input-box band into
+    // scrollback. The agent's snapshot dedup collapses those stamps — but the
+    // live tab only pulled a fresh snapshot on resize, so stamps piled up
+    // between resizes and native scrolling exposed them. Now: whenever a
+    // burst of output (>30 lines) has settled for a second and the user is
+    // at the bottom, re-pull the clean snapshot too.
+    let lastDataAt = 0, cleanBaseY = 0;
+    setInterval(() => {
+      if (!agentLive || !ws || ws.readyState !== WebSocket.OPEN) return;
+      if (!lastDataAt || Date.now() - lastDataAt < 1000) return;
+      const buf = term && term.buffer && term.buffer.active;
+      if (!buf || buf.viewportY < buf.baseY) return;   // never yank a reader
+      if (buf.baseY - cleanBaseY <= 30) return;        // nothing meaningful accrued
+      cleanBaseY = buf.baseY;                          // one refresh per burst
+      scheduleSoftRefresh();
+    }, 2000);
     // After a resize, the app's SIGWINCH repaint can land well AFTER our settle
     // debounce — a refresh that fires first pulls a snapshot that predates the
     // repaint, and the straggler re-stamps duplicates that then linger. So a
