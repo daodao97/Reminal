@@ -1484,13 +1484,13 @@
       if (term.onWriteParsed) term.onWriteParsed(apply); else setInterval(apply, 250);
     })();
 
-    // Wheel routing, same rule as touch: an app only receives scroll when it
-    // is a full-screen (alternate-buffer) app with mouse reporting on. An
-    // inline TUI on the normal screen (Claude Code) also turns mouse mode on,
-    // and xterm would forward the wheel to it — but its per-report full-frame
-    // repaint scrolls in flickery 3-line steps, while the native scrollback
-    // holds the same (deduped) transcript and scrolls smoothly. Intercept
-    // exactly that case, before xterm's own wheel handler sees the event.
+    // Wheel routing, same rule as touch and the pointer guard above: an app
+    // only receives scroll when it is a full-screen (alternate-buffer) app
+    // with mouse reporting on. The pointer guard already pins activeProtocol
+    // to NONE on the normal screen, so xterm handles the wheel natively there;
+    // this capture-phase interceptor is the last line of defense for the
+    // sub-frame window between an app enabling mouse mode and the guard
+    // running (and documents the rule where a reader will look for it).
     (function routeWheel() {
       const host = document.getElementById('terminal');
       if (!host) return;
@@ -5347,7 +5347,19 @@
       // the viewport — inside a full-frame TUI (Claude Code) that means you can't
       // scroll at all. Drive xterm's own scrollLines() from the swipe delta instead.
       let scrolling = false, scrollLastY = 0, scrollAcc = 0;
-      // Paced dispatch for mouse-mode scroll notches. Each report makes the
+      // Scroll routing: the app gets the scroll only when it's a full-screen
+      // (alternate-buffer) app with mouse reporting on. Inline TUIs on the
+      // normal screen scroll the native scrollback instead (see onTouchMove).
+      // (The main-screen pointer guard keeps activeProtocol at NONE on the
+      // normal buffer, so this reduces to the alt-screen check in practice.)
+      function scrollForwardToApp() {
+        try {
+          return term.buffer.active.type === 'alternate' &&
+                 term._core.coreMouseService.activeProtocol !== 'NONE';
+        } catch (_) { return false; }
+      }
+
+      // Paced dispatch for app-bound scroll notches. Each report makes the
       // app repaint its whole frame; a fast drag crossing several notch
       // boundaries in one move event fired reports back-to-back, so the app
       // repainted 2-3x within milliseconds — visible flicker. Queue the
@@ -5355,15 +5367,6 @@
       // scroll, but every repaint gets time to finish before the next tick.
       // The queue is capped so a wild flick can't wind up seconds of
       // after-scroll; the tail past the cap is dropped deliberately.
-      // Scroll routing: the app gets the scroll only when it's a full-screen
-      // (alternate-buffer) app with mouse reporting on. Inline TUIs on the
-      // normal screen scroll the native scrollback instead (see onTouchMove).
-      function scrollForwardToApp() {
-        try {
-          return term.buffer.active.type === 'alternate' &&
-                 term._core.coreMouseService.activeProtocol !== 'NONE';
-        } catch (_) { return false; }
-      }
       let notchQueue = 0, notchPump = null, notchSize = 48, notchAt = { x: 200, y: 200 };
       let notchLastAt = 0;
       function queueNotches(n, notch, cx, cy) {
@@ -5455,39 +5458,19 @@
           scrollLastY = t.clientY;
           return;
         }
-        if (scrolling) {                            // one-finger swipe → same pipeline as the wheel
+        if (scrolling) {                            // one-finger swipe: scroll
           const dy = scrollLastY - t.clientY;       // finger up => positive => scroll toward newer
           scrollLastY = t.clientY;
-          // Feed the drag into xterm's OWN wheel path instead of scrollLines:
-          // whatever the trackpad would do right now — scroll the scrollback,
-          // or forward to the app when it has mouse reporting on — touch does
-          // identically. One code path, no touch/trackpad behavior split.
-          //
-          // CRUCIAL: quantize to ONE wheel event per whole CELL of travel. When
-          // an app has mouse reporting on, xterm emits one scroll report per
-          // wheel EVENT regardless of its delta (measured: 25 tiny events over
-          // a 10-cell distance → 10 reports; one 10-cell event → 1 report).
-          // Touch fires 60-120 tiny moves per drag, so passing them through
-          // raw made apps scroll by event count, not distance — wildly fast.
-          // One event per cell keeps app scrolling AND scrollback scrolling
-          // proportional to how far the finger actually moved.
-          // Two packagings, one pipeline:
-          //  - NATIVE scrollback (no app mouse reporting — the common case):
-          //    stream every move's raw pixel delta as one wheel event. xterm
-          //    sums pixel deltas exactly, so the text stays GLUED to the
-          //    finger at any speed — no notch quantization, whose held-back
-          //    remainder made fast flicks lag the finger and snap at lift.
-          //  - App mouse reporting ON: quantize to wheel NOTCHES (3 cells per
-          //    event). Apps scroll a fixed amount per REPORT (not per pixel),
-          //    and a report is sent per EVENT — raw streaming over-scrolled
-          //    them by event count; notches match a physical wheel's cadence.
-          // Forward scroll to the app ONLY on the alternate screen (vim, less,
-          // htop — no scrollback exists there, the app's scroll is the only
-          // one). On the normal screen the scrollback holds the full, deduped
-          // transcript, so native scrolling shows the same content pixel-glued
-          // and flicker-free — even when an inline TUI (Claude) has mouse
-          // reporting on. Its per-report frame repaint (3-line steps + full
-          // redraw flicker) is what made in-app scrolling feel bad.
+          // Two destinations, decided by scrollForwardToApp():
+          //  - NATIVE scrollback (normal screen — the common case, Claude
+          //    included): term.scrollLines per whole cell of travel, remainder
+          //    carried in scrollAcc. Pixel-glued to the finger at any speed.
+          //  - ALT-SCREEN app with mouse reporting (vim, less, htop): the
+          //    app's own scroll is the only one, and it scrolls a fixed
+          //    amount per wheel REPORT (~one notch = 3 lines), not per pixel.
+          //    So quantize to 3-cell notches and dispatch them as paced wheel
+          //    events (see queueNotches) — parity with a physical wheel, no
+          //    per-event over-scroll, no repaint-burst flicker.
           if (scrollForwardToApp()) {
             scrollAcc += dy;
             const h = cellDims().h || 16;
