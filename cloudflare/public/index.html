@@ -5294,12 +5294,30 @@
           // whatever the trackpad would do right now — scroll the scrollback,
           // or forward to the app when it has mouse reporting on — touch does
           // identically. One code path, no touch/trackpad behavior split.
-          const screenEl = (term._core && term._core.screenElement) || document.querySelector('.xterm-screen');
-          if (screenEl && dy) {
-            screenEl.dispatchEvent(new WheelEvent('wheel', {
-              deltaY: dy, deltaMode: 0, bubbles: true, cancelable: true,
-              clientX: t.clientX, clientY: t.clientY,
-            }));
+          //
+          // CRUCIAL: quantize to ONE wheel event per whole CELL of travel. When
+          // an app has mouse reporting on, xterm emits one scroll report per
+          // wheel EVENT regardless of its delta (measured: 25 tiny events over
+          // a 10-cell distance → 10 reports; one 10-cell event → 1 report).
+          // Touch fires 60-120 tiny moves per drag, so passing them through
+          // raw made apps scroll by event count, not distance — wildly fast.
+          // One event per cell keeps app scrolling AND scrollback scrolling
+          // proportional to how far the finger actually moved.
+          scrollAcc += dy;
+          const h = cellDims().h || 16;
+          let cells = (scrollAcc / h) | 0;          // whole cells only; keep remainder
+          if (cells) {
+            scrollAcc -= cells * h;
+            const screenEl = (term._core && term._core.screenElement) || document.querySelector('.xterm-screen');
+            if (screenEl) {
+              const dir = cells > 0 ? 1 : -1;
+              for (let n = Math.min(Math.abs(cells), 40); n > 0; n--) {
+                screenEl.dispatchEvent(new WheelEvent('wheel', {
+                  deltaY: dir * h, deltaMode: 0, bubbles: true, cancelable: true,
+                  clientX: t.clientX, clientY: t.clientY,
+                }));
+              }
+            }
           }
           e.preventDefault();                       // we own the vertical drag now
         }
