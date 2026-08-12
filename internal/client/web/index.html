@@ -5303,17 +5303,24 @@
           // raw made apps scroll by event count, not distance — wildly fast.
           // One event per cell keeps app scrolling AND scrollback scrolling
           // proportional to how far the finger actually moved.
+          // Quantum = one wheel NOTCH (3 cells), not one cell: apps that scroll
+          // via mouse reports move SEVERAL lines per report (a desktop wheel
+          // notch is ~3 lines and TUIs calibrate to that), so per-cell events
+          // still over-scrolled them 3x. Notch-sized events keep app scrolling
+          // at parity with a physical wheel; the native scrollback path just
+          // sums the deltas, so it stays exactly 1:1 with the finger either way.
           scrollAcc += dy;
           const h = cellDims().h || 16;
-          let cells = (scrollAcc / h) | 0;          // whole cells only; keep remainder
-          if (cells) {
-            scrollAcc -= cells * h;
+          const notch = 3 * h;
+          let notches = (scrollAcc / notch) | 0;    // whole notches only; keep remainder
+          if (notches) {
+            scrollAcc -= notches * notch;
             const screenEl = (term._core && term._core.screenElement) || document.querySelector('.xterm-screen');
             if (screenEl) {
-              const dir = cells > 0 ? 1 : -1;
-              for (let n = Math.min(Math.abs(cells), 40); n > 0; n--) {
+              const dir = notches > 0 ? 1 : -1;
+              for (let n = Math.min(Math.abs(notches), 15); n > 0; n--) {
                 screenEl.dispatchEvent(new WheelEvent('wheel', {
-                  deltaY: dir * h, deltaMode: 0, bubbles: true, cancelable: true,
+                  deltaY: dir * notch, deltaMode: 0, bubbles: true, cancelable: true,
                   clientX: t.clientX, clientY: t.clientY,
                 }));
               }
