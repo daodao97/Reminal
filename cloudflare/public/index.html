@@ -6407,7 +6407,10 @@
       sendWin('window_ctl', { action: 'stop', id });
       if (p.lastUrl) URL.revokeObjectURL(p.lastUrl);
       try { if (p.vdec && p.vdec.state !== 'closed') p.vdec.close(); } catch (_) {}
-      if (p.renderRAF) { cancelAnimationFrame(p.renderRAF); p.renderRAF = 0; }
+      if (p.renderRAF) {
+        try { (p.renderRAFWin || window).cancelAnimationFrame(p.renderRAF); } catch (_) {}
+        p.renderRAF = 0;
+      }
       while (p.renderQ && p.renderQ.length) { try { p.renderQ.shift().f.close(); } catch (_) {} }
       p.el.remove();
       panes.delete(id);
@@ -6700,7 +6703,19 @@
       if (!rtcActive() && (!lastCapAt || Date.now() - lastCapAt > 10000)) { lastCapAt = Date.now(); announceCaps(); }
       if (rtcActive()) refreshRtcRoute(); // keep direct-vs-TURN current for the (i)
       if (!panes.size) return;
-      for (const p of panes.values()) updatePaneOverlay(p);
+      for (const p of panes.values()) {
+        updatePaneOverlay(p);
+        // Safety net for playout: if frames are queued and overdue, rAF is not
+        // running (every window holding this pane is hidden, or the browser
+        // throttled it). Drain to the newest so the pane resumes on its own
+        // instead of sitting frozen until something else wakes it.
+        if (p.renderQ && p.renderQ.length && performance.now() - p.renderQ[0].at > 500) {
+          while (p.renderQ.length > 1) p.renderQ.shift().f.close();
+          const last = p.renderQ.shift();
+          paintVideoFrame(p, last.f); last.f.close();
+          p.nextShowAt = 0;
+        }
+      }
     }, 1000);
     // React immediately to a network change: the old ICE path is dead after a
     // switch, so drop it and renegotiate on the new network (cooldown 0).
@@ -6996,12 +7011,19 @@
     // since the display can show exactly one.
     function pumpRenderQ(p) {
       if (p.renderRAF) return;
-      p.renderRAF = requestAnimationFrame(() => {
+      // Schedule on the window that OWNS the canvas. A popped-out pane draws
+      // into the popup's document while this script keeps running in the
+      // opener — and a browser throttles (or pauses) rAF in a backgrounded
+      // tab, which the opener becomes the moment you focus the popup. Using
+      // the opener's clock would freeze exactly the window you are looking at.
+      const w = (p.popup && !p.popup.closed && p.popup.requestAnimationFrame) ? p.popup : window;
+      p.renderRAFWin = w;
+      p.renderRAF = w.requestAnimationFrame(() => {
         p.renderRAF = 0;
         const now = performance.now();
         let due = null;
         while (p.renderQ && p.renderQ.length && p.renderQ[0].at <= now) {
-          if (due) due.close();
+          if (due) due.close(); // superseded within this tick; only one can show
           due = p.renderQ.shift().f;
         }
         if (due) { paintVideoFrame(p, due); due.close(); }
