@@ -243,13 +243,16 @@ func TestBuildWinBinMsgsChunked(t *testing.T) {
 	}
 }
 
-// desiredCodec truth table: h264 only when every live viewer is on a confirmed
-// channel that declared support, nothing probing, and h264 isn't broken.
+// desiredCodec truth table. Video needs EVERY viewer able to decode it (the
+// relay is a broadcast), but not peer-to-peer delivery — wsVideo just reports
+// whether a relay copy is also required this iteration.
 func TestDesiredCodec(t *testing.T) {
 	mkAgent := func(peers ...*rtcPeer) *Agent {
 		a := &Agent{rtcPeers: map[string]*rtcPeer{}}
 		for i, p := range peers {
-			a.rtcPeers[string(rune('a'+i))] = p
+			id := string(rune('a' + i))
+			a.rtcPeers[id] = p
+			a.noteViewerCap(id, p.h264) // every viewer announces on hello
 		}
 		return a
 	}
@@ -266,22 +269,27 @@ func TestDesiredCodec(t *testing.T) {
 		viewers int
 		broken  bool
 		want    string
+		wantWS  bool
 	}{
-		{"one confirmed h264 viewer", []*rtcPeer{mkPeer(true, true, true)}, 1, false, "h264"},
-		{"no peers", nil, 1, false, ""},
-		{"confirmed but no h264", []*rtcPeer{mkPeer(true, true, false)}, 1, false, ""},
-		{"mixed capability", []*rtcPeer{mkPeer(true, true, true), mkPeer(true, true, false)}, 2, false, ""},
-		{"probing peer present", []*rtcPeer{mkPeer(true, true, true), mkPeer(true, false, true)}, 2, false, ""},
-		{"ws viewer outside dc", []*rtcPeer{mkPeer(true, true, true)}, 2, false, ""},
-		{"h264 broken", []*rtcPeer{mkPeer(true, true, true)}, 1, true, ""},
-		{"two confirmed h264", []*rtcPeer{mkPeer(true, true, true), mkPeer(true, true, true)}, 2, false, "h264"},
+		// Peer-to-peer only: every viewer has a confirmed channel.
+		{"one confirmed h264 viewer", []*rtcPeer{mkPeer(true, true, true)}, 1, false, "h264", false},
+		{"two confirmed h264", []*rtcPeer{mkPeer(true, true, true), mkPeer(true, true, true)}, 2, false, "h264", false},
+		// Video over the relay: capable viewers that aren't (yet) on P2P.
+		{"probing peer needs relay copy", []*rtcPeer{mkPeer(true, false, true)}, 1, false, "h264", true},
+		{"ws viewer beyond the dc count", []*rtcPeer{mkPeer(true, true, true)}, 2, false, "h264", true},
+		// No video at all.
+		{"no viewer announced", nil, 1, false, "", false},
+		{"viewer cannot decode", []*rtcPeer{mkPeer(true, true, false)}, 1, false, "", false},
+		{"mixed capability", []*rtcPeer{mkPeer(true, true, true), mkPeer(true, true, false)}, 2, false, "", false},
+		{"h264 broken on this stream", []*rtcPeer{mkPeer(true, true, true)}, 1, true, "", false},
 	}
 	for _, tc := range cases {
 		a := mkAgent(tc.peers...)
 		a.viewerCount = tc.viewers
 		s := &winStream{a: a, h264Broken: tc.broken}
-		if got := s.desiredCodec(); got != tc.want {
-			t.Errorf("%s: desiredCodec() = %q, want %q", tc.name, got, tc.want)
+		got, gotWS := s.desiredCodec()
+		if got != tc.want || (got != "" && gotWS != tc.wantWS) {
+			t.Errorf("%s: desiredCodec() = (%q, ws=%v), want (%q, ws=%v)", tc.name, got, gotWS, tc.want, tc.wantWS)
 		}
 	}
 }

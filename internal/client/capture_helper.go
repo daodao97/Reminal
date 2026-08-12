@@ -56,6 +56,14 @@ type winFrame struct {
 	Key  bool
 }
 
+// Frame flags in the helper's h264 framing ([uint32 len][flag][Annex-B AU]).
+// The same two values label AUs inside a batched relay message, so the viewer
+// parses one shape wherever the bytes arrived from.
+const (
+	flagH264Delta = 1
+	flagH264Key   = 2
+)
+
 // winH264QueueMax bounds the pending-frame queue in h264 mode. JPEG mode keeps
 // only the newest frame (each is independently decodable), but H.264 deltas
 // depend on every predecessor, so frames must queue. If the consumer falls this
@@ -214,11 +222,11 @@ func (h *winHelper) readLoop(stdout io.Reader) {
 			return
 		}
 		if h.codec == "h264" {
-			if n < 2 || (buf[0] != 1 && buf[0] != 2) {
+			if n < 2 || (buf[0] != flagH264Delta && buf[0] != flagH264Key) {
 				h.badFraming.Store(true)
 				return // framing mismatch — see doc comment
 			}
-			h.pushH264(winFrame{Data: buf[1:], H264: true, Key: buf[0] == 2})
+			h.pushH264(winFrame{Data: buf[1:], H264: true, Key: buf[0] == flagH264Key})
 		} else {
 			h.mu.Lock()
 			h.latest = buf

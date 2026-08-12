@@ -211,6 +211,13 @@ func (a *Agent) handleWebRTCHello(conn *websocket.Conn, encData string) {
 		return
 	}
 
+	// Record the viewer's decode capability BEFORE anything can fail. A viewer
+	// whose DataChannel never opens still reaches us over the relay, and it
+	// still wants video — so capability tracking must not be tied to P2P
+	// succeeding. Viewers re-hello periodically while unconnected, which keeps
+	// this fresh (see viewerCapTTL).
+	a.noteViewerCap(hello.Peer, hello.H264)
+
 	pionICE, viewerICE := iceConfig()
 	pc, err := webrtc.NewPeerConnection(webrtc.Configuration{ICEServers: pionICE})
 	if err != nil {
@@ -448,4 +455,77 @@ func (a *Agent) unconfirmRTC() {
 			p.mu.Unlock()
 		}
 	}
+}
+
+// viewerCapTTL bounds how long a viewer's announced decode capability is
+// trusted without a refresh. It has to outlive the viewer's re-announce
+// cadence (~10s) but stay SHORT, because the failure mode is asymmetric: a
+// stale record saying "can't decode H.264", left behind by a viewer that has
+// since gone, holds every remaining viewer on JPEG until it expires. A viewer
+// with a live DataChannel needs no record at all — its peer entry is
+// authoritative and disappears the moment the channel does.
+const viewerCapTTL = 30 * time.Second
+
+// noteViewerCap records what a viewer said it can decode. Keyed by the peer id
+// the viewer minted for this attempt — those churn across retries, which is
+// fine: the decision below is "does ANY viewer lack H.264", not a headcount.
+func (a *Agent) noteViewerCap(peer string, h264 bool) {
+	a.rtcMu.Lock()
+	defer a.rtcMu.Unlock()
+	if a.viewerCaps == nil {
+		a.viewerCaps = map[string]viewerCap{}
+	}
+	now := time.Now()
+	for id, c := range a.viewerCaps { // opportunistic sweep; the map stays tiny
+		if now.Sub(c.seen) > viewerCapTTL {
+			delete(a.viewerCaps, id)
+		}
+	}
+	a.viewerCaps[peer] = viewerCap{h264: h264, seen: now}
+}
+
+// viewersCanH264 reports whether it is safe to put compressed video on the
+// wire for EVERY viewer. The relay is a broadcast: one message reaches all of
+// them, so a single viewer that can't decode H.264 means nobody gets it.
+// Deliberately conservative — it requires positive evidence from at least one
+// viewer and no evidence against from any.
+func (a *Agent) viewersCanH264() bool {
+	a.rtcMu.Lock()
+	defer a.rtcMu.Unlock()
+	now, any := time.Now(), false
+	for _, c := range a.viewerCaps {
+		if now.Sub(c.seen) > viewerCapTTL {
+			continue
+		}
+		if !c.h264 {
+			return false // an old or incapable viewer is present
+		}
+		any = true
+	}
+	for _, p := range a.rtcPeers { // a live peer is authoritative over any record
+		if !p.open.Load() {
+			continue
+		}
+		if !p.h264 {
+			return false
+		}
+		any = true // so a P2P viewer needs no periodic re-announcement
+	}
+	return any
+}
+
+// forgetViewerCaps drops every recorded capability. Called when the last viewer
+// leaves: records are keyed by a per-attempt id with no disconnect signal
+// behind them, so departure is the one moment we can be certain none of them
+// describe anybody still watching.
+func (a *Agent) forgetViewerCaps() {
+	a.rtcMu.Lock()
+	a.viewerCaps = nil
+	a.rtcMu.Unlock()
+}
+
+// viewerCap is one viewer's announced decode capability and when it said so.
+type viewerCap struct {
+	h264 bool
+	seen time.Time
 }
