@@ -5250,6 +5250,41 @@
       // the viewport — inside a full-frame TUI (Claude Code) that means you can't
       // scroll at all. Drive xterm's own scrollLines() from the swipe delta instead.
       let scrolling = false, scrollLastY = 0, scrollAcc = 0;
+      // Paced dispatch for mouse-mode scroll notches. Each report makes the
+      // app repaint its whole frame; a fast drag crossing several notch
+      // boundaries in one move event fired reports back-to-back, so the app
+      // repainted 2-3x within milliseconds — visible flicker. Queue the
+      // notches and pump one per 45ms (first one immediately): same total
+      // scroll, but every repaint gets time to finish before the next tick.
+      // The queue is capped so a wild flick can't wind up seconds of
+      // after-scroll; the tail past the cap is dropped deliberately.
+      let notchQueue = 0, notchPump = null, notchSize = 48, notchAt = { x: 200, y: 200 };
+      let notchLastAt = 0;
+      function queueNotches(n, notch, cx, cy) {
+        notchSize = notch; notchAt = { x: cx, y: cy };
+        notchQueue = Math.max(-8, Math.min(8, notchQueue + n));
+        if (notchPump) return;
+        // Leading edge only when we're outside the pacing window — successive
+        // move events each carrying one notch must not bypass the 45ms gap.
+        if (Date.now() - notchLastAt >= 45) pumpNotch();
+        if (notchQueue) notchPump = setInterval(pumpNotch, 45);
+      }
+      function pumpNotch() {
+        if (!notchQueue) {
+          if (notchPump) { clearInterval(notchPump); notchPump = null; }
+          return;
+        }
+        notchLastAt = Date.now();
+        const dir = notchQueue > 0 ? 1 : -1;
+        notchQueue -= dir;
+        const el2 = (term._core && term._core.screenElement) || document.querySelector('.xterm-screen');
+        if (el2) {
+          el2.dispatchEvent(new WheelEvent('wheel', {
+            deltaY: dir * notchSize, deltaMode: 0, bubbles: true, cancelable: true,
+            clientX: notchAt.x, clientY: notchAt.y,
+          }));
+        }
+      }
 
       function cancelLP() { if (lpTimer) { clearTimeout(lpTimer); lpTimer = null; } }
 
@@ -5358,15 +5393,7 @@
             let notches = (scrollAcc / notch) | 0;  // whole notches only; keep remainder
             if (notches) {
               scrollAcc -= notches * notch;
-              if (screenEl) {
-                const dir = notches > 0 ? 1 : -1;
-                for (let n = Math.min(Math.abs(notches), 15); n > 0; n--) {
-                  screenEl.dispatchEvent(new WheelEvent('wheel', {
-                    deltaY: dir * notch, deltaMode: 0, bubbles: true, cancelable: true,
-                    clientX: t.clientX, clientY: t.clientY,
-                  }));
-                }
-              }
+              queueNotches(notches, notch, t.clientX, t.clientY);
             }
           }
           e.preventDefault();                       // we own the vertical drag now
@@ -5401,15 +5428,7 @@
             const h = cellDims().h || 16;
             const notch = 3 * h;
             const notches = Math.round(scrollAcc / notch);
-            if (notches && screenEl) {
-              const dir = notches > 0 ? 1 : -1;
-              for (let n = Math.min(Math.abs(notches), 15); n > 0; n--) {
-                screenEl.dispatchEvent(new WheelEvent('wheel', {
-                  deltaY: dir * notch, deltaMode: 0, bubbles: true, cancelable: true,
-                  clientX: ourTouch ? ourTouch.clientX : 200, clientY: ourTouch ? ourTouch.clientY : 200,
-                }));
-              }
-            }
+            if (notches) queueNotches(notches, notch, ourTouch ? ourTouch.clientX : 200, ourTouch ? ourTouch.clientY : 200);
           }
           scrollAcc = 0;
           return;
