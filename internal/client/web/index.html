@@ -1457,6 +1457,33 @@
     fitAddon.fit();
     window.__term = term; // debug/test handle (harmless; used by automated viewer tests)
 
+    // Pointer-ownership guard, same rule as scroll routing below: an app only
+    // gets REAL mouse events (clicks, drags) when it is a full-screen
+    // alternate-buffer app. Inline TUIs on the normal screen (Claude Code)
+    // also request mouse reporting — and once xterm activates it, a plain
+    // drag is forwarded to the app instead of selecting, so "select + Cmd+C"
+    // silently copies nothing. Suppress the protocol while the normal buffer
+    // is active (the app simply sees a terminal without mouse support) and
+    // restore it the moment an alt-screen app takes over.
+    (function mainScreenPointerGuard() {
+      let suppressed = null; // protocol the app requested while on the main screen
+      const apply = () => {
+        let svc = null;
+        try { svc = term._core.coreMouseService; } catch (_) { return; }
+        if (!svc) return;
+        const alt = term.buffer.active.type === 'alternate';
+        if (!alt && svc.activeProtocol !== 'NONE') {
+          suppressed = svc.activeProtocol;
+          svc.activeProtocol = 'NONE';
+        } else if (alt && suppressed) {
+          svc.activeProtocol = suppressed;
+          suppressed = null;
+        }
+      };
+      term.buffer.onBufferChange(apply);
+      if (term.onWriteParsed) term.onWriteParsed(apply); else setInterval(apply, 250);
+    })();
+
     // Wheel routing, same rule as touch: an app only receives scroll when it
     // is a full-screen (alternate-buffer) app with mouse reporting on. An
     // inline TUI on the normal screen (Claude Code) also turns mouse mode on,
