@@ -5253,28 +5253,44 @@
 
       function cancelLP() { if (lpTimer) { clearTimeout(lpTimer); lpTimer = null; } }
 
+      let touchId = null;                           // identifier of THE gesture finger
+      let extendMoved = false;                      // long-press drag actually moved
       function onTouchStart(e) {
         if (e.touches.length !== 1) { cancelLP(); return; }
         const t = e.touches[0];
+        touchId = t.identifier;
         downAt = Date.now();
         scrolling = false; scrollLastY = t.clientY; scrollAcc = 0;
         lpStart = { x: t.clientX, y: t.clientY, cell: pointToCell(t.clientX, t.clientY), wasActive: active };
         cancelLP();
         lpTimer = setTimeout(() => {
-          lpTimer = null; extending = true;
+          lpTimer = null; extending = true; extendMoved = false;
           enterSelection(lpStart.cell);
           dragWhich = 'end';                        // let the same finger extend the end
           suppressFocusClick = true;
         }, LP_MS);
       }
       function onTouchMove(e) {
-        const t = e.touches[0];
+        // Track OUR finger by identifier — never touches[0]. With a resting
+        // palm or an accidental second touch, touches[0] can silently become a
+        // DIFFERENT finger; a delta computed across two fingers is a huge
+        // phantom jump that scrolls wildly without matching any movement.
+        let t = null;
+        for (let k = 0; k < e.touches.length; k++)
+          if (e.touches[k].identifier === touchId) { t = e.touches[k]; break; }
         if (!t) return;
         if (extending) {                            // we own the gesture now — extend, don't scroll
           e.preventDefault();
           const aimY = t.clientY - 6;
           lastDragClient = { x: t.clientX, y: aimY };
-          startAutoScroll(edgeDir(t.clientY));
+          // Edge autoscroll only after the long-press drag has actually MOVED.
+          // A finger that long-presses near the screen edge and stays put must
+          // not start a constant-rate scroll that ignores the finger entirely.
+          if (!extendMoved &&
+              (Math.abs(t.clientX - lpStart.x) > MOVE_CANCEL || Math.abs(t.clientY - lpStart.y) > MOVE_CANCEL)) {
+            extendMoved = true;
+          }
+          if (extendMoved) startAutoScroll(edgeDir(t.clientY));
           updateDragTo(t.clientX, aimY);
           return;
         }
@@ -5287,7 +5303,14 @@
             return;                                 // not enough movement to decide yet
           }
         }
-        if (scrolling && e.touches.length === 1) {  // one-finger swipe → same pipeline as the wheel
+        if (scrolling && e.touches.length !== 1) {
+          // Extra touch (palm) present: keep the anchor synced to OUR finger so
+          // its travel during the palm is dropped — never emitted as one burst
+          // when the palm lifts.
+          scrollLastY = t.clientY;
+          return;
+        }
+        if (scrolling) {                            // one-finger swipe → same pipeline as the wheel
           const dy = scrollLastY - t.clientY;       // finger up => positive => scroll toward newer
           scrollLastY = t.clientY;
           // Feed the drag into xterm's OWN wheel path instead of scrollLines:
@@ -5330,6 +5353,13 @@
         }
       }
       function onTouchEnd(e) {
+        // Only OUR gesture finger ends the drag. A palm or second touch lifting
+        // mid-scroll must not kill the scroll state (that left the rest of the
+        // drag dead until the user lifted and re-swiped).
+        let oursLifted = false;
+        for (let k = 0; k < e.changedTouches.length; k++)
+          if (e.changedTouches[k].identifier === touchId) { oursLifted = true; break; }
+        if (!oursLifted && e.touches.length > 0) return;
         cancelLP();
         if (scrolling) { scrolling = false; return; }  // a swipe-scroll: not a tap/selection
         if (extending) {
