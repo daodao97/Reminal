@@ -792,6 +792,7 @@
     .wpane-info .v.p2p { color: #3fb950; }
     .wpane-info .v.turn { color: #d29922; }
     .wpane-info .v.ws { color: #f0883e; }
+    .wpane-info .v.warn { color: #f85149; }
     /* Warning banner atop the Windows dropdown (e.g. Screen Recording is off). */
     .windows-hint {
       margin: 6px; padding: 8px 10px; border-radius: 6px; font-size: 11.5px; line-height: 1.6;
@@ -5854,8 +5855,17 @@
       const cap = p.capSrc === 'h264' ? 'Native · H.264 video'
         : p.capSrc === 'native' ? 'Native · ScreenCaptureKit'
         : p.capSrc === 'shot' ? ('Screenshot fallback' + (p.capErr ? ' · ' + escapeHtml(p.capErr) : '')) : '\u2014';
+      // Video health, shown only once something has actually gone wrong: gaps
+      // mean access units were lost in flight, errors mean the decoder itself
+      // rejected them. Which of the two it is decides where to look, and a
+      // phone has no console to read it from.
+      const gaps = p.h264Gaps || 0, derrs = p.h264Errs || 0;
+      const health = (gaps || derrs)
+        ? '<div class="row"><span class="k">Video</span><span class="v warn">' + gaps + ' gaps · ' + derrs + ' decode errors</span></div>'
+        : '';
       return '<div class="row"><span class="k">Transport</span><span class="v ' + cls + '">' + transport + '</span></div>'
         + '<div class="row"><span class="k">Capture</span><span class="v">' + cap + '</span></div>'
+        + health
         + '<div class="row"><span class="k">Encryption</span><span class="v">' + enc + '</span></div>'
         + '<div class="row"><span class="k">Resolution</span><span class="v">' + res + '</span></div>'
         + '<div class="row"><span class="k">Frame rate</span><span class="v">' + fps + ' fps</span></div>';
@@ -6459,6 +6469,10 @@
     const H264_CODEC = 'avc1.4d0028'; // Main profile (what the host encodes), level 4.0
     const h264DecodeReady = (async () => {
       try {
+        // ?h264=0 forces the JPEG path for a side-by-side comparison on a real
+        // device — the fastest way to tell a decoder problem from everything
+        // else, with no rebuild and nothing to install.
+        if (/[?&]h264=0/.test(location.search)) return;
         if (typeof VideoDecoder !== 'undefined' && VideoDecoder.isConfigSupported) {
           const c = await VideoDecoder.isConfigSupported({ codec: H264_CODEC, optimizeForLatency: true });
           h264Decode = !!(c && c.supported);

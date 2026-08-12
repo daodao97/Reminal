@@ -633,8 +633,17 @@ if #available(macOS 14.0, *) { scale = filter.pointPixelScale > 0 ? Double(filte
 let nativeW = pointW * scale
 let outW = min(Double(maxWidth), nativeW)
 let outH = outW * (pointH / pointW)
-config.width = max(2, Int(outW.rounded()))
-config.height = max(2, Int(outH.rounded()))
+// EVEN dimensions, always. H.264 4:2:0 subsamples chroma 2x2, so an odd width
+// or height can't be represented directly — the encoder pads to even and
+// signals a crop, and hardware decoders (Android MediaCodec especially) are
+// unreliable on that path: it renders as speckles and edge garbage. Real
+// windows hit this constantly once scaled to maxWidth: a 1728x1117 desktop
+// becomes 1100x711, a 1020x669 window becomes 1100x721. Rounding down to even
+// costs at most one pixel of height and keeps the stream on the crop-to-16
+// path every 1080p video already exercises. JPEG mode is unaffected by the
+// parity but shares the size, and one pixel there is invisible.
+config.width = max(2, Int(outW.rounded()) & ~1)
+config.height = max(2, Int(outH.rounded()) & ~1)
 config.minimumFrameInterval = CMTime(value: 1, timescale: CMTimeScale(fps)) // ceiling; idle frames are skipped
 config.pixelFormat = kCVPixelFormatType_32BGRA
 config.queueDepth = 5
