@@ -136,33 +136,48 @@ func writeHelperCheck(conn net.Conn, sub string) {
 	_ = conn.Close()
 }
 
-// mirrorServeCapture streams a window's [uint32 BE len][JPEG] frames to conn by
-// running the capture helper in the daemon's granted context. Closing conn stops
-// it. Falls back to a screencapture poll loop only when the native helper binary
-// is absent (a permission/window failure just ends the stream — the session then
-// reports it and the `check` command drives the "run reminal permissions" hint).
+// mirrorServeCapture streams a window's [uint32 BE len][payload] frames to conn
+// by running the capture helper in the daemon's granted context. Closing conn
+// stops it. An optional 5th arg selects the codec ("h264"); absent means JPEG,
+// which is what pre-h264 sessions send. Falls back to a screencapture poll loop
+// only when the native helper binary is absent AND the session asked for JPEG —
+// an h264 request without a helper just closes the conn, so the session retries
+// in jpeg mode (a permission/window failure likewise ends the stream — the
+// session then reports it and `check` drives the "run reminal permissions" hint).
 func mirrorServeCapture(conn net.Conn, args []string) {
 	defer conn.Close()
 	if len(args) < 4 {
 		return
 	}
 	id, w, q, fps := args[0], args[1], args[2], args[3]
+	codec := ""
+	if len(args) >= 5 && args[4] == "h264" {
+		codec = "h264"
+	}
 	helper, err := captureHelperPath()
 	if err != nil {
-		mirrorScreencaptureLoop(conn, id, atoiOr(fps, 8))
+		if codec != "h264" {
+			mirrorScreencaptureLoop(conn, id, atoiOr(fps, 8))
+		}
 		return
 	}
-	cmd := exec.Command(helper, id, w, q, fps)
+	cargs := []string{id, w, q, fps}
+	if codec != "" {
+		cargs = append(cargs, codec)
+	}
+	cmd := exec.Command(helper, cargs...)
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return
 	}
-	stdin, err := cmd.StdinPipe() // lifeline
+	stdin, err := cmd.StdinPipe() // lifeline + command channel
 	if err != nil {
 		return
 	}
 	if err := cmd.Start(); err != nil {
-		mirrorScreencaptureLoop(conn, id, atoiOr(fps, 8))
+		if codec != "h264" {
+			mirrorScreencaptureLoop(conn, id, atoiOr(fps, 8))
+		}
 		return
 	}
 	kill := func() {
@@ -171,13 +186,15 @@ func mirrorServeCapture(conn net.Conn, args []string) {
 			_ = cmd.Process.Kill()
 		}
 	}
-	// A capture conn is write-only from the daemon; a Read returning means the
-	// session dropped it → stop the helper.
+	// Forward session→daemon bytes into the helper's stdin: that's how "key\n"
+	// (force an IDR) reaches the encoder. A Read returning error/EOF means the
+	// session dropped the conn → stop the helper. Old sessions never write, so
+	// this degrades to the pure lifeline it used to be.
 	go func() {
-		_, _ = io.Copy(io.Discard, conn)
+		_, _ = io.Copy(stdin, conn)
 		kill()
 	}()
-	_, _ = io.Copy(conn, stdout) // raw [len][JPEG] frames straight through
+	_, _ = io.Copy(conn, stdout) // raw framed stream straight through
 	kill()
 	_ = cmd.Wait()
 }
@@ -311,11 +328,13 @@ const mirrorDialTimeout = 2 * time.Second
 
 // startMirrorCapture (session side) dials the daemon's mirror socket and returns
 // a winHelper streaming the window's frames from the daemon (sh.reminal context).
-// The helper reads the same [len][JPEG] format as the direct exec path, so the
-// caller's streaming logic is unchanged. Errors when the daemon is unreachable —
-// callers surface "screen-sharing service restarting" rather than falling back to
-// a terminal-attributed capture.
-func startMirrorCapture(id string, maxWidth, quality, fps int) (*winHelper, error) {
+// The helper reads the same framed format as the direct exec path, so the
+// caller's streaming logic is unchanged. codec "" means jpeg; "h264" appends the
+// codec token (an OLD daemon ignores it and streams JPEG — the winHelper framing
+// validator catches that and ends the stream, so the caller falls back to jpeg).
+// Errors when the daemon is unreachable — callers surface "screen-sharing
+// service restarting" rather than falling back to a terminal-attributed capture.
+func startMirrorCapture(id string, maxWidth, quality, fps int, codec string) (*winHelper, error) {
 	sock, err := mirrorSockPath()
 	if err != nil {
 		return nil, err
@@ -324,12 +343,17 @@ func startMirrorCapture(id string, maxWidth, quality, fps int) (*winHelper, erro
 	if err != nil {
 		return nil, fmt.Errorf("screen-sharing service starting — retry: %w", err)
 	}
-	if _, err := fmt.Fprintf(conn, "capture %s %d %d %d\n", id, maxWidth, quality, fps); err != nil {
+	line := fmt.Sprintf("capture %s %d %d %d\n", id, maxWidth, quality, fps)
+	if codec == "h264" {
+		line = fmt.Sprintf("capture %s %d %d %d %s\n", id, maxWidth, quality, fps, codec)
+	}
+	if _, err := io.WriteString(conn, line); err != nil {
 		_ = conn.Close()
 		return nil, err
 	}
 	h := &winHelper{
 		conn:   conn,
+		codec:  codec,
 		sig:    make(chan struct{}, 1),
 		dead:   make(chan struct{}),
 		stderr: &bytes.Buffer{},

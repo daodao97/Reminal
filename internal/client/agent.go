@@ -262,6 +262,15 @@ type Agent struct {
 	// are delivered on, so streamWindow can pace to the viewer (see streamWindow).
 	// Guarded by winMu.
 	winAck map[string]chan uint64
+	// winKeyReq maps a streaming window's id to a flag a viewer raises when it
+	// detects a gap in the H.264 frame sequence and needs a fresh keyframe to
+	// resync. A flag rather than a channel: many gapped frames coalesce into
+	// one key request. Guarded by winMu.
+	winKeyReq map[string]*atomic.Bool
+	// viewerCaps records what each viewer announced it can decode, so a viewer
+	// that never establishes P2P can still be sent video over the relay.
+	// Guarded by rtcMu (it's populated from the same signalling path).
+	viewerCaps map[string]viewerCap
 	// winMenu marks a window whose right-click just opened a context menu. macOS
 	// draws menus as SEPARATE windows, so a capture-by-window-id misses them; for
 	// a short interval after a right-click we instead capture that window's screen
@@ -2518,6 +2527,9 @@ func (a *Agent) runReader(conn *websocket.Conn, cursorCh chan uint64) error {
 			}
 			a.updateActiveViewers(msg.Count)
 			a.syncViewerList(msg.Count, true)
+			if msg.Count == 0 {
+				a.forgetViewerCaps() // no watchers left; stale records must not outlive them
+			}
 			a.viewerSizeMu.Lock()
 			prevCount := a.viewerCount
 			a.viewerCount = msg.Count
@@ -2566,6 +2578,9 @@ func (a *Agent) runReader(conn *websocket.Conn, cursorCh chan uint64) error {
 				// held is exactly when this fires, and a lost release strands the
 				// host's desktop in a grab. Guaranteed-delivery, off the reader.
 				go a.enqueueWinOpImportant(func() { a.releaseWindowInput() })
+			}
+			if msg.Count == 0 {
+				a.forgetViewerCaps()
 			}
 			a.viewerSizeMu.Lock()
 			a.viewerCount = msg.Count

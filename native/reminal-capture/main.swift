@@ -11,11 +11,19 @@
 // continuously (up to 60fps) and only when the picture actually changed, and
 // ImageIO encodes JPEG on the hardware path — so per-frame cost drops to ~5-15ms.
 //
-// Protocol: argv = <windowID> [maxWidth] [quality 0-100]. Frames are written to
-// stdout as [uint32 big-endian length][JPEG bytes], repeated. The agent already
-// knows the window's logical size, so no per-frame dimensions are sent. Fatal
+// Protocol: argv = <windowID> [maxWidth] [quality 0-100] [fps] [codec].
+// codec "jpeg" (default): frames are written to stdout as
+// [uint32 big-endian length][JPEG bytes], repeated — unchanged since v1.10, so
+// an old agent driving a new helper sees the byte stream it expects.
+// codec "h264": frames are [uint32 big-endian length][1 flag byte][payload]
+// where length covers flag+payload, flag 1 = delta access unit, flag 2 = key
+// access unit (SPS+PPS+IDR inline), payload is Annex-B H.264 from VideoToolbox
+// in low-latency mode. A "key\n" line on stdin forces an immediate IDR — for a
+// static window the last frame is re-encoded, so a newly attached viewer gets
+// a picture without waiting for the window to change. The agent already knows
+// the window's logical size, so no per-frame dimensions are sent. Fatal
 // problems (permission denied, window gone) print one line to stderr and exit
-// non-zero, so the agent falls back to its screencapture path.
+// non-zero, so the agent falls back to its screencapture path (or JPEG mode).
 
 import ApplicationServices
 import CoreGraphics
@@ -26,6 +34,7 @@ import CoreVideo
 import Foundation
 import ImageIO
 import ScreenCaptureKit
+import VideoToolbox
 
 // ---- args ----
 let args = CommandLine.arguments
@@ -151,18 +160,36 @@ func die(_ msg: String) -> Never {
 }
 
 
-// Parent lifeline: the agent holds our stdin pipe open and never writes; EOF
+// Parent lifeline + command channel: the agent holds our stdin pipe open; EOF
 // means it's gone — including deaths that skip its cleanup (SIGKILL, crash, or
 // its hot-restart exec, all of which close the fd). Without this, a helper on a
 // STATIC window would outlive a dead agent forever: it only notices a closed
 // stdout when a frame write fails, and a static window never writes. Armed only
 // when stdin is a pipe, so running the helper by hand from a terminal still works.
+// In h264 mode the same pipe doubles as a command channel: a "key\n" line forces
+// an immediate IDR (see H264Encoder.requestKey). Unknown lines are ignored, so
+// old agents that never write and future commands both stay compatible.
+var h264Encoder: H264Encoder?
 var stdinStat = stat()
 if fstat(0, &stdinStat) == 0 && (stdinStat.st_mode & S_IFMT) == S_IFIFO {
     DispatchQueue.global(qos: .utility).async {
+        var pending = Data()
         while true {
-            guard let d = try? FileHandle.standardInput.read(upToCount: 4096), !d.isEmpty else {
-                exit(0) // EOF or read error — parent is gone
+            // availableData, NOT read(upToCount:): the latter blocks until it
+            // fills its whole buffer or hits EOF on a pipe, so a "key\n" line
+            // would sit undelivered until the agent died (verified live — the
+            // re-key commands all arrived in one burst at EOF, milliseconds
+            // before exit). availableData returns as soon as any bytes arrive.
+            let d = FileHandle.standardInput.availableData
+            if d.isEmpty {
+                exit(0) // EOF — parent is gone
+            }
+            pending.append(d)
+            while let nl = pending.firstIndex(of: 0x0A) {
+                let line = String(data: pending[pending.startIndex..<nl], encoding: .utf8)?
+                    .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                pending = Data(pending[pending.index(after: nl)...])
+                if line == "key" { h264Encoder?.requestKey() }
             }
         }
     }
@@ -252,12 +279,15 @@ if args.count >= 2, args[1].hasPrefix("display:"), let d = UInt32(args[1].dropFi
 } else if args.count >= 2, let w = UInt32(args[1]) {
     windowID = w
 } else {
-    FileHandle.standardError.write(Data("usage: reminal-capture <windowID|display:ID> [maxWidth] [quality] [fps]\n".utf8))
+    FileHandle.standardError.write(Data("usage: reminal-capture <windowID|display:ID> [maxWidth] [quality] [fps] [jpeg|h264]\n".utf8))
     exit(2)
 }
 let maxWidth = args.count >= 3 ? (Int(args[2]) ?? 1100) : 1100
 let quality = args.count >= 4 ? (Double(args[3]) ?? 45) / 100.0 : 0.45
-let fps = args.count >= 5 ? max(1, min(60, Int(args[4]) ?? 60)) : 60
+// Ceiling is the panel's own rate (ProMotion tops out at 120); SCK never
+// delivers faster than the display refreshes, so a higher request just idles.
+let fps = args.count >= 5 ? max(1, min(120, Int(args[4]) ?? 60)) : 60
+let useH264 = args.count >= 6 && args[5] == "h264"
 
 // frameByteBudget bounds each JPEG so its base64-in-JSON envelope stays well
 // under every browser's DataChannel maxMessageSize (140_000 × 1.34 + overhead
@@ -279,6 +309,233 @@ func encodeJPEG(_ cg: CGImage, _ quality: Double) -> Data? {
 // dedicated lock so a future multi-output setup can't interleave frame bytes.
 let writeLock = NSLock()
 
+// One queue for BOTH the SCStream sample handler and any out-of-band encoder
+// submission (requestKey): VTCompressionSessionEncodeFrame is not thread-safe.
+let sampleQueue = DispatchQueue(label: "reminal.capture")
+
+// writeFramed emits one length-prefixed frame; flag is prepended inside the
+// length when non-nil (h264 mode), absent for JPEG (legacy framing, byte-for-
+// byte what pre-h264 agents parse). A closed pipe means the agent stopped the
+// stream — exit quietly.
+func writeFramed(_ payload: Data, flag: UInt8?) {
+    var lenBE = UInt32(payload.count + (flag != nil ? 1 : 0)).bigEndian
+    writeLock.lock()
+    defer { writeLock.unlock() }
+    do {
+        try stdoutHandle.write(contentsOf: Data(bytes: &lenBE, count: 4))
+        if let flag { try stdoutHandle.write(contentsOf: Data([flag])) }
+        try stdoutHandle.write(contentsOf: payload)
+    } catch {
+        exit(0)
+    }
+}
+
+// Frame flags for h264 framing (JPEG mode has no flag byte).
+let flagH264Delta: UInt8 = 1
+let flagH264Key: UInt8 = 2
+
+// ---- H.264 encoder: VideoToolbox low-latency session → Annex-B access units ----
+//
+// Why H.264 instead of per-frame JPEG: temporal compression. Measured on a
+// full-motion 1100×700 window: JPEG q45 at 30fps costs ~15 Mbps; H.264 at
+// 2 Mbps is visually identical (SSIM 0.987) — a 7-10× wire reduction, which is
+// the difference between "unusable on cellular P2P" and "trivial". The encoder
+// runs on dedicated silicon, so CPU cost is at or below the JPEG path.
+final class H264Encoder {
+    private var session: VTCompressionSession
+    private let lock = NSLock()
+    private var forceNextKey = true // first frame must be an IDR regardless
+    private var lastBuffer: CVPixelBuffer? // retained for static-window re-key
+
+    init?(width: Int, height: Int, fps: Int) {
+        // Low-latency rate control (hardware-only mode: no B-frames, no frame
+        // delay, bitrate honored per-frame). If the machine's encoder doesn't
+        // support it, fall back to a regular realtime session.
+        var s: VTCompressionSession?
+        let lowLatency = [kVTVideoEncoderSpecification_EnableLowLatencyRateControl: kCFBooleanTrue] as CFDictionary
+        var status = VTCompressionSessionCreate(
+            allocator: nil, width: Int32(width), height: Int32(height),
+            codecType: kCMVideoCodecType_H264, encoderSpecification: lowLatency,
+            imageBufferAttributes: nil, compressedDataAllocator: nil,
+            outputCallback: nil, refcon: nil, compressionSessionOut: &s)
+        if status != noErr || s == nil {
+            status = VTCompressionSessionCreate(
+                allocator: nil, width: Int32(width), height: Int32(height),
+                codecType: kCMVideoCodecType_H264, encoderSpecification: nil,
+                imageBufferAttributes: nil, compressedDataAllocator: nil,
+                outputCallback: nil, refcon: nil, compressionSessionOut: &s)
+        }
+        guard status == noErr, let created = s else { return nil }
+        session = created
+
+        // ~0.08 bits per pixel per frame at 30fps lands at ~1.7 Mbps for
+        // 1100×636 — measured visually transparent for UI content vs the JPEG
+        // stream it replaces. Frame rate scales the budget SUBLINEARLY: at a
+        // higher rate consecutive frames differ less, so each costs fewer bits.
+        // (A linear term made 60fps ask for exactly 2× and the encoder happily
+        // spent it — measured 3.5 vs 1.7 Mbps for a picture that needs ~1.5×.)
+        // Clamped so tiny windows still get enough and huge desktops don't
+        // flood a P2P link. Property failures are non-fatal: an encoder that
+        // ignores a hint still produces decodable output.
+        let fpsScale = pow(Double(fps) / 30.0, 0.6)
+        let avgBitrate = max(600_000, min(6_000_000, Int(Double(width * height) * 30.0 * 0.08 * fpsScale)))
+        VTSessionSetProperty(session, key: kVTCompressionPropertyKey_RealTime, value: kCFBooleanTrue)
+        VTSessionSetProperty(session, key: kVTCompressionPropertyKey_ProfileLevel, value: kVTProfileLevel_H264_Main_AutoLevel)
+        VTSessionSetProperty(session, key: kVTCompressionPropertyKey_AllowFrameReordering, value: kCFBooleanFalse)
+        // Periodic IDR as a SAFETY NET, not the recovery mechanism: a viewer
+        // that loses sync asks for a key immediately (see requestWindowKey), so
+        // this only bounds how long corruption could persist if that request
+        // itself went missing. 2s costs ~4% (one ~30 KB IDR per 120 deltas);
+        // the 10s it replaced meant a lost AU could smear for ten seconds.
+        VTSessionSetProperty(session, key: kVTCompressionPropertyKey_MaxKeyFrameIntervalDuration, value: 2 as CFNumber)
+        VTSessionSetProperty(session, key: kVTCompressionPropertyKey_ExpectedFrameRate, value: fps as CFNumber)
+        VTSessionSetProperty(session, key: kVTCompressionPropertyKey_AverageBitRate, value: avgBitrate as CFNumber)
+        // Hard ceiling ~1.4× average over any 1s window so keyframe spikes stay
+        // under the agent's per-message DataChannel budget.
+        VTSessionSetProperty(session, key: kVTCompressionPropertyKey_DataRateLimits,
+                             value: [avgBitrate / 8 * 14 / 10, 1] as CFArray)
+        VTCompressionSessionPrepareToEncodeFrames(session)
+    }
+
+    // encode compresses one captured frame; called on the sample handler queue.
+    func encode(_ pixelBuffer: CVPixelBuffer) {
+        lock.lock()
+        let key = forceNextKey
+        forceNextKey = false
+        lastBuffer = pixelBuffer
+        lock.unlock()
+        submit(pixelBuffer, forceKey: key)
+    }
+
+    // requestKey forces the next frame to be an IDR. For a static window no
+    // next frame is coming, so the cached last frame is re-encoded immediately
+    // — a newly attached viewer must not wait for on-screen change to see
+    // anything. Called from the stdin command thread.
+    //
+    // Two hard-won constraints (both verified live against SCK capture):
+    // 1. The re-encode MUST run on the same queue as live frame submission —
+    //    VTCompressionSessionEncodeFrame is not thread-safe, and a submission
+    //    racing the sample handler's is silently swallowed (returns noErr, the
+    //    output handler simply never fires). All submits go via sampleQueue.
+    // 2. The cached buffer is DEEP-COPIED first: SCK's pooled IOSurface buffers
+    //    misbehave on re-submission. A plain BGRA blit into a fresh buffer only
+    //    costs on re-key, never per frame.
+    func requestKey() {
+        lock.lock()
+        forceNextKey = true
+        let cached = lastBuffer
+        lock.unlock()
+        guard let cached else { return } // no frame yet: the first one is a key anyway
+        sampleQueue.async {
+            guard let copy = Self.copyPixelBuffer(cached) else { return } // next live frame keys instead
+            self.lock.lock()
+            self.forceNextKey = false
+            self.lock.unlock()
+            self.submit(copy, forceKey: true)
+        }
+    }
+
+    private static func copyPixelBuffer(_ src: CVPixelBuffer) -> CVPixelBuffer? {
+        let w = CVPixelBufferGetWidth(src), h = CVPixelBufferGetHeight(src)
+        var dstOpt: CVPixelBuffer?
+        // IOSurface-backed like the live SCK frames: the hardware encoder
+        // silently drops a malloc-backed buffer slipped into an IOSurface
+        // stream (no callback at all).
+        let attrs = [kCVPixelBufferIOSurfacePropertiesKey: [:] as CFDictionary] as CFDictionary
+        guard CVPixelBufferCreate(nil, w, h, CVPixelBufferGetPixelFormatType(src), attrs, &dstOpt) == kCVReturnSuccess,
+              let dst = dstOpt else { return nil }
+        CVPixelBufferLockBaseAddress(src, .readOnly)
+        CVPixelBufferLockBaseAddress(dst, [])
+        defer {
+            CVPixelBufferUnlockBaseAddress(dst, [])
+            CVPixelBufferUnlockBaseAddress(src, .readOnly)
+        }
+        guard let srcBase = CVPixelBufferGetBaseAddress(src),
+              let dstBase = CVPixelBufferGetBaseAddress(dst) else { return nil }
+        let srcStride = CVPixelBufferGetBytesPerRow(src)
+        let dstStride = CVPixelBufferGetBytesPerRow(dst)
+        let rowBytes = min(srcStride, dstStride)
+        for y in 0..<h {
+            memcpy(dstBase + y * dstStride, srcBase + y * srcStride, rowBytes)
+        }
+        return dst
+    }
+
+    private func submit(_ pixelBuffer: CVPixelBuffer, forceKey: Bool) {
+        // Host-clock PTS: always monotonic, even when requestKey re-submits the
+        // cached buffer out of band (SCK timestamps would repeat there).
+        let pts = CMClockGetTime(CMClockGetHostTimeClock())
+        let props = forceKey ? [kVTEncodeFrameOptionKey_ForceKeyFrame: kCFBooleanTrue] as CFDictionary : nil
+        let status = VTCompressionSessionEncodeFrame(
+            session, imageBuffer: pixelBuffer, presentationTimeStamp: pts,
+            duration: .invalid, frameProperties: props, infoFlagsOut: nil
+        ) { status, _, sampleBuffer in
+            guard status == noErr, let sampleBuffer else { return }
+            self.emit(sampleBuffer)
+        }
+        if status != noErr {
+            die("h264 encode failed: \(status)") // agent restarts / falls back to jpeg
+        }
+    }
+
+    // emit converts one compressed sample (AVCC: length-prefixed NALs, parameter
+    // sets off in the format description) to a self-contained Annex-B access
+    // unit and writes it as a framed message. Keyframes carry SPS/PPS inline so
+    // any AU tagged "key" is a valid decoder entry point on its own.
+    private func emit(_ sampleBuffer: CMSampleBuffer) {
+        let attachments = CMSampleBufferGetSampleAttachmentsArray(sampleBuffer, createIfNecessary: false)
+            as? [[CFString: Any]]
+        let notSync = attachments?.first?[kCMSampleAttachmentKey_NotSync] as? Bool ?? false
+        let isKey = !notSync
+
+        let startCode = Data([0, 0, 0, 1])
+        var out = Data()
+        var nalHeaderLen: Int32 = 4
+        if let fd = CMSampleBufferGetFormatDescription(sampleBuffer) {
+            var psCount = 0
+            CMVideoFormatDescriptionGetH264ParameterSetAtIndex(
+                fd, parameterSetIndex: 0, parameterSetPointerOut: nil,
+                parameterSetSizeOut: nil, parameterSetCountOut: &psCount,
+                nalUnitHeaderLengthOut: &nalHeaderLen)
+            if isKey {
+                for i in 0..<psCount {
+                    var ptr: UnsafePointer<UInt8>?
+                    var size = 0
+                    let st = CMVideoFormatDescriptionGetH264ParameterSetAtIndex(
+                        fd, parameterSetIndex: i, parameterSetPointerOut: &ptr,
+                        parameterSetSizeOut: &size, parameterSetCountOut: nil,
+                        nalUnitHeaderLengthOut: nil)
+                    if st == noErr, let ptr {
+                        out.append(startCode)
+                        out.append(ptr, count: size)
+                    }
+                }
+            }
+        }
+
+        guard let block = CMSampleBufferGetDataBuffer(sampleBuffer) else { return }
+        var totalLen = 0
+        var dataPtr: UnsafeMutablePointer<CChar>?
+        guard CMBlockBufferGetDataPointer(block, atOffset: 0, lengthAtOffsetOut: nil,
+                                          totalLengthOut: &totalLen, dataPointerOut: &dataPtr) == kCMBlockBufferNoErr,
+              let base = dataPtr else { return }
+        let hdr = Int(nalHeaderLen)
+        var off = 0
+        base.withMemoryRebound(to: UInt8.self, capacity: totalLen) { bytes in
+            while off + hdr <= totalLen {
+                var nalLen = 0
+                for i in 0..<hdr { nalLen = nalLen << 8 | Int(bytes[off + i]) }
+                guard nalLen > 0, off + hdr + nalLen <= totalLen else { break }
+                out.append(startCode)
+                out.append(UnsafeBufferPointer(start: bytes + off + hdr, count: nalLen))
+                off += hdr + nalLen
+            }
+        }
+        guard !out.isEmpty else { return }
+        writeFramed(out, flag: isKey ? flagH264Key : flagH264Delta)
+    }
+}
+
 
 
 // ---- stream output: encode changed frames to JPEG and emit them ----
@@ -299,6 +556,14 @@ final class FrameOutput: NSObject, SCStreamOutput, SCStreamDelegate {
         else { return }
 
         guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
+
+        // h264 mode: hand the BGRA buffer straight to VideoToolbox — no CGImage,
+        // no JPEG. The encoder emits framed Annex-B AUs itself.
+        if let enc = h264Encoder {
+            enc.encode(pixelBuffer)
+            return
+        }
+
         let ciImage = CIImage(cvImageBuffer: pixelBuffer)
         guard let cgImage = ciContext.createCGImage(ciImage, from: ciImage.extent) else { return }
 
@@ -315,17 +580,7 @@ final class FrameOutput: NSObject, SCStreamOutput, SCStreamDelegate {
             data = encodeJPEG(cgImage, q)
         }
         guard let jpeg = data, !jpeg.isEmpty else { return }
-
-        var lenBE = UInt32(jpeg.count).bigEndian
-        writeLock.lock()
-        defer { writeLock.unlock() }
-        // A closed pipe (agent stopped the stream) throws — exit quietly.
-        do {
-            try stdoutHandle.write(contentsOf: Data(bytes: &lenBE, count: 4))
-            try stdoutHandle.write(contentsOf: jpeg)
-        } catch {
-            exit(0)
-        }
+        writeFramed(jpeg, flag: nil)
     }
 
     func stream(_ stream: SCStream, didStopWithError error: Error) {
@@ -378,17 +633,35 @@ if #available(macOS 14.0, *) { scale = filter.pointPixelScale > 0 ? Double(filte
 let nativeW = pointW * scale
 let outW = min(Double(maxWidth), nativeW)
 let outH = outW * (pointH / pointW)
-config.width = max(2, Int(outW.rounded()))
-config.height = max(2, Int(outH.rounded()))
+// EVEN dimensions, always. H.264 4:2:0 subsamples chroma 2x2, so an odd width
+// or height can't be represented directly — the encoder pads to even and
+// signals a crop, and hardware decoders (Android MediaCodec especially) are
+// unreliable on that path: it renders as speckles and edge garbage. Real
+// windows hit this constantly once scaled to maxWidth: a 1728x1117 desktop
+// becomes 1100x711, a 1020x669 window becomes 1100x721. Rounding down to even
+// costs at most one pixel of height and keeps the stream on the crop-to-16
+// path every 1080p video already exercises. JPEG mode is unaffected by the
+// parity but shares the size, and one pixel there is invisible.
+config.width = max(2, Int(outW.rounded()) & ~1)
+config.height = max(2, Int(outH.rounded()) & ~1)
 config.minimumFrameInterval = CMTime(value: 1, timescale: CMTimeScale(fps)) // ceiling; idle frames are skipped
 config.pixelFormat = kCVPixelFormatType_32BGRA
 config.queueDepth = 5
 config.showsCursor = true
 
+if useH264 {
+    guard let enc = H264Encoder(width: config.width, height: config.height, fps: fps) else {
+        // No usable H.264 encoder on this machine: exit non-zero so the agent
+        // falls back to requesting a JPEG stream instead.
+        die("h264: VTCompressionSession unavailable")
+    }
+    h264Encoder = enc
+}
+
 let output = FrameOutput()
 let stream = SCStream(filter: filter, configuration: config, delegate: output)
 do {
-    try stream.addStreamOutput(output, type: .screen, sampleHandlerQueue: DispatchQueue(label: "reminal.capture"))
+    try stream.addStreamOutput(output, type: .screen, sampleHandlerQueue: sampleQueue)
 } catch {
     die("addStreamOutput: \(error.localizedDescription)")
 }

@@ -792,6 +792,7 @@
     .wpane-info .v.p2p { color: #3fb950; }
     .wpane-info .v.turn { color: #d29922; }
     .wpane-info .v.ws { color: #f0883e; }
+    .wpane-info .v.warn { color: #f85149; }
     /* Warning banner atop the Windows dropdown (e.g. Screen Recording is off). */
     .windows-hint {
       margin: 6px; padding: 8px 10px; border-radius: 6px; font-size: 11.5px; line-height: 1.6;
@@ -1456,6 +1457,17 @@
     term.open(document.getElementById('terminal'));
     fitAddon.fit();
     window.__term = term; // debug/test handle (harmless; used by automated viewer tests)
+    // Per-pane video health, for automated tests and field diagnosis: AUs
+    // decoded, sequence gaps seen (each one means the host's stream and this
+    // decoder diverged), and decoder errors. Cheap counters, no behaviour.
+    window.__winStats = () => [...panes.values()].map((p) => ({
+      id: p.w.id, cap: p.capSrc || null, aus: p.h264AUs || 0,
+      gaps: p.h264Gaps || 0, errs: p.h264Errs || 0, batches: p.h264Batches || 0,
+      paintMs: (() => { const g = (p.paintGaps || []).slice().sort((a, b) => a - b);
+        return g.length ? Math.round(g[Math.floor(g.length / 2)]) : 0; })(),
+      queued: (p.renderQ || []).length,
+      fps: (p.frameTimes || []).length, seq: p.lastSeq || 0,
+    }));
 
     // Pointer-ownership guard, same rule as scroll routing below: an app only
     // gets REAL mouse events (clicks, drags) when it is a full-screen
@@ -5853,10 +5865,20 @@
       // fallback. Surfaced here so "why is it slow" is diagnosable at a glance.
       // On the fallback path the agent stamps WHY native capture is unavailable
       // (locked screen and windows on other Spaces are the usual reasons).
-      const cap = p.capSrc === 'native' ? 'Native · ScreenCaptureKit'
+      const cap = p.capSrc === 'h264' ? 'Native · H.264 video'
+        : p.capSrc === 'native' ? 'Native · ScreenCaptureKit'
         : p.capSrc === 'shot' ? ('Screenshot fallback' + (p.capErr ? ' · ' + escapeHtml(p.capErr) : '')) : '\u2014';
+      // Video health, shown only once something has actually gone wrong: gaps
+      // mean access units were lost in flight, errors mean the decoder itself
+      // rejected them. Which of the two it is decides where to look, and a
+      // phone has no console to read it from.
+      const gaps = p.h264Gaps || 0, derrs = p.h264Errs || 0;
+      const health = (gaps || derrs)
+        ? '<div class="row"><span class="k">Video</span><span class="v warn">' + gaps + ' gaps · ' + derrs + ' decode errors</span></div>'
+        : '';
       return '<div class="row"><span class="k">Transport</span><span class="v ' + cls + '">' + transport + '</span></div>'
         + '<div class="row"><span class="k">Capture</span><span class="v">' + cap + '</span></div>'
+        + health
         + '<div class="row"><span class="k">Encryption</span><span class="v">' + enc + '</span></div>'
         + '<div class="row"><span class="k">Resolution</span><span class="v">' + res + '</span></div>'
         + '<div class="row"><span class="k">Frame rate</span><span class="v">' + fps + ' fps</span></div>';
@@ -5866,6 +5888,12 @@
     // JSON-encoded and encrypted into data; otherwise a bare {type} goes out
     // (used for the window_list request, which carries no payload).
     async function sendWin(type, obj) {
+      // Interacting with a pane means latency now matters more than smoothness:
+      // stop playing buffered frames out and jump to the newest.
+      if (type === 'window_input' && obj && obj.id) {
+        const ip = panes.get(obj.id);
+        if (ip) dropQueuedFrames(ip);
+      }
       if (!ws || ws.readyState !== WebSocket.OPEN || !cryptoKey) return;
       const frame = { type };
       if (obj !== undefined) frame.data = await encrypt(cryptoKey, JSON.stringify(obj));
@@ -6378,6 +6406,9 @@
       if (!p) return;
       sendWin('window_ctl', { action: 'stop', id });
       if (p.lastUrl) URL.revokeObjectURL(p.lastUrl);
+      try { if (p.vdec && p.vdec.state !== 'closed') p.vdec.close(); } catch (_) {}
+      if (p.renderRAF) { cancelAnimationFrame(p.renderRAF); p.renderRAF = 0; }
+      while (p.renderQ && p.renderQ.length) { try { p.renderQ.shift().f.close(); } catch (_) {} }
       p.el.remove();
       panes.delete(id);
       if (focusedPaneId === id) focusedPaneId = null;
@@ -6449,6 +6480,27 @@
     let rtcRetryAt = 0;  // don't (re)attempt P2P before this time (ms epoch)
     let rtcHelloAt = 0;  // when the current webrtc_hello was sent (to time out silence)
     let rtcRelayed = false; // is the P2P path going through a TURN relay (vs direct)?
+    let lastCapAt = 0;      // last capability announcement (relay-only viewers)
+    // Can this browser hardware-decode H.264 via WebCodecs? Declared in the
+    // webrtc_hello: the agent then sends compressed video AUs over the channel
+    // instead of JPEGs (measured ~10× less bandwidth at the same quality). The
+    // stream is Annex-B (SPS/PPS inline on keyframes), so no description blob
+    // is needed. A runtime decode error clears this and renegotiates — the
+    // agent falls back to JPEG, nothing breaks.
+    let h264Decode = false;
+    const H264_CODEC = 'avc1.4d0028'; // Main profile (what the host encodes), level 4.0
+    const h264DecodeReady = (async () => {
+      try {
+        // ?h264=0 forces the JPEG path for a side-by-side comparison on a real
+        // device — the fastest way to tell a decoder problem from everything
+        // else, with no rebuild and nothing to install.
+        if (/[?&]h264=0/.test(location.search)) return;
+        if (typeof VideoDecoder !== 'undefined' && VideoDecoder.isConfigSupported) {
+          const c = await VideoDecoder.isConfigSupported({ codec: H264_CODEC, optimizeForLatency: true });
+          h264Decode = !!(c && c.supported);
+        }
+      } catch (_) { h264Decode = false; }
+    })();
     function rtcActive() { return !!(rtcDc && rtcDc.readyState === 'open'); }
     function teardownWebRTC() {
       try { if (rtcDc) rtcDc.close(); } catch (_) {}
@@ -6481,12 +6533,29 @@
       teardownWebRTC();
       rtcRetryAt = Date.now() + (cooldownMs || 0);
     }
+    // ?p2p=0 keeps WebRTC off entirely so everything rides the relay — the
+    // only way to exercise the relay video path from a device that would
+    // otherwise connect peer-to-peer straight away.
+    const NO_P2P = /[?&]p2p=0/.test(location.search);
     async function ensureWebRTC() {
+      if (NO_P2P) return;
       if (!cryptoKey || !agentLive || rtcPeerId || Date.now() < rtcRetryAt || typeof RTCPeerConnection === 'undefined') return;
+      await h264DecodeReady; // settled in ms at load; never send a hello with a stale capability
       rtcPeerId = ((crypto.randomUUID && crypto.randomUUID()) || String(Math.random()).slice(2)).slice(0, 12);
       rtcHelloAt = Date.now();
-      if (DEBUG) dbg('▶ webrtc_hello ' + rtcPeerId);
-      try { await sendWin('webrtc_hello', { peer: rtcPeerId }); } catch (_) { rtcPeerId = null; }
+      if (DEBUG) dbg('▶ webrtc_hello ' + rtcPeerId + (h264Decode ? ' +h264' : ''));
+      try { await sendWin('webrtc_hello', { peer: rtcPeerId, h264: h264Decode }); } catch (_) { rtcPeerId = null; }
+    }
+    // Capability announcement for viewers that will never open a DataChannel
+    // (P2P disabled, or blocked by the network). The agent tracks decode
+    // support per viewer to decide whether it can put video on the relay, and
+    // it learns it from this same hello — no peer connection required. Re-sent
+    // periodically so the record stays fresh (see viewerCapTTL).
+    async function announceCaps() {
+      if (!cryptoKey || !agentLive) return;
+      await h264DecodeReady;
+      const peer = 'ws-' + ((crypto.randomUUID && crypto.randomUUID()) || String(Math.random()).slice(2)).slice(0, 9);
+      try { await sendWin('webrtc_hello', { peer, h264: h264Decode }); } catch (_) {}
     }
     async function onWebRTCOffer(payload) {
       if (!payload || payload.peer !== rtcPeerId || rtcPc) return;
@@ -6513,6 +6582,12 @@
         rtcDc = ch;
         ch.binaryType = 'arraybuffer';
         ch.onmessage = (ev) => {
+          // Binary messages starting with 0xF2 are H.264 frames (see
+          // onWindowFrameH264); everything else on the channel is JSON.
+          if (typeof ev.data !== 'string') {
+            const u = new Uint8Array(ev.data);
+            if (u.length > 2 && u[0] === 0xF2) { try { onWindowFrameH264(u); } catch (_) {} return; }
+          }
           try { onWindowFrame(JSON.parse(typeof ev.data === 'string' ? ev.data : new TextDecoder().decode(ev.data)), true); } catch (_) {}
         };
         ch.onopen = () => { if (DEBUG) dbg('rtc frames channel open'); };
@@ -6621,6 +6696,8 @@
       // hello went unanswered, clear it so the next tick retries.
       if (rtcPeerId && !rtcPc && Date.now() - rtcHelloAt > 8000) rtcPeerId = null;
       if (!rtcPc) ensureWebRTC();
+      // Keep the capability record alive whenever we're not on a live channel.
+      if (!rtcActive() && (!lastCapAt || Date.now() - lastCapAt > 10000)) { lastCapAt = Date.now(); announceCaps(); }
       if (rtcActive()) refreshRtcRoute(); // keep direct-vs-TURN current for the (i)
       if (!panes.size) return;
       for (const p of panes.values()) updatePaneOverlay(p);
@@ -6654,6 +6731,10 @@
         if (viaDC) { noteTransport(true); sendWindowAck(payload.id, payload.seq, true); }
         return;
       }
+      // Batched video over the relay: one message carries several H.264 access
+      // units, because the relay bills per message. Same decoder and canvas as
+      // the peer-to-peer path — only the container differs.
+      if (payload.batch) { onWindowBatch(p, payload, viaDC); return; }
       if (payload.seq != null) p.lastSeq = payload.seq;
       p.errorMsg = null;
       p.gotFrame = true;
@@ -6715,6 +6796,288 @@
         im.onload = () => { paint(im, im.naturalWidth, im.naturalHeight); URL.revokeObjectURL(url); };
         im.onerror = () => { URL.revokeObjectURL(url); ackDropped(); };
         im.src = url;
+      }
+    }
+
+    // ---- H.264 frames over the DataChannel (WebCodecs) ----------------------
+    // Binary framing (agent→viewer): [0]=0xF2 magic, [1]=flags (bit0 key AU,
+    // bit1 more chunks follow), [2]=id length L, [3..3+L]=window id, then
+    // seq (BE u64), w (BE u32), h (BE u32), then one Annex-B access unit (or a
+    // chunk of one — chunks of an AU share a seq and arrive in order on the
+    // reliable channel). Decoded with a per-pane VideoDecoder into the same
+    // canvas the JPEG path paints; acks ride the channel per AU after the
+    // decoded frame is drawn, so the host's pacing loop is codec-agnostic.
+    function onWindowFrameH264(u) {
+      const flags = u[1], idLen = u[2];
+      const hdrLen = 3 + idLen + 8 + 4 + 4;
+      if (u.length < hdrLen) return;
+      let id = '';
+      for (let i = 0; i < idLen; i++) id += String.fromCharCode(u[3 + i]);
+      const dv = new DataView(u.buffer, u.byteOffset + 3 + idLen, 16);
+      const seq = Number(dv.getBigUint64(0));
+      const w = dv.getUint32(8), h = dv.getUint32(12);
+      const p = panes.get(id);
+      if (!p) return;
+      const chunk = u.subarray(hdrLen);
+
+      // Reassemble chunked AUs (rare: only when an AU tops the DC size budget).
+      if (flags & 2) { // more chunks of this AU follow
+        if (!p.h264Parts || p.h264PartsSeq !== seq) { p.h264Parts = []; p.h264PartsSeq = seq; }
+        p.h264Parts.push(chunk);
+        return;
+      }
+      let au = chunk;
+      if (p.h264Parts && p.h264PartsSeq === seq && p.h264Parts.length) {
+        let total = 0;
+        for (const c of p.h264Parts) total += c.length;
+        au = new Uint8Array(total + chunk.length);
+        let off = 0;
+        for (const c of p.h264Parts) { au.set(c, off); off += c.length; }
+        au.set(chunk, off);
+      }
+      p.h264Parts = null;
+
+      const key = !!(flags & 1);
+      p.lastSeq = seq; // shared counter with the JPEG path
+      noteVideoFrame(p, w, h, true);
+      markFrameTime(p);
+      updatePaneOverlay(p);
+      // Acked individually here (one AU per message); the relay path acks once
+      // per batch instead, so it passes no ack sequence.
+      submitAU(p, au, key, seq, seq);
+    }
+
+    // noteVideoFrame marks a pane live and current for either video path —
+    // peer-to-peer or batched over the relay. The two differ only in container,
+    // so everything downstream of "a frame arrived" belongs here.
+    function noteVideoFrame(p, w, h, viaDC) {
+      p.errorMsg = null;
+      p.gotFrame = true;
+      p.lastAliveAt = p.lastFrameAt = performance.now();
+      noteTransport(viaDC);
+      p.capSrc = 'h264';
+      p.capErr = null;
+      p.w.w = w; p.w.h = h; // keeps click mapping current
+    }
+
+    // markFrameTime keeps the rolling one-second window the (i) popover reads
+    // as a frame rate. Called per access unit, so a batch counts as the several
+    // frames it actually carries rather than one.
+    function markFrameTime(p) {
+      p.lastFrameAt = performance.now();
+      (p.frameTimes || (p.frameTimes = [])).push(p.lastFrameAt);
+      while (p.frameTimes.length && p.lastFrameAt - p.frameTimes[0] > 1000) p.frameTimes.shift();
+    }
+
+    // onWindowBatch unpacks a relay batch: [uint32 len][flag][Annex-B AU]... ,
+    // base64'd once for the whole group. Access units are consecutive, so the
+    // first sequence number plus position identifies each one, which keeps gap
+    // detection working across batches. Only the last is acked — one ack per
+    // message is the point, since acks are billed too.
+    function onWindowBatch(p, payload, viaDC) {
+      if (!h264Decode) {
+        // We can't decode this. Tell the host so it drops back to JPEG for
+        // everyone (the relay is a broadcast — it has no per-viewer choice).
+        if (!p.h264Refused) { p.h264Refused = true; h264Decode = false; announceCaps(); }
+        return;
+      }
+      let blob;
+      try {
+        const bin = atob(payload.batch);
+        blob = new Uint8Array(bin.length);
+        for (let i = 0; i < bin.length; i++) blob[i] = bin.charCodeAt(i);
+      } catch (_) { return; }
+
+      noteVideoFrame(p, payload.w, payload.h, viaDC);
+      p.h264Batches = (p.h264Batches || 0) + 1; // relay messages — the billed unit
+
+      let off = 0, i = 0;
+      const seq0 = payload.seq0 != null ? payload.seq0 : payload.seq;
+      while (off + 4 <= blob.length) {
+        const len = ((blob[off] << 24) | (blob[off + 1] << 16) | (blob[off + 2] << 8) | blob[off + 3]) >>> 0;
+        off += 4;
+        if (len < 1 || off + len > blob.length) break;
+        submitAU(p, blob.subarray(off + 1, off + len), blob[off] === 2, seq0 + i);
+        off += len;
+        i++;
+        markFrameTime(p);
+      }
+      p.lastSeq = seq0 + Math.max(0, i - 1);
+      p.h264BatchAck = payload.seq != null ? payload.seq : p.lastSeq;
+      updatePaneOverlay(p);
+      // Ack once for the whole batch, over the transport it arrived on.
+      if (p.h264BatchAck != null) sendWindowAck(p.w.id, p.h264BatchAck, viaDC);
+    }
+
+    // submitAU feeds one access unit to the pane's decoder, applying the gap
+    // and resync rules. ackSeq is null when the caller acks for a whole batch.
+    function submitAU(p, au, key, seq, ackSeq) {
+      if (!ensureH264Decoder(p)) return;
+      // While a DataChannel is proving itself the agent feeds BOTH paths, so
+      // the same access unit can arrive twice. A repeat is harmless — drop it
+      // silently. Only a seq running AHEAD of what we expect means units went
+      // missing, and only that warrants tearing the decoder down to resync.
+      if (p.h264NextSeq != null && seq < p.h264NextSeq) return;
+      if (!key && p.h264NextSeq != null && seq > p.h264NextSeq) {
+        p.h264Gaps = (p.h264Gaps || 0) + 1;
+        p.h264Synced = false;
+        requestH264Key(p);
+      }
+      p.h264NextSeq = seq + 1;
+      if (!p.h264Synced) {
+        if (!key) return;
+        p.h264Synced = true;
+      }
+      p.h264AUs = (p.h264AUs || 0) + 1;
+      // ackSeq is set only on the per-message path; a batch is acked once by
+      // its caller, and its frames are the ones that need paced playout.
+      (p.h264Seqs || (p.h264Seqs = [])).push({ ack: ackSeq !== undefined ? ackSeq : null, paced: ackSeq === undefined })
+      try {
+        p.vdec.decode(new EncodedVideoChunk({
+          type: key ? 'key' : 'delta',
+          timestamp: seq * 33333, // us; synthetic but monotonic — nothing paces on it
+          data: au,
+        }));
+      } catch (e) {
+        p.h264Seqs.pop();
+        h264Fail(p, e);
+      }
+    }
+
+    // paintVideoFrame draws one decoded frame onto the pane's canvas. Shared by
+    // the immediate and the paced paths, and deliberately identical to what the
+    // JPEG path does so pop-out aspect and the cursor overlay behave the same.
+    function paintVideoFrame(p, frame) {
+      const cv = p.img, sw = frame.displayWidth, sh = frame.displayHeight;
+      if (cv.width !== sw || cv.height !== sh) { cv.width = sw; cv.height = sh; }
+      if (p.popup && p.popupAspect && !p.popupMatched) {
+        p.popupMatched = true;
+        try { p.popupAspect(); } catch (_) {}
+      }
+      p.ctx.drawImage(frame, 0, 0, sw, sh);
+      if (p.placeCursor && p.cursor) p.placeCursor();
+      // Inter-paint spacing is what motion actually looks like, as distinct
+      // from how many frames arrived — the two came apart badly once batching
+      // landed, so it's measured.
+      const now = performance.now();
+      if (p.lastPaintAt) (p.paintGaps || (p.paintGaps = [])).push(now - p.lastPaintAt);
+      if (p.paintGaps && p.paintGaps.length > 120) p.paintGaps.shift();
+      p.lastPaintAt = now;
+    }
+
+    // queueVideoFrame schedules a batched frame for its turn on screen instead
+    // of painting it instantly. Spacing self-tunes to the delivery cadence
+    // (batch period / frames per batch) so playout matches the capture rate.
+    function queueVideoFrame(p, frame) {
+      const now = performance.now();
+      // Play out at the rate frames are ARRIVING, which markFrameTime already
+      // tracks as a rolling one-second count. Pacing off the batch cadence
+      // instead was wrong: one late batch inflated the estimate, playout fell
+      // behind arrival, and the buffer grew without bound. A deep buffer is
+      // pure latency, so drain harder the deeper it gets.
+      const rate = (p.frameTimes || []).length || 30;
+      let spacing = 1000 / rate;
+      if (p.renderQ && p.renderQ.length > 6) spacing *= 0.8;
+      spacing = Math.max(8, Math.min(60, spacing));
+      if (!p.nextShowAt || p.nextShowAt < now) p.nextShowAt = now;
+      (p.renderQ || (p.renderQ = [])).push({ f: frame, at: p.nextShowAt });
+      p.nextShowAt += spacing;
+      // A backgrounded or overloaded tab must not accumulate GPU frames or
+      // drift ever further behind: collapse to the newest and resume live.
+      if (p.renderQ.length > 16) {
+        while (p.renderQ.length > 1) p.renderQ.shift().f.close();
+        p.nextShowAt = now;
+      }
+      pumpRenderQ(p);
+    }
+
+    // pumpRenderQ paints whatever is due on each animation frame. Anything that
+    // came due within the same tick is superseded — only the newest is drawn,
+    // since the display can show exactly one.
+    function pumpRenderQ(p) {
+      if (p.renderRAF) return;
+      p.renderRAF = requestAnimationFrame(() => {
+        p.renderRAF = 0;
+        const now = performance.now();
+        let due = null;
+        while (p.renderQ && p.renderQ.length && p.renderQ[0].at <= now) {
+          if (due) due.close();
+          due = p.renderQ.shift().f;
+        }
+        if (due) { paintVideoFrame(p, due); due.close(); }
+        if (p.renderQ && p.renderQ.length) pumpRenderQ(p);
+      });
+    }
+
+    // dropQueuedFrames abandons pending playout and shows the newest frame at
+    // once. Called on input: while you are watching, smooth motion wins; the
+    // moment you interact, latency does.
+    function dropQueuedFrames(p) {
+      if (!p.renderQ || !p.renderQ.length) return;
+      while (p.renderQ.length > 1) p.renderQ.shift().f.close();
+      p.renderQ[0].at = 0;
+      p.nextShowAt = 0;
+      pumpRenderQ(p);
+    }
+
+    // ensureH264Decoder lazily builds the pane's VideoDecoder. Output frames
+    // paint onto the SAME canvas as JPEG frames — pop-out aspect hooks, cursor
+    // overlay, and the ack-after-draw contract all behave identically.
+    function ensureH264Decoder(p) {
+      if (p.vdec && p.vdec.state !== 'closed') return true;
+      if (typeof VideoDecoder === 'undefined') return false;
+      p.h264Synced = false;
+      p.h264Seqs = [];
+      try {
+        p.vdec = new VideoDecoder({
+          output: (frame) => {
+            const e = (p.h264Seqs && p.h264Seqs.length) ? p.h264Seqs.shift() : null;
+            // Frames that arrived one-per-message are already spaced by the
+            // network — paint on arrival, lowest latency. Frames unpacked from
+            // a relay batch all land within a millisecond of each other, so
+            // they must be played OUT over time or the display (one refresh per
+            // 16ms) only ever shows the last of each group: honest 30fps by the
+            // counter, visibly 5fps to a human.
+            if (e && e.paced) queueVideoFrame(p, frame);
+            else { paintVideoFrame(p, frame); frame.close(); }
+            if (e && e.ack != null) sendWindowAck(p.w.id, e.ack, true);
+          },
+          error: (e) => h264Fail(p, e),
+        });
+        p.vdec.configure({ codec: H264_CODEC, optimizeForLatency: true });
+        return true;
+      } catch (e) {
+        h264Fail(p, e);
+        return false;
+      }
+    }
+
+    // h264Fail tears down the decode path and renegotiates as a JPEG viewer:
+    // clear the capability, drop the peer, and re-hello — the agent sees a
+    // peer without h264 and streams JPEGs. The pane keeps its last picture
+    // until they arrive; nothing is lost but compression.
+    // Ask the host for an immediate keyframe (rides the ack channel, which the
+    // agent already routes to the right stream). Rate-limited: a burst of
+    // gapped frames must not become a burst of IDR requests, each of which
+    // costs ~4x a delta on the wire.
+    function requestH264Key(p) {
+      const now = performance.now();
+      if (p.h264KeyAskAt && now - p.h264KeyAskAt < 250) return;
+      p.h264KeyAskAt = now;
+      if (rtcActive()) { try { rtcDc.send(JSON.stringify({ id: p.w.id, seq: p.lastSeq || 0, key: true })); return; } catch (_) {} }
+      sendWin('window_ack', { id: p.w.id, seq: p.lastSeq || 0, key: true });
+    }
+
+    function h264Fail(p, e) {
+      p.h264Errs = (p.h264Errs || 0) + 1;
+      if (DEBUG) dbg('h264 decode failed: ' + e);
+      try { if (p.vdec && p.vdec.state !== 'closed') p.vdec.close(); } catch (_) {}
+      p.vdec = null;
+      p.h264Synced = false;
+      p.h264Seqs = [];
+      if (h264Decode) {
+        h264Decode = false;
+        retryWebRTC('h264 decode error', 0);
       }
     }
 
