@@ -3269,7 +3269,13 @@
       ws.send(JSON.stringify(msg));
     }
 
+    // Remote size mirrors held briefly before applying (see the 'resize' case):
+    // a local measurement is always fresher than an in-flight echo of an older one.
+    let pendingRemoteSize = null, remoteSizeTimer = null;
     function sendResize() {
+      // Our own measurement supersedes any stale mirror still waiting to apply.
+      pendingRemoteSize = null;
+      if (remoteSizeTimer) { clearTimeout(remoteSizeTimer); remoteSizeTimer = null; }
       send({ type: 'resize', cols: term.cols, rows: term.rows });
     }
 
@@ -3755,19 +3761,34 @@
             if (c === 0 && r === 0) {
               try { fitAddon.fit(); } catch (_) {}
               if (agentLive) sendResize();
-            } else if (c > 0 && r > 0 && (c !== term.cols || r !== term.rows)) {
-              // Erase the visible dim chars FIRST (cursor still sits
-              // at end-of-run pre-resize), then resize. Skipping the
-              // erase orphans the dim chars and the agent's echo
-              // lands past them, leaving the user looking at e.g.
-              // dim "abc" + bright "abc".
-              resetPredictionsSoft();
-              term.resize(c, r);
-              // This is the path a phone joining/leaving resizes us through
-              // (fitTerminal never runs) — the app's SIGWINCH repaint stacks
-              // duplicates here too, so pull the clean snapshot on settle.
-              markResizeDirty();
-              scheduleSoftRefresh();
+            } else if (c > 0 && r > 0) {
+              // DEBOUNCED, never immediate: during a keyboard open/close the
+              // viewport animates through several sizes; the agent applies one
+              // mid-animation and mirrors it back, and applying that stale echo
+              // over our fresher local fit made the height visibly flicker
+              // back and forth before settling. Hold the latest mirror briefly;
+              // a newer local measurement (sendResize) cancels it outright —
+              // if the agent truly wants a different size (multi-viewer
+              // letterbox), it re-broadcasts after applying ours and THAT
+              // mirror lands here again.
+              pendingRemoteSize = { c, r };
+              if (remoteSizeTimer) clearTimeout(remoteSizeTimer);
+              remoteSizeTimer = setTimeout(() => {
+                remoteSizeTimer = null;
+                const p = pendingRemoteSize;
+                pendingRemoteSize = null;
+                if (!p || (p.c === term.cols && p.r === term.rows)) return;
+                // Erase the visible dim chars FIRST (cursor still sits at
+                // end-of-run pre-resize), then resize — skipping the erase
+                // orphans the dim chars against the agent's echo.
+                resetPredictionsSoft();
+                term.resize(p.c, p.r);
+                // This is the path a phone joining/leaving resizes us through
+                // (fitTerminal never runs) — the app's SIGWINCH repaint stacks
+                // duplicates here too, so pull the clean snapshot on settle.
+                markResizeDirty();
+                scheduleSoftRefresh();
+              }, 450);
             }
           } catch (_) {}
           break;
