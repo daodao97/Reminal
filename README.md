@@ -211,14 +211,18 @@ SSH leaves port 22 open, stores long-lived keys on disk, and trusts you to confi
 | **Ephemeral credentials** | Session ID and PIN exist only while `reminal` is running. Ctrl+C and they are gone forever. |
 | **Owner devices, revocable** | A device you enroll as an owner connects without the PIN using its own key — a separate trust path from the ephemeral PIN, gated behind `sudo` to enroll and revocable per-device (or self-revoked from any browser). The relay still only routes ciphertext. |
 | **Dual-factor by design** | An attacker needs both the session ID (~1 trillion combinations) and the 6-digit PIN. Knowing one is useless. |
-| **Lockout on abuse** | Five wrong PINs trigger a 5-minute lockout. PIN guessing is not viable. |
+| **Rate-limited by the agent** | Every PIN guess costs a full online handshake with your machine, and the agent answers at most ~6 per minute (burst of 8, one token per 10s). Exhausting a 6-digit PIN at that rate takes months — far longer than a session lives. |
 | **End-to-end encryption** | AES-256-GCM with a fresh random 256-bit session key per agent run. Distributed to each viewer via a PIN-authenticated X25519 handshake (EKE-style) — the relay never sees the key or anything offline-brute-forceable from it. |
 | **Forward-secret handshake** | Each WebSocket connection runs its own ephemeral X25519 exchange. Even if a future attacker recovers the PIN, recorded ciphertext stays unreadable. |
-| **Relay-blind** | Cloudflare Workers route ciphertext. A relay that records traffic cannot recover the session key offline — wrong PIN guesses are detectable only by attempting a full handshake online (one shot each, bounded by the 5-strike lockout). |
+| **Relay-blind** | Cloudflare Workers route ciphertext. A relay that records traffic cannot recover the session key offline — wrong PIN guesses are detectable only by attempting a full handshake online (one shot each, bounded by the agent's kex throttle). |
 | **P2P you can trust** | WebRTC signaling (SDP, ICE) rides inside the already-encrypted session channel, so the relay can't tamper with DTLS fingerprints — no man-in-the-middle window. Frames on the DataChannel are DTLS-protected end-to-end. |
 | **TLS in transit** | WSS / TLS on every hop in production. |
 
+**One deliberate exception:** `reminal expose` port-forwards are **not** end-to-end encrypted — the visitor is an ordinary browser with no reminal key, so that traffic passes through the relay in plaintext (PIN-gated, but readable by the relay). Everything else above is E2E. Self-host the relay if that matters to you.
+
 **Best practices:** share the session ID and PIN over different channels (email the ID, text the PIN) · Ctrl+C when done — credentials die instantly · keep the client current with `reminal upgrade`.
+
+**Digging deeper:** [Security architecture](docs/security/architecture.md) · [Threat model](docs/security/threat-model.md) · [Subprocessors & data handling](docs/security/subprocessors.md) · [Self-assessment](docs/security/self-assessment.md) · [Report a vulnerability](SECURITY.md)
 
 ---
 
