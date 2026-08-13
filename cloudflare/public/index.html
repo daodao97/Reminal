@@ -6453,6 +6453,17 @@
         sendWin('window_ctl', { action: 'stop', id });
       }
     }
+    // A restarted stream numbers frames from zero again, so every cursor that
+    // remembers the OLD numbering has to be cleared — otherwise the dedup
+    // guards drop the whole new stream as stale/duplicate and the pane stays
+    // blank. JPEG needs lastSeq; video also needs its own sequence and sync
+    // state, which is easy to forget separately.
+    function resetPaneStreamCursors(p) {
+      p.lastSeq = null;
+      p.h264NextSeq = null;
+      p.h264Synced = false;
+    }
+
     function resumeWinStreams() {
       if (!winStreamsPaused) return;
       winStreamsPaused = false;
@@ -6460,7 +6471,7 @@
         if (p.popup && !p.popup.closed) continue; // never stopped
         // New stream, new seq space: without this, a young pane (< 1000 frames)
         // has every post-resume frame eaten by the stale-seq dedup guard.
-        p.lastSeq = null;
+        resetPaneStreamCursors(p);
         sendWin('window_ctl', { action: 'start', id });
       }
     }
@@ -6730,6 +6741,18 @@
       if (!panes.size) return;
       for (const p of panes.values()) {
         updatePaneOverlay(p);
+        // Self-heal a stream the host gave up on. It ends one whose acks dried
+        // up (streamAckIdleTimeout) and sends nothing to say so — the comment
+        // there assumes "a returning viewer re-sends window_ctl start", which
+        // a POPPED-OUT pane never does: it is exempt from the pause/resume
+        // path, so nothing re-requests it and it sits on "Waiting for host"
+        // until someone closes and reopens it by hand. Do that automatically.
+        const staleFor = performance.now() - (p.lastAliveAt || 0);
+        if (p.gotFrame && staleFor > 9000 && (!p.reqAt || performance.now() - p.reqAt > 10000)) {
+          p.reqAt = performance.now();
+          resetPaneStreamCursors(p);
+          sendWin('window_ctl', { action: 'start', id: p.w.id });
+        }
         // Safety net for playout: if frames are queued and overdue, rAF is not
         // running (every window holding this pane is hidden, or the browser
         // throttled it). Drain to the newest so the pane resumes on its own
