@@ -6330,6 +6330,13 @@
       // everything — painting, cursor overlay, click mapping — follows.
       pane.main = { img: pane.img, ctx: pane.ctx, body: pane.body, cursorEl: pane.cursorEl, placeCursor: pane.placeCursor };
       pane.img = pimg; pane.ctx = pctx; pane.body = host; pane.cursorEl = pcursor;
+      // The decoder now belongs to the wrong document — drop it so the next
+      // frame rebuilds it inside the popup, and ask the host for a keyframe so
+      // the fresh decoder has an entry point immediately rather than waiting
+      // out the periodic one.
+      try { if (pane.vdec && pane.vdec.state !== 'closed') pane.vdec.close(); } catch (_) {}
+      pane.vdec = null; pane.vdecWin = null; pane.h264Synced = false;
+      requestH264Key(pane);
       // Heartbeat on the popup's clock — see popupTick.
       try { pane.popupTimer = pop.setInterval(() => { try { popupTick(); } catch (_) {} }, 1000); } catch (_) {}
       paneInput(pane, pimg); // fresh pointer/wheel bindings on the popup canvas (rebinds pane.placeCursor)
@@ -6381,6 +6388,10 @@
       if (!pane.popup) return;
       try { if (pane.popupTimer) pane.popup.clearInterval(pane.popupTimer); } catch (_) {}
       pane.popupTimer = null;
+      // Same in reverse: the decoder lives in the popup that is going away.
+      try { if (pane.vdec && pane.vdec.state !== 'closed') pane.vdec.close(); } catch (_) {}
+      pane.vdec = null; pane.vdecWin = null; pane.h264Synced = false;
+      while (pane.renderQ && pane.renderQ.length) { try { pane.renderQ.shift().f.close(); } catch (_) {} }
       pane.popup = null;
       pane.popupAspect = null;
       pane.popupMatched = false;
@@ -7013,7 +7024,8 @@
       // its caller, and its frames are the ones that need paced playout.
       (p.h264Seqs || (p.h264Seqs = [])).push({ ack: ackSeq !== undefined ? ackSeq : null, paced: ackSeq === undefined })
       try {
-        p.vdec.decode(new EncodedVideoChunk({
+        const W = p.vdecWin || window;
+        p.vdec.decode(new W.EncodedVideoChunk({
           type: key ? 'key' : 'delta',
           timestamp: seq * 33333, // us; synthetic but monotonic — nothing paces on it
           data: au,
@@ -7111,12 +7123,22 @@
     // paint onto the SAME canvas as JPEG frames — pop-out aspect hooks, cursor
     // overlay, and the ack-after-draw contract all behave identically.
     function ensureH264Decoder(p) {
-      if (p.vdec && p.vdec.state !== 'closed') return true;
-      if (typeof VideoDecoder === 'undefined') return false;
+      // Build the decoder in the realm of the window that OWNS the canvas. A
+      // VideoFrame belongs to the document whose decoder produced it, and
+      // drawing one ACROSS documents — opener's decoder into a popup's canvas
+      // — drops off the GPU fast path and costs a readback per frame. Same
+      // document on both ends keeps the whole pipeline where the pixels land.
+      const win = (p.popup && !p.popup.closed && p.popup.VideoDecoder) ? p.popup : window;
+      if (p.vdec && p.vdec.state !== 'closed' && p.vdecWin === win) return true;
+      // Realm changed (popped out or back): the old decoder belongs to the
+      // wrong document now, so retire it and start clean on the next keyframe.
+      if (p.vdec && p.vdec.state !== 'closed') { try { p.vdec.close(); } catch (_) {} }
+      if (typeof win.VideoDecoder === 'undefined') return false;
+      p.vdecWin = win;
       p.h264Synced = false;
       p.h264Seqs = [];
       try {
-        p.vdec = new VideoDecoder({
+        p.vdec = new win.VideoDecoder({
           output: (frame) => {
             const e = (p.h264Seqs && p.h264Seqs.length) ? p.h264Seqs.shift() : null;
             // Frames that arrived one-per-message are already spaced by the
