@@ -2033,7 +2033,6 @@
     let fatal = false;        // unrecoverable (bad PIN, session expired); do not auto-reconnect
     let reconnectTimer = null;
     let backoffMs = 1000;
-    let wsPingTimer = 0;   // legacy handle; the ping now rides viewerTick
     let lastPingAt = 0;
     const MAX_BACKOFF_MS = 30000;
     let connectedAt = 0;
@@ -3518,7 +3517,6 @@
       // Old socket's ping timer is moot now — its onclose was
       // nulled out above so its own cleanup won't fire. The next
       // ws.onopen rearms.
-      if (wsPingTimer) { clearInterval(wsPingTimer); wsPingTimer = 0; }
       authed = false;
       agentLive = false;
       // Every WS connection runs its own EKE handshake — the previous
@@ -3585,8 +3583,9 @@
         // once this tab has been hidden a while, which is the normal state
         // when a pane is popped out and the main window is minimized: the
         // keepalive stops arriving on time, the tunnel idles out, and the
-        // popup freezes on a dead socket until the main window is focused
-        // again. viewerTick can be driven by a visible popup's clock instead.
+        // pane would sit on a dead socket until this tab was focused again.
+        // Riding viewerTick keeps the keepalive on one clock with everything
+        // else, and a standalone pane tab now runs its own copy of all of it.
         lastPingAt = Date.now();
       };
 
@@ -3602,8 +3601,7 @@
         agentLive = false;
         ws = null;
         // Stop the heartbeat — re-armed on the next ws.onopen.
-        if (wsPingTimer) { clearInterval(wsPingTimer); wsPingTimer = 0; }
-        // Drop any pending predictions: the reconnect path will
+          // Drop any pending predictions: the reconnect path will
         // replay scrollback, which would mismatch and trigger an
         // erasure sequence at the wrong cursor position.
         resetPredictionsHard();
@@ -3956,7 +3954,6 @@
       clearCred();
       // Stop the heartbeat — we null out ws.onclose below to bypass
       // the auto-reconnect path, so its own clear-interval won't fire.
-      if (wsPingTimer) { clearInterval(wsPingTimer); wsPingTimer = 0; }
       if (ws) {
         try {
           ws.onopen = null;
@@ -3969,9 +3966,9 @@
       }
       authed = false;
       agentLive = false;
-      // Tear down any window-mirror popup — its stream is bound to the WS
-      // we just closed. Guarded because userDisconnect can run before the
-      // window module has initialised on very early failures.
+      // Tear down any window panes — their streams are bound to the WS we
+      // just closed. Guarded because userDisconnect can run before the window
+      // module has initialised on very early failures.
       if (typeof closeAllPanes === 'function') { try { closeAllPanes(); } catch (_) {} }
       // Any in-flight predictions are moot once the session ends;
       // there will be no echo to reconcile against. Drop them so
@@ -5801,9 +5798,10 @@
     // ---- Window mirroring: list host windows, stream one, control it -------
     //
     // The dropdown lists the host's on-screen windows (fetched fresh each time
-    // it's opened). Picking one opens a popup that shows JPEG frames streamed
-    // from the agent and forwards clicks/keystrokes back. All frames ride the
-    // same end-to-end-encrypted channel as the terminal.
+    // it's opened). Picking one opens a pane that shows the window — H.264
+    // where both ends support it, JPEG otherwise — and forwards clicks and
+    // keystrokes back. Everything rides the same end-to-end-encrypted channel
+    // as the terminal, peer-to-peer when a DataChannel forms.
     let winList = [];            // last window list from the agent
     let winHint = '';            // capability warning (e.g. Screen Recording off)
     const winDetails = document.getElementById('windows');
@@ -6295,11 +6293,11 @@
     }
 
     // frameRect: the sub-rectangle the FRAME actually occupies inside a canvas
-    // element (viewport coords). A popped-out canvas uses object-fit:contain to
-    // scale the frame up/down to fill its window, which letterboxes when the
-    // window aspect differs — so the drawn image is centered within the element
-    // and smaller than it. The in-page canvas has box aspect == frame aspect
-    // (width:100%/height:auto), so this returns the full box unchanged.
+    // element (viewport coords). A standalone pane (?pane=) fills its tab with
+    // object-fit:contain, which letterboxes when the tab aspect differs — so
+    // the drawn image is centered within the element and smaller than it. The
+    // in-page canvas has box aspect == frame aspect (width:100%/height:auto),
+    // so this returns the full box unchanged.
     function frameRect(r, iw, ih) {
       if (!iw || !ih || !r.width || !r.height) return { left: r.left, top: r.top, width: r.width, height: r.height };
       const boxA = r.width / r.height, imgA = iw / ih;
@@ -6309,16 +6307,7 @@
       return { left: r.left + (r.width - dw) / 2, top: r.top + (r.height - dh) / 2, width: dw, height: dh };
     }
 
-    // ---- Pop-out: a pane in its own OS browser window -----------------------
-    // The popup gets its OWN canvas + cursor overlay, and the pane's render
-    // refs (img/ctx/body/cursorEl/placeCursor) are swapped to them while
-    // popped. Moving the original canvas would be simpler, but Chrome clears a
-    // canvas's bitmap and wedges its 2D context when the element is adopted
-    // into another document — the first draw throws, the frame is never acked,
-    // and the agent's backpressure stalls the stream. Same connection, same
-    // frame stream; pointer handlers are freshly bound to the popup canvas
-    // (they die with the popup document). The in-page pane hides and comes
-    // back when the popup closes, so ⧉ is freely reversible.
+    // ---- Pop-out: the pane as a viewer of its own ---------------------------
     // Pop out = navigate a new tab to this same viewer in standalone pane
     // mode. That tab owns its socket, decoder, acks and timers, so nothing it
     // depends on lives in a context the platform may throttle or freeze. The
