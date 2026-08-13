@@ -712,6 +712,21 @@
     .wpane-kbd { display: none; }
     @media (hover: none) and (pointer: coarse) { .wpane-kbd { display: inline-flex; } }
     .wpane-body { position: relative; background: #000; line-height: 0; overflow: hidden; }
+    /* Standalone pane mode (?pane=): the window fills the tab. The pane keeps
+       its own title bar so keyboard and info stay reachable; pop-out and close
+       go, since this tab IS the pane. */
+    body.pane-only > header, body.pane-only > #terminal-wrap,
+    body.pane-only > #keybar { display: none !important; }
+    body.pane-only { background: #000; overflow: hidden; }
+    body.pane-only .wpane {
+      position: fixed !important; inset: 0 !important;
+      width: 100% !important; height: 100% !important;
+      border: 0 !important; border-radius: 0 !important; box-shadow: none !important;
+      display: flex; flex-direction: column;
+    }
+    body.pane-only .wpane-body { flex: 1 1 auto; display: flex; align-items: center; justify-content: center; }
+    body.pane-only .wpane-img { width: 100%; height: 100%; object-fit: contain; }
+    body.pane-only .wpane-pop, body.pane-only .wpane-close { display: none; }
     .wpane-img { display: block; width: 100%; height: auto; touch-action: none; -webkit-user-drag: none; user-select: none; transform-origin: center center; -webkit-touch-callout: none; -webkit-tap-highlight-color: transparent; }
     .wpane-resize {
       position: absolute; right: 0; bottom: 0; width: 20px; height: 20px;
@@ -951,6 +966,17 @@
 
     const params = new URLSearchParams(location.search);
     const initialSession = params.get('s') || '';
+    // Standalone pane mode: this tab IS one mirrored window and nothing else.
+    // Pop-out navigates here instead of driving a canvas inside another
+    // document, so the tab you are looking at owns its socket, decoder, acks
+    // and timers. Nothing it needs can be throttled or frozen by the platform
+    // on behalf of some other tab — which is what broke pop-out on Android,
+    // where window.open yields a TAB and the opener stops executing.
+    // No PIN in the URL: an owner connects PIN-free, and otherwise this tab
+    // inherits a copy of the opener's sessionStorage credential. A link
+    // pasted onto another device carries no secret and simply prompts.
+    const paneOnly = params.get('pane') || '';
+    if (paneOnly) document.body.classList.add('pane-only');
     if (initialSession) sessionInput.value = initialSession.toUpperCase();
 
     // The PIN may arrive in the URL fragment (e.g. #p=123456) from the
@@ -5931,7 +5957,14 @@
       // panes you're already using.
       if (pendingRestore) {
         pendingRestore = false;
-        if (panes.size === 0) restoreSavedPanes(winList);
+        if (paneOnly) {
+          // This tab exists to show exactly one window — never the saved
+          // layout, which belongs to the full viewer.
+          const w = winList.find((x) => x.id === paneOnly);
+          if (w && !panes.has(w.id)) { openWinView(w); focusPane(w.id); }
+        } else if (panes.size === 0) {
+          restoreSavedPanes(winList);
+        }
       }
       // Resolve anyone awaiting a fresh window list (app-launch baseline), then
       // see if a just-launched app's window has appeared.
@@ -6131,9 +6164,6 @@
     function focusPane(id) {
       focusedPaneId = id;
       const p = panes.get(id);
-      // A popped-out pane lives in its own OS window — focusing it means
-      // raising that window, not shuffling in-page z-indices.
-      if (p && p.popup && !p.popup.closed) { try { p.popup.focus(); } catch (_) {} return; }
       // Restack so the focused pane sits above the others (real-window behaviour).
       // Reassign z-indices compactly from a fixed base every time — the old
       // monotonic counter saturated at the 49 ceiling, after which every pane
@@ -6278,155 +6308,46 @@
     // frame stream; pointer handlers are freshly bound to the popup canvas
     // (they die with the popup document). The in-page pane hides and comes
     // back when the popup closes, so ⧉ is freely reversible.
+    // Pop out = navigate a new tab to this same viewer in standalone pane
+    // mode. That tab owns its socket, decoder, acks and timers, so nothing it
+    // depends on lives in a context the platform may throttle or freeze. The
+    // previous design drove a canvas inside the popup's document from here,
+    // which behaved differently on every platform and failed outright on
+    // Android, where window.open yields a TAB and this page stops executing
+    // the moment you look at the other one.
+    //
+    // The URL carries NO PIN. An owner connects PIN-free; otherwise the new
+    // tab inherits a copy of this tab's sessionStorage credential, which the
+    // spec hands to a window.open child. A link pasted onto another device
+    // therefore leaks nothing and simply prompts.
     function popOutPane(pane) {
-      if (pane.popup && !pane.popup.closed) { try { pane.popup.focus(); } catch (_) {} return; }
-      // Size the popup to the source window's aspect, capped to the screen.
+      const url = new URL(location.href);
+      url.hash = '';
+      url.search = '?s=' + encodeURIComponent((sessionId || '').toUpperCase()) +
+                   '&pane=' + encodeURIComponent(pane.w.id);
+      // Size to the source aspect where the platform honours it (desktop);
+      // Android ignores this and opens a tab, which is now fine.
       const ar = paneAspect(pane);
       let pw = Math.max(320, Math.min(Math.round(pane.w.w || 900), Math.round((screen.availWidth || 1280) * 0.85)));
       let ph = Math.round(pw / ar);
       const maxH = Math.round((screen.availHeight || 800) * 0.85);
       if (ph > maxH) { ph = maxH; pw = Math.round(ph * ar); }
       let pop = null;
-      try { pop = window.open('', 'reminal-pane-' + pane.w.id, 'popup=yes,width=' + pw + ',height=' + ph); } catch (_) {}
+      try {
+        pop = window.open(url.toString(), 'reminal-pane-' + pane.w.id,
+                          'popup=yes,width=' + pw + ',height=' + ph);
+      } catch (_) {}
       if (!pop) {
-        // Blocked — tell the user how to fix it, in the pane's own popover.
-        pane.infoEl.innerHTML = '<div style="padding:8px 10px">Pop-up blocked — allow pop-ups for this site, then press ⧉ again.</div>';
+        pane.infoEl.innerHTML = '<div style="padding:8px 10px">Pop-up blocked — allow pop-ups for this site, then press \u29C9 again.</div>';
         pane.infoEl.classList.add('show');
         pane.infoShown = true;
         return;
       }
-      const pd = pop.document;
-      pd.open();
-      pd.write('<!doctype html><html><head><meta charset="utf-8"><title></title></head><body></body></html>');
-      pd.close();
-      pd.title = (pane.w.app || 'Window') + (pane.w.title ? ' — ' + pane.w.title : '');
-      // Clone the page's styles so the popup's canvas/cursor reuse the same
-      // .wpane-* classes and render exactly like the in-page pane.
-      for (const st of document.querySelectorAll('style')) pd.head.appendChild(st.cloneNode(true));
-      const bs = pd.body.style;
-      bs.margin = '0'; bs.background = '#000'; bs.display = 'flex';
-      bs.alignItems = 'center'; bs.justifyContent = 'center';
-      bs.height = '100vh'; bs.overflow = 'hidden';
-      const host = pd.createElement('div'); host.className = 'wpane-body';
-      // Contain-fit the canvas with PURE CSS, exactly like the in-page pane: the
-      // canvas advertises the frame bitmap's intrinsic size, and max-width /
-      // max-height let the browser scale it down preserving that intrinsic
-      // aspect. No JS sizing — so a new frame at a new aspect (host window
-      // resized) just re-letterboxes automatically and can never be stretched.
-      host.style.cssText = 'width:100%;height:100%;display:flex;align-items:center;justify-content:center';
-      const pimg = pd.createElement('canvas'); pimg.className = 'wpane-img';
-      pimg.width = pane.img.width; pimg.height = pane.img.height;
-      pimg.style.cssText = 'width:100%;height:100%;object-fit:contain;display:block';
-      const pctx = pimg.getContext('2d', { alpha: false, desynchronized: true });
-      // Seed with the last frame so the popup doesn't open black (the live
-      // stream repaints momentarily anyway).
-      try { pctx.drawImage(pane.img, 0, 0); } catch (_) {}
-      const pcursor = pd.createElement('div'); pcursor.className = 'wpane-cursor';
-      host.append(pimg, pcursor);
-      pd.body.appendChild(host);
-
-      // Swap the pane's render refs to the popup-owned elements; keep the
-      // originals for the un-pop. place()/frames read these through `pane`, so
-      // everything — painting, cursor overlay, click mapping — follows.
-      pane.main = { img: pane.img, ctx: pane.ctx, body: pane.body, cursorEl: pane.cursorEl, placeCursor: pane.placeCursor };
-      pane.img = pimg; pane.ctx = pctx; pane.body = host; pane.cursorEl = pcursor;
-      // The decoder now belongs to the wrong document — drop it so the next
-      // frame rebuilds it inside the popup, and ask the host for a keyframe so
-      // the fresh decoder has an entry point immediately rather than waiting
-      // out the periodic one.
-      try { if (pane.vdec && pane.vdec.state !== 'closed') pane.vdec.close(); } catch (_) {}
-      pane.vdec = null; pane.vdecWin = null; pane.h264Synced = false;
-      requestH264Key(pane);
-      // Heartbeat on the popup's clock — see popupTick.
-      try { pane.popupTimer = pop.setInterval(() => { try { popupTick(); } catch (_) {} }, 1000); } catch (_) {}
-      // Is this a real popup window, or a tab wearing one's clothes? Android
-      // Chrome ignores popup=yes and opens a tab; a tab reports the full
-      // screen height and no opener-independent geometry. Treat "clearly not
-      // a small chrome-less window" as a tab and keep decoding in the opener,
-      // which at least still works while this tab is foreground.
-      try {
-        pane.popupIsWindow = !!(pop.outerHeight && pop.outerHeight < (pop.screen ? pop.screen.height : 10000) - 40);
-      } catch (_) { pane.popupIsWindow = false; }
-      paneInput(pane, pimg); // fresh pointer/wheel bindings on the popup canvas (rebinds pane.placeCursor)
-      pane.el.style.display = 'none';
-      pane.popup = pop;
-
-      // Optional polish: nudge the popup WINDOW itself to the bitmap aspect so
-      // the black letterbox bars are minimal. Purely cosmetic — CSS above keeps
-      // the content correct regardless — and best-effort (many window managers
-      // ignore a script resize). Debounced so a live host-side resize doesn't
-      // make it jitter. Reads the bitmap, so it's never stale.
-      const matchAspect = () => {
-        if (pop.closed) return;
-        const iw = pop.innerWidth, ih = pop.innerHeight;
-        if (!iw || !ih) return;
-        const a = paneAspect(pane);
-        let tw = iw, th = Math.round(iw / a);
-        const maxIH = Math.round(((pop.screen && pop.screen.availHeight) || 800) * 0.92);
-        if (th > maxIH) { th = maxIH; tw = Math.round(th * a); }
-        if (Math.abs(th - ih) <= 2 && Math.abs(tw - iw) <= 2) return; // already matched
-        try { pop.resizeBy(tw - iw, th - ih); } catch (_) {}
-      };
-      pane.popupAspect = matchAspect;
-      pane.popupMatched = false;
-      setTimeout(matchAspect, 60); // fast approximate match; the first real frame nails it (see paint)
-      // Keep the cursor overlay aligned as the canvas resizes.
-      pop.addEventListener('resize', () => { if (pane.placeCursor) { try { pane.placeCursor(); } catch (_) {} } });
-      // Keyboard: forward from the popup document, same mapping as #wkey.
-      pd.addEventListener('keydown', (e) => {
-        const sp = WIN_SPECIAL_KEYS[e.key];
-        if (sp) { e.preventDefault(); sendWin('window_input', { id: pane.w.id, kind: 'key', special: sp }); return; }
-        if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {
-          e.preventDefault();
-          sendWin('window_input', { id: pane.w.id, kind: 'key', text: e.key });
-        }
-      });
-      // Popup closed (by the user or by us) → fold the pane back into the page.
-      pop.addEventListener('pagehide', () => { setTimeout(() => unPopPane(pane), 0); });
-      // Kick the stream so a fresh frame lands on the new canvas immediately.
-      // The agent numbers each stream from seq 0, so forget the old counter or
-      // the dedup guard would silently drop every frame of the fresh stream.
-      sendWin('window_ctl', { action: 'stop', id: pane.w.id });
-      pane.lastSeq = null;
-      sendWin('window_ctl', { action: 'start', id: pane.w.id });
-      focusedPaneId = pane.w.id;
+      try { pop.focus(); } catch (_) {}
+      // That tab streams this window itself now — stop streaming it here so
+      // the host doesn't encode and ship the same window twice.
+      closePane(pane.w.id);
     }
-
-    function unPopPane(pane) {
-      if (!pane.popup) return;
-      try { if (pane.popupTimer) pane.popup.clearInterval(pane.popupTimer); } catch (_) {}
-      pane.popupTimer = null;
-      // Same in reverse: the decoder lives in the popup that is going away.
-      try { if (pane.vdec && pane.vdec.state !== 'closed') pane.vdec.close(); } catch (_) {}
-      pane.vdec = null; pane.vdecWin = null; pane.h264Synced = false;
-      while (pane.renderQ && pane.renderQ.length) { try { pane.renderQ.shift().f.close(); } catch (_) {} }
-      pane.popup = null;
-      pane.popupAspect = null;
-      pane.popupMatched = false;
-      clearTimeout(pane.popupAspectTimer);
-      const m = pane.main;
-      pane.main = null;
-      if (!panes.has(pane.w.id)) return; // pane was closed while popped — nothing to restore
-      if (m) {
-        pane.img = m.img; pane.ctx = m.ctx; pane.body = m.body;
-        pane.cursorEl = m.cursorEl; pane.placeCursor = m.placeCursor;
-      }
-      pane.el.style.display = '';
-      // Kick the stream: repaint the in-page canvas with a fresh frame (new
-      // stream = new seq space, so the dedup counter must forget the old one).
-      sendWin('window_ctl', { action: 'stop', id: pane.w.id });
-      pane.lastSeq = null;
-      sendWin('window_ctl', { action: 'start', id: pane.w.id });
-      focusPane(pane.w.id);
-    }
-
-    // The page going away must take its popups with it — an orphaned popup
-    // would show a frozen frame wired to a dead connection.
-    window.addEventListener('pagehide', () => {
-      for (const p of panes.values()) {
-        if (p.popup && !p.popup.closed) { try { p.popup.close(); } catch (_) {} }
-      }
-    });
 
     function closePane(id) {
       const p = panes.get(id);
@@ -6434,15 +6355,11 @@
       sendWin('window_ctl', { action: 'stop', id });
       if (p.lastUrl) URL.revokeObjectURL(p.lastUrl);
       try { if (p.vdec && p.vdec.state !== 'closed') p.vdec.close(); } catch (_) {}
-      if (p.renderRAF) {
-        try { (p.renderRAFWin || window).cancelAnimationFrame(p.renderRAF); } catch (_) {}
-        p.renderRAF = 0;
-      }
+      if (p.renderRAF) { cancelAnimationFrame(p.renderRAF); p.renderRAF = 0; }
       while (p.renderQ && p.renderQ.length) { try { p.renderQ.shift().f.close(); } catch (_) {} }
       p.el.remove();
       panes.delete(id);
       if (focusedPaneId === id) focusedPaneId = null;
-      if (p.popup && !p.popup.closed) { try { p.popup.close(); } catch (_) {} }
       savePaneLayout();
     }
 
@@ -6465,10 +6382,6 @@
       if (winStreamsPaused || !panes.size) return;
       winStreamsPaused = true;
       for (const [id, p] of panes) {
-        // A popped-out pane is visible in its OWN OS window — backgrounding
-        // this tab says nothing about it, so its stream keeps flowing (frames
-        // arrive in message handlers, which background tabs still run).
-        if (p.popup && !p.popup.closed) continue;
         sendWin('window_ctl', { action: 'stop', id });
       }
     }
@@ -6487,7 +6400,6 @@
       if (!winStreamsPaused) return;
       winStreamsPaused = false;
       for (const [id, p] of panes) {
-        if (p.popup && !p.popup.closed) continue; // never stopped
         // New stream, new seq space: without this, a young pane (< 1000 frames)
         // has every post-resume frame eaten by the stale-seq dedup guard.
         resetPaneStreamCursors(p);
@@ -6665,7 +6577,7 @@
     const PANES_KEY_PREFIX = 'reminal:panes:';
     function panesKey() { return sessionId ? PANES_KEY_PREFIX + sessionId.toUpperCase() : ''; }
     function savePaneLayout() {
-      if (suppressPaneSave) return;
+      if (suppressPaneSave || paneOnly) return; // a pane tab owns no layout
       const key = panesKey();
       if (!key) return;
       const arr = [...panes.values()].map((p) => ({
@@ -6786,27 +6698,6 @@
     }
     setInterval(viewerTick, 1000);
 
-    // popupTick runs on a POPPED-OUT pane's own clock. That window is on
-    // screen, so its timers are not throttled — which makes it the only
-    // reliable heartbeat while the main window is minimized.
-    let lastPopupDialAt = 0;
-    function popupTick() {
-      viewerTick();
-      if (!document.hidden) return; // main window visible: its own timer suffices
-      // The opener is throttled, so its backoff retry may be a minute away.
-      // Nudge it — rate-limited, and fastReconnect is a no-op unless the
-      // socket is actually down, so this cannot hammer the relay.
-      const now = Date.now();
-      if (now - lastPopupDialAt < 3000) return;
-      lastPopupDialAt = now;
-      fastReconnect();
-    }
-    // React immediately to a network change: the old ICE path is dead after a
-    // switch, so drop it and renegotiate on the new network (cooldown 0).
-    function onNetChange() { if (cryptoKey && agentLive) retryWebRTC('network change', 0); }
-    window.addEventListener('online', onNetChange);
-    try { if (navigator.connection && navigator.connection.addEventListener) navigator.connection.addEventListener('change', onNetChange); } catch (_) {}
-
     function onWindowFrame(payload, viaDC) {
       const p = panes.get(payload.id);
       if (!p) return;
@@ -6869,14 +6760,6 @@
         // window fights the user's own placement. It only matches aspect once,
         // at open (see popOutPane), then CSS owns it.
         if (cv.width !== sw || cv.height !== sh) { cv.width = sw; cv.height = sh; }
-        if (p.popup && p.popupAspect && !p.popupMatched) {
-          // First real frame after pop-out: the bitmap is now the authority, so
-          // size the popup window to its aspect exactly — eliminating the bars
-          // the open-time guess (from a pre-pop frame) left. Once only; a later
-          // host-side resize just letterboxes (like the in-page pane).
-          p.popupMatched = true;
-          try { p.popupAspect(); } catch (_) {}
-        }
         p.ctx.drawImage(src, 0, 0, sw, sh);
         if (p.placeCursor && p.cursor) p.placeCursor();
         if (payload.seq != null) sendWindowAck(payload.id, payload.seq, viaDC);
@@ -7032,8 +6915,7 @@
       // its caller, and its frames are the ones that need paced playout.
       (p.h264Seqs || (p.h264Seqs = [])).push({ ack: ackSeq !== undefined ? ackSeq : null, paced: ackSeq === undefined })
       try {
-        const W = p.vdecWin || window;
-        p.vdec.decode(new W.EncodedVideoChunk({
+        p.vdec.decode(new EncodedVideoChunk({
           type: key ? 'key' : 'delta',
           timestamp: seq * 33333, // us; synthetic but monotonic — nothing paces on it
           data: au,
@@ -7050,10 +6932,6 @@
     function paintVideoFrame(p, frame) {
       const cv = p.img, sw = frame.displayWidth, sh = frame.displayHeight;
       if (cv.width !== sw || cv.height !== sh) { cv.width = sw; cv.height = sh; }
-      if (p.popup && p.popupAspect && !p.popupMatched) {
-        p.popupMatched = true;
-        try { p.popupAspect(); } catch (_) {}
-      }
       p.ctx.drawImage(frame, 0, 0, sw, sh);
       if (p.placeCursor && p.cursor) p.placeCursor();
       // Inter-paint spacing is what motion actually looks like, as distinct
@@ -7101,9 +6979,7 @@
       // opener — and a browser throttles (or pauses) rAF in a backgrounded
       // tab, which the opener becomes the moment you focus the popup. Using
       // the opener's clock would freeze exactly the window you are looking at.
-      const w = (p.popup && !p.popup.closed && p.popup.requestAnimationFrame) ? p.popup : window;
-      p.renderRAFWin = w;
-      p.renderRAF = w.requestAnimationFrame(() => {
+      p.renderRAF = requestAnimationFrame(() => {
         p.renderRAF = 0;
         const now = performance.now();
         let due = null;
@@ -7131,27 +7007,12 @@
     // paint onto the SAME canvas as JPEG frames — pop-out aspect hooks, cursor
     // overlay, and the ack-after-draw contract all behave identically.
     function ensureH264Decoder(p) {
-      // Build the decoder in the realm of the window that OWNS the canvas. A
-      // VideoFrame belongs to the document whose decoder produced it, and
-      // drawing one ACROSS documents — opener's decoder into a popup's canvas
-      // — drops off the GPU fast path and costs a readback per frame. Same
-      // document on both ends keeps the whole pipeline where the pixels land.
-      // Only decode in the popup's realm where that is actually a WINDOW whose
-      // script keeps running. On Android, window.open yields a TAB and the
-      // opener is frozen once it is backgrounded — decoding there produces
-      // nothing at all, which is worse than the cross-document draw this
-      // avoids. p.popupIsWindow is set at pop-out time from a live check.
-      const win = (p.popup && !p.popup.closed && p.popupIsWindow && p.popup.VideoDecoder) ? p.popup : window;
-      if (p.vdec && p.vdec.state !== 'closed' && p.vdecWin === win) return true;
-      // Realm changed (popped out or back): the old decoder belongs to the
-      // wrong document now, so retire it and start clean on the next keyframe.
-      if (p.vdec && p.vdec.state !== 'closed') { try { p.vdec.close(); } catch (_) {} }
-      if (typeof win.VideoDecoder === 'undefined') return false;
-      p.vdecWin = win;
+      if (p.vdec && p.vdec.state !== 'closed') return true;
+      if (typeof VideoDecoder === 'undefined') return false;
       p.h264Synced = false;
       p.h264Seqs = [];
       try {
-        p.vdec = new win.VideoDecoder({
+        p.vdec = new VideoDecoder({
           output: (frame) => {
             const e = (p.h264Seqs && p.h264Seqs.length) ? p.h264Seqs.shift() : null;
             // Frames that arrived one-per-message are already spaced by the
@@ -7425,7 +7286,7 @@
         const dur = Date.now() - downAt; downAt = 0;
         // Focusing the main page's hidden #wkey from a popped-out pane would
         // yank keyboard focus back to this window — the popup wires its own keys.
-        if (!pane.popup && (e.pointerType === 'mouse' || document.activeElement === wkey)) wkey.focus();
+        if ((e.pointerType === 'mouse' || document.activeElement === wkey)) wkey.focus();
         if (e.pointerType === 'mouse') {
           if (mouseBtn === 2) click(frac(e), 'right');                  // right button → context click
           else if (mouseBtn === 0 && moved && path && path.length > 1) sendWin('window_input', { id: pane.w.id, kind: 'drag', path: path.map(p => [p.fx, p.fy]) });
