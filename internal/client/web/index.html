@@ -6339,6 +6339,14 @@
       requestH264Key(pane);
       // Heartbeat on the popup's clock — see popupTick.
       try { pane.popupTimer = pop.setInterval(() => { try { popupTick(); } catch (_) {} }, 1000); } catch (_) {}
+      // Is this a real popup window, or a tab wearing one's clothes? Android
+      // Chrome ignores popup=yes and opens a tab; a tab reports the full
+      // screen height and no opener-independent geometry. Treat "clearly not
+      // a small chrome-less window" as a tab and keep decoding in the opener,
+      // which at least still works while this tab is foreground.
+      try {
+        pane.popupIsWindow = !!(pop.outerHeight && pop.outerHeight < (pop.screen ? pop.screen.height : 10000) - 40);
+      } catch (_) { pane.popupIsWindow = false; }
       paneInput(pane, pimg); // fresh pointer/wheel bindings on the popup canvas (rebinds pane.placeCursor)
       pane.el.style.display = 'none';
       pane.popup = pop;
@@ -7128,7 +7136,12 @@
       // drawing one ACROSS documents — opener's decoder into a popup's canvas
       // — drops off the GPU fast path and costs a readback per frame. Same
       // document on both ends keeps the whole pipeline where the pixels land.
-      const win = (p.popup && !p.popup.closed && p.popup.VideoDecoder) ? p.popup : window;
+      // Only decode in the popup's realm where that is actually a WINDOW whose
+      // script keeps running. On Android, window.open yields a TAB and the
+      // opener is frozen once it is backgrounded — decoding there produces
+      // nothing at all, which is worse than the cross-document draw this
+      // avoids. p.popupIsWindow is set at pop-out time from a live check.
+      const win = (p.popup && !p.popup.closed && p.popupIsWindow && p.popup.VideoDecoder) ? p.popup : window;
       if (p.vdec && p.vdec.state !== 'closed' && p.vdecWin === win) return true;
       // Realm changed (popped out or back): the old decoder belongs to the
       // wrong document now, so retire it and start clean on the next keyframe.
