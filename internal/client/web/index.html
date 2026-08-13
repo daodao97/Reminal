@@ -717,10 +717,21 @@
        go, since this tab IS the pane. */
     body.pane-only > header, body.pane-only > #terminal-wrap,
     body.pane-only > #keybar { display: none !important; }
-    body.pane-only { background: #000; overflow: hidden; }
+    /* Kill the scrollbar on the ROOT element, not just body: the root owns it,
+       and while it exists the initial containing block is narrower than
+       innerWidth — which left a dead strip down the right-hand side. */
+    html.pane-only, body.pane-only { background: #000; overflow: hidden !important; }
     body.pane-only .wpane {
+      /* inset alone sizes this. An explicit width:100% would resolve against
+         the containing block and re-introduce the same off-by-a-scrollbar gap;
+         pinning all four edges cannot. */
       position: fixed !important; inset: 0 !important;
-      width: 100% !important; height: 100% !important;
+      width: auto !important; height: auto !important;
+      /* .wpane is normally a floating window, deliberately inset from the
+         viewport edge (max-width: 98vw). Filling the tab means dropping that
+         clamp — it was leaving a dead strip exactly 2vw wide down the right. */
+      max-width: none !important; min-width: 0 !important;
+      max-height: none !important; min-height: 0 !important;
       border: 0 !important; border-radius: 0 !important; box-shadow: none !important;
       display: flex; flex-direction: column;
     }
@@ -976,7 +987,7 @@
     // inherits a copy of the opener's sessionStorage credential. A link
     // pasted onto another device carries no secret and simply prompts.
     const paneOnly = params.get('pane') || '';
-    if (paneOnly) document.body.classList.add('pane-only');
+    if (paneOnly) { document.documentElement.classList.add('pane-only'); document.body.classList.add('pane-only'); }
     if (initialSession) sessionInput.value = initialSession.toUpperCase();
 
     // The PIN may arrive in the URL fragment (e.g. #p=123456) from the
