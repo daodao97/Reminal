@@ -56,6 +56,13 @@ type winFrame struct {
 	Key  bool
 }
 
+// winErrFrameMagic is a reserved length prefix marking an out-of-band error
+// frame on a capture stream rather than a picture: [magic][uint32 len][utf8].
+// It is far above any real frame size, so a reader that predates it treats it
+// as a framing desync and ends the stream — which is precisely the behaviour
+// it had before, making the channel safe to add mid-protocol.
+const winErrFrameMagic = 0xFFFFFFFF
+
 // Frame flags in the helper's h264 framing ([uint32 len][flag][Annex-B AU]).
 // The same two values label AUs inside a batched relay message, so the viewer
 // parses one shape wherever the bytes arrived from.
@@ -108,6 +115,23 @@ type winHelper struct {
 	// h264 framing — the signature of an OLD daemon that ignored the codec arg
 	// and streamed JPEGs. The consumer uses it to stop asking for h264.
 	badFraming atomic.Bool
+
+	// remoteErr holds the failure reason reported by the daemon for a stream
+	// it ran on our behalf (the direct-exec path uses stderr instead).
+	remoteErr atomic.Value // string
+}
+
+// errorText is why this helper stopped, in the caller's preferred order: the
+// daemon's report when capture ran there, else the child's own stderr. Empty
+// when it simply ended with nothing to say.
+func (h *winHelper) errorText() string {
+	if v, ok := h.remoteErr.Load().(string); ok && strings.TrimSpace(v) != "" {
+		return strings.TrimSpace(v)
+	}
+	if h.stderr != nil {
+		return strings.TrimSpace(h.stderr.String())
+	}
+	return ""
 }
 
 // captureHelperPath finds the reminal-capture binary: an explicit override
@@ -186,7 +210,7 @@ func startWinHelper(id string, maxWidth, quality, fps int, codec string) (*winHe
 	// few hundred ms). Survive the grace window → healthy.
 	select {
 	case <-h.dead:
-		msg := strings.TrimSpace(stderr.String())
+		msg := h.errorText()
 		if msg == "" {
 			msg = "capture helper exited immediately"
 		}
@@ -212,6 +236,24 @@ func (h *winHelper) readLoop(stdout io.Reader) {
 			return
 		}
 		n := binary.BigEndian.Uint32(lenBuf[:])
+		if n == winErrFrameMagic {
+			// The daemon is telling us why the stream is ending (see
+			// writeMirrorError). Record it so the pane can show the real
+			// reason instead of a generic "helper exited".
+			if _, err := io.ReadFull(r, lenBuf[:]); err != nil {
+				return
+			}
+			mlen := binary.BigEndian.Uint32(lenBuf[:])
+			if mlen == 0 || mlen > 4096 {
+				return
+			}
+			msg := make([]byte, mlen)
+			if _, err := io.ReadFull(r, msg); err != nil {
+				return
+			}
+			h.remoteErr.Store(string(msg))
+			continue
+		}
 		// Sanity bound: a 1100px JPEG is tens of KB; anything past 16 MiB is a
 		// framing desync, not a frame.
 		if n == 0 || n > 16*1024*1024 {

@@ -367,3 +367,54 @@ func TestH264HelperLive(t *testing.T) {
 	}
 	t.Logf("live: key + %d deltas + rekey OK", deltas)
 }
+
+// The daemon's out-of-band error frame must reach the session, so a capture
+// failure reports its real cause instead of a generic "helper exited". Frames
+// before it still decode normally.
+func TestMirrorErrorFrameReachesSession(t *testing.T) {
+	h, pw, _ := newTestHelper("h264")
+	defer pw.Close()
+
+	if _, err := pw.Write(frameMsg(2, []byte("KEY-AU"))); err != nil {
+		t.Fatal(err)
+	}
+	stop := make(chan struct{})
+	if f, ok := h.next(stop, time.Second); !ok || !f.Key {
+		t.Fatalf("expected the key AU before the error frame, got ok=%v", ok)
+	}
+
+	var hdr [8]byte
+	binary.BigEndian.PutUint32(hdr[0:4], winErrFrameMagic)
+	msg := "window 6017 not found"
+	binary.BigEndian.PutUint32(hdr[4:8], uint32(len(msg)))
+	if _, err := pw.Write(append(hdr[:], msg...)); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for h.errorText() != msg && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if got := h.errorText(); got != msg {
+		t.Fatalf("errorText() = %q, want %q", got, msg)
+	}
+	if !h.alive() {
+		t.Fatal("an error frame must not end the stream by itself")
+	}
+}
+
+// An oversized/garbage length must still end the stream rather than be
+// mistaken for an error frame.
+func TestBogusFrameLengthStillEndsStream(t *testing.T) {
+	h, pw, _ := newTestHelper("h264")
+	defer pw.Close()
+	var hdr [4]byte
+	binary.BigEndian.PutUint32(hdr[:], 32*1024*1024)
+	if _, err := pw.Write(hdr[:]); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-h.dead:
+	case <-time.After(2 * time.Second):
+		t.Fatal("reader did not end on an absurd frame length")
+	}
+}

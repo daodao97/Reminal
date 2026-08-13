@@ -27,6 +27,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -166,6 +167,14 @@ func mirrorServeCapture(conn net.Conn, args []string) {
 		cargs = append(cargs, codec)
 	}
 	cmd := exec.Command(helper, cargs...)
+	// Capture the helper's stderr. Without this Go wires a nil Stderr to
+	// /dev/null, so the ONE line explaining why capture failed ("window 1234
+	// not found", "stream stopped: …") was discarded before anything could see
+	// it — every macOS capture failure reached the user as the generic
+	// "capture helper exited", and the daemon log stayed empty too. Bounded,
+	// because a wedged helper could otherwise spew without limit.
+	errBuf := &capWriter{max: 4096}
+	cmd.Stderr = errBuf
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return
@@ -197,6 +206,55 @@ func mirrorServeCapture(conn net.Conn, args []string) {
 	_, _ = io.Copy(conn, stdout) // raw framed stream straight through
 	kill()
 	_ = cmd.Wait()
+	// The stream ended. Tell the session WHY, and log it here too — this is
+	// the only place the reason exists.
+	if msg := strings.TrimSpace(errBuf.String()); msg != "" {
+		fmt.Fprintf(os.Stderr, "reminal: capture %s ended: %s\n", id, msg)
+		writeMirrorError(conn, msg)
+	}
+}
+
+// capWriter keeps at most max bytes of what is written to it, dropping the
+// rest. Enough to carry a helper's one-line failure without letting a
+// misbehaving child grow the daemon's memory.
+type capWriter struct {
+	mu  sync.Mutex
+	buf []byte
+	max int
+}
+
+func (w *capWriter) Write(p []byte) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if room := w.max - len(w.buf); room > 0 {
+		if len(p) < room {
+			room = len(p)
+		}
+		w.buf = append(w.buf, p[:room]...)
+	}
+	return len(p), nil // always "succeed": losing log text must not kill the pipe
+}
+
+func (w *capWriter) String() string {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return string(w.buf)
+}
+
+// writeMirrorError appends an out-of-band error frame to a capture stream:
+// the reserved length sentinel, then the message. An OLD session reads the
+// sentinel as an absurd frame length and simply ends its read loop — exactly
+// what it did before this existed — so the addition is backward compatible.
+func writeMirrorError(conn net.Conn, msg string) {
+	if len(msg) > 480 {
+		msg = msg[:480]
+	}
+	var hdr [8]byte
+	binary.BigEndian.PutUint32(hdr[0:4], winErrFrameMagic)
+	binary.BigEndian.PutUint32(hdr[4:8], uint32(len(msg)))
+	_ = conn.SetWriteDeadline(time.Now().Add(2 * time.Second))
+	_, _ = conn.Write(hdr[:])
+	_, _ = io.WriteString(conn, msg)
 }
 
 // mirrorScreencaptureLoop is the no-native-helper fallback: poll screencapture at
@@ -365,6 +423,9 @@ func startMirrorCapture(id string, maxWidth, quality, fps int, codec string) (*w
 		// gone). readLoop ended but doesn't own the conn — close it so we don't
 		// leak the fd (the happy path closes it via winHelper.stop()).
 		_ = conn.Close()
+		if msg := h.errorText(); msg != "" {
+			return nil, errors.New(msg) // the daemon told us why
+		}
 		return nil, errors.New("screen-sharing service closed the stream")
 	case <-time.After(helperStartupGrace):
 		return h, nil

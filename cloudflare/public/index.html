@@ -6326,6 +6326,8 @@
       // everything — painting, cursor overlay, click mapping — follows.
       pane.main = { img: pane.img, ctx: pane.ctx, body: pane.body, cursorEl: pane.cursorEl, placeCursor: pane.placeCursor };
       pane.img = pimg; pane.ctx = pctx; pane.body = host; pane.cursorEl = pcursor;
+      // Heartbeat on the popup's clock — see popupTick.
+      try { pane.popupTimer = pop.setInterval(() => { try { popupTick(); } catch (_) {} }, 1000); } catch (_) {}
       paneInput(pane, pimg); // fresh pointer/wheel bindings on the popup canvas (rebinds pane.placeCursor)
       pane.el.style.display = 'none';
       pane.popup = pop;
@@ -6373,6 +6375,8 @@
 
     function unPopPane(pane) {
       if (!pane.popup) return;
+      try { if (pane.popupTimer) pane.popup.clearInterval(pane.popupTimer); } catch (_) {}
+      pane.popupTimer = null;
       pane.popup = null;
       pane.popupAspect = null;
       pane.popupMatched = false;
@@ -6692,7 +6696,16 @@
       }
       if (p.infoShown) p.infoEl.innerHTML = paneInfoHtml(p); // keep the popover live
     }
-    setInterval(() => {
+    // The pane/transport housekeeping tick. Named rather than inline because a
+    // popped-out pane must be able to drive it from ITS window: everything here
+    // lives in the opener, and a browser throttles a hidden tab's timers to
+    // roughly once a minute — so with the main window minimized and only a
+    // popup on screen, reconnection and re-negotiation would crawl.
+    let lastTickAt = 0;
+    function viewerTick() {
+      const tnow = Date.now();
+      if (tnow - lastTickAt < 500) return; // two clocks may drive this; run once
+      lastTickAt = tnow;
       // Always prefer P2P: whenever we're not connected/negotiating and the
       // cooldown has passed, (re)attempt WebRTC — so WS upgrades to P2P as soon
       // as it becomes viable (network improved) with no reconnect needed. If a
@@ -6716,7 +6729,24 @@
           p.nextShowAt = 0;
         }
       }
-    }, 1000);
+    }
+    setInterval(viewerTick, 1000);
+
+    // popupTick runs on a POPPED-OUT pane's own clock. That window is on
+    // screen, so its timers are not throttled — which makes it the only
+    // reliable heartbeat while the main window is minimized.
+    let lastPopupDialAt = 0;
+    function popupTick() {
+      viewerTick();
+      if (!document.hidden) return; // main window visible: its own timer suffices
+      // The opener is throttled, so its backoff retry may be a minute away.
+      // Nudge it — rate-limited, and fastReconnect is a no-op unless the
+      // socket is actually down, so this cannot hammer the relay.
+      const now = Date.now();
+      if (now - lastPopupDialAt < 3000) return;
+      lastPopupDialAt = now;
+      fastReconnect();
+    }
     // React immediately to a network change: the old ICE path is dead after a
     // switch, so drop it and renegotiate on the new network (cooldown 0).
     function onNetChange() { if (cryptoKey && agentLive) retryWebRTC('network change', 0); }

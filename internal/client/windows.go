@@ -1135,7 +1135,7 @@ func (s *winStream) ensureHelper() {
 		if s.helper.alive() {
 			return
 		}
-		msg := strings.TrimSpace(s.helper.stderr.String())
+		msg := s.helper.errorText()
 		if msg == "" {
 			msg = "capture helper exited"
 		}
