@@ -1996,7 +1996,8 @@
     let fatal = false;        // unrecoverable (bad PIN, session expired); do not auto-reconnect
     let reconnectTimer = null;
     let backoffMs = 1000;
-    let wsPingTimer = 0;
+    let wsPingTimer = 0;   // legacy handle; the ping now rides viewerTick
+    let lastPingAt = 0;
     const MAX_BACKOFF_MS = 30000;
     let connectedAt = 0;
     // helloShown gates the one-time "Connected · AES-256-GCM end-to-end" line
@@ -3542,11 +3543,14 @@
         // tunnel and any drop becomes a concrete ws.onerror/close, which
         // triggers the existing reconnect logic. Matches the Go viewer's
         // ping cadence (internal/client/viewer.go:317).
-        if (wsPingTimer) clearInterval(wsPingTimer);
-        wsPingTimer = setInterval(() => {
-          if (!ws || ws.readyState !== WebSocket.OPEN) return;
-          try { ws.send(JSON.stringify({ type: 'ping' })); } catch (_) {}
-        }, 30 * 1000);
+        // Cadence only — the ping is SENT from viewerTick, not from a timer of
+        // its own. A dedicated interval is throttled to about once a minute
+        // once this tab has been hidden a while, which is the normal state
+        // when a pane is popped out and the main window is minimized: the
+        // keepalive stops arriving on time, the tunnel idles out, and the
+        // popup freezes on a dead socket until the main window is focused
+        // again. viewerTick can be driven by a visible popup's clock instead.
+        lastPingAt = Date.now();
       };
 
       ws.onmessage = async (ev) => {
@@ -6706,6 +6710,14 @@
       const tnow = Date.now();
       if (tnow - lastTickAt < 500) return; // two clocks may drive this; run once
       lastTickAt = tnow;
+      // Keepalive. Riding this tick rather than its own interval is what lets
+      // a visible popup hold the socket open while the opener is hidden and
+      // throttled. Byte-identical to what the relay auto-answers, so it still
+      // costs nothing (see setWebSocketAutoResponse in the Worker).
+      if (ws && ws.readyState === WebSocket.OPEN && tnow - lastPingAt >= 30000) {
+        lastPingAt = tnow;
+        try { ws.send(JSON.stringify({ type: 'ping' })); } catch (_) {}
+      }
       // Always prefer P2P: whenever we're not connected/negotiating and the
       // cooldown has passed, (re)attempt WebRTC — so WS upgrades to P2P as soon
       // as it becomes viable (network improved) with no reconnect needed. If a
