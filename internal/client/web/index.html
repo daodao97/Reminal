@@ -7295,9 +7295,15 @@
         }
         if (!downAt) return;
         const dur = Date.now() - downAt; downAt = 0;
-        // Focusing the main page's hidden #wkey from a popped-out pane would
-        // yank keyboard focus back to this window — the popup wires its own keys.
-        if ((e.pointerType === 'mouse' || document.activeElement === wkey)) wkey.focus();
+        // A TAP never takes keyboard focus. Re-asserting focus here (which the
+        // old rule did whenever #wkey already had it) is what made the soft
+        // keyboard impossible to dismiss: every tap aimed at getting rid of it
+        // put focus straight back and raised it again. Tapping a canvas does
+        // not blur the input either, so typing continues to work after a tap —
+        // the keyboard simply stops fighting you. The keyboard button owns it
+        // on touch. A mouse has no soft keyboard to raise, so it still focuses
+        // freely and you can click then type.
+        if (e.pointerType === 'mouse') wkey.focus();
         if (e.pointerType === 'mouse') {
           if (mouseBtn === 2) click(frac(e), 'right');                  // right button → context click
           else if (mouseBtn === 0 && moved && path && path.length > 1) sendWin('window_input', { id: pane.w.id, kind: 'drag', path: path.map(p => [p.fx, p.fy]) });
@@ -7308,7 +7314,18 @@
         const g = endDrag(true);
         if (g === 'drag') return;               // a real drag-and-drop completed
         // A quick tap, or a long-press that never dragged, is a click.
-        if (g === 'tap' || (!moved && dur <= 600)) { click(pane.cursor || { fx: 0.5, fy: 0.5 }); flash(); }
+        if (g === 'tap' || (!moved && dur <= 600)) {
+          click(pane.cursor || { fx: 0.5, fy: 0.5 });
+          flash();
+          // Tapping the picture puts the soft keyboard away, the way tapping
+          // outside a text field does everywhere else. It has to be explicit:
+          // pane taps preventDefault, which suppresses the browser's own
+          // tap-elsewhere blur, so without this the keyboard could only be
+          // dismissed from the keyboard button. Scrolls and drags are excluded
+          // above, so this only fires on a deliberate tap; the button brings
+          // it straight back.
+          if (document.activeElement === wkey) wkey.blur();
+        }
       }
       img.addEventListener('pointerup', endPointer);
       img.addEventListener('pointercancel', endPointer);
