@@ -62,6 +62,18 @@ Pop any remote window out onto your desktop and it sits there like a native app 
 
 ---
 
+## 60 fps, from a machine that isn't here
+
+And nothing about those windows says *stream*. Drag it, scrub a video inside it, watch a build scroll past — it stays fluid the whole way, on hotel Wi-Fi or a phone on cellular. **Sixty frames a second, 17 ms from its screen to yours.**
+
+<div align="center">
+<img src="docs/video.gif" alt="A Mac Studio named mac-studio, with one of its windows streaming live into a browser below it at 60 fps — the motion inside sweeping a smooth trail across the canvas — beside a large '60 fps' and the line 'of a live window, from a machine that isn't here'" width="900">
+
+<sub>H.264 down the session's own DataChannel — peer-to-peer, about 2.6 Mbps. Relay-only viewers get the same video at 30 fps.</sub>
+</div>
+
+---
+
 ## Point an AI agent at your fleet
 
 Hand the session ID and PIN to an agent and it connects like any other viewer — to every machine you've shared. One credential, and it can triage an incident, run scans, and kick off or delegate long-running jobs across all your hardware at once, while you watch it happen in the same browser.
@@ -288,7 +300,7 @@ The mirroring you see above isn't macOS-only — window capture **and** full con
 |---|---|---|
 | Terminal sharing · sessions · files · port forwarding | ✅ | ✅ |
 | Owner connect (PIN-free) · `reminal machines` | ✅ | ✅ |
-| Window & desktop mirroring + control | ✅ ScreenCaptureKit (~30 fps) | ✅ X11 — `wmctrl` · `xdotool` · ImageMagick |
+| Window & desktop mirroring + control | ✅ ScreenCaptureKit — H.264 up to 60 fps | ✅ X11 — `wmctrl` · `xdotool` · ImageMagick |
 | Closed-lid mode (auto virtual display) | ✅ | — |
 
 <sub>Linux capture needs an **X11** session (or Xwayland) — native Wayland blocks synthetic input, so it isn't supported yet. Apple Silicon and x86_64 both supported.</sub>

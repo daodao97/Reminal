@@ -1,0 +1,161 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><style>
+  *{margin:0;padding:0;box-sizing:border-box;}
+  html,body{background:#000;}
+  #stage{position:relative;width:1120px;height:650px;overflow:hidden;color:#eef3fb;
+    font-family:-apple-system,'SF Pro Display','Helvetica Neue',Helvetica,Arial,sans-serif;
+    background:radial-gradient(880px 640px at 26% 44%, #16202f, #0a1019 56%, #05070c);}
+  #stage:before{content:"";position:absolute;inset:0;opacity:.45;
+    background-image:radial-gradient(rgba(120,150,200,.10) 1px, transparent 1px);
+    background-size:26px 26px;}
+
+  /* ---------- left: the claim ---------- */
+  .claim{position:absolute;left:66px;top:212px;width:340px;}
+  .num{margin:0 0 0 -10px;font-size:202px;line-height:.86;font-weight:800;letter-spacing:-11px;
+    background:linear-gradient(168deg,#ffffff 12%,#cfe6ff 46%,#87b4e6 100%);
+    -webkit-background-clip:text;background-clip:text;color:transparent;}
+  .num .fps{font-size:54px;font-weight:700;letter-spacing:-1.5px;margin-left:14px;
+    background:none;-webkit-background-clip:border-box;background-clip:border-box;color:#45d69a;}
+  .said{margin-top:18px;font-size:27px;line-height:1.28;font-weight:650;letter-spacing:-.5px;}
+  .said span{display:block;color:#7f8fa7;font-weight:500;}
+
+  .rule{margin:26px 0 15px;width:88px;height:1px;background:linear-gradient(90deg,#45d69a,rgba(69,214,154,0));}
+  .spec{font-size:13.5px;font-weight:600;color:#d5e0ee;letter-spacing:.1px;}
+  .spec b{color:#6ee0b3;font-weight:700;}
+  .sub{margin-top:6px;font-size:12.5px;color:#71809a;}
+
+  /* ---------- the machine it's running on ---------- */
+  .machine{position:absolute;left:748px;top:30px;transform:translateX(-50%);display:flex;align-items:center;gap:15px;}
+  .studio{width:88px;height:56px;border-radius:10px;position:relative;
+    background:linear-gradient(160deg,#d3dbe6,#98a4b6);box-shadow:0 12px 26px rgba(0,0,0,.5);}
+  .studio:before{content:"";position:absolute;left:0;right:0;bottom:13px;height:1px;background:rgba(0,0,0,.16);}
+  .studio:after{content:"";position:absolute;left:11px;bottom:4px;width:6px;height:6px;border-radius:50%;background:#78849a;}
+  .mlabel .n{font-size:14.5px;font-weight:700;display:flex;align-items:center;gap:8px;}
+  .mlabel .n i{width:7px;height:7px;border-radius:50%;background:#45d69a;box-shadow:0 0 9px rgba(69,214,154,.9);}
+  .mlabel .s{margin-top:4px;font-size:11.5px;color:#7b8aa3;font-family:ui-monospace,'SF Mono',Menlo,monospace;}
+
+  /* ---------- right: the window, live ---------- */
+  .viewer{position:absolute;left:436px;top:176px;width:624px;height:424px;border-radius:14px;overflow:hidden;
+    background:#0b1019;border:1px solid #26314b;
+    box-shadow:0 48px 90px rgba(0,0,0,.66), 0 0 60px rgba(69,214,154,.06);}
+  .chrome{height:34px;background:#111725;display:flex;align-items:center;gap:8px;padding:0 12px;border-bottom:1px solid #1c2436;}
+  .chrome i{width:9px;height:9px;border-radius:50%;background:#2b3446;}
+  .chrome .u{flex:1;height:20px;margin-left:6px;border-radius:10px;background:#0b101b;border:1px solid #1c2434;
+    font-size:10.5px;color:#69768f;display:flex;align-items:center;padding:0 10px;font-family:ui-monospace,monospace;}
+  .wbar{height:30px;background:#141a28;border-bottom:1px solid #1c263b;display:flex;align-items:center;gap:6px;padding:0 11px;}
+  .wbar i{width:8px;height:8px;border-radius:50%;background:#2c364c;}
+  .wbar .nm{margin-left:8px;font-size:11px;color:#8494ad;}
+  .wbar .host{margin-left:auto;display:flex;align-items:center;gap:6px;font-size:10px;color:#7f8fa7;}
+  .wbar .host u{width:6px;height:6px;border-radius:50%;background:#45d69a;box-shadow:0 0 7px rgba(69,214,154,.9);}
+
+  .canvas{position:relative;height:360px;background:linear-gradient(180deg,#101827,#0a0f1b);}
+  .canvas:before{content:"";position:absolute;left:40px;right:0;top:0;bottom:40px;opacity:.5;
+    background-image:linear-gradient(rgba(90,120,170,.08) 1px,transparent 1px),linear-gradient(90deg,rgba(90,120,170,.08) 1px,transparent 1px);
+    background-size:42px 42px;}
+  .rail{position:absolute;left:0;top:0;bottom:0;width:40px;background:#0c1220;border-right:1px solid #182134;
+    display:flex;flex-direction:column;align-items:center;gap:13px;padding-top:13px;}
+  .rail u{width:16px;height:16px;border-radius:5px;background:#1b2436;display:block;}
+  .rail u.on{background:#2c7a5e;}
+  .strip{position:absolute;left:40px;right:0;bottom:0;height:40px;background:#0b111c;border-top:1px solid #182134;padding:8px 12px 0;}
+  .wave{position:relative;display:flex;align-items:flex-end;gap:2px;height:20px;}
+  .wave b{flex:1;background:#20364a;border-radius:1px;}
+  .ph{position:absolute;top:5px;height:28px;width:2px;border-radius:2px;background:#45d69a;box-shadow:0 0 9px rgba(69,214,154,.9);}
+
+  .path{position:absolute;left:0;top:0;}
+  .trail{position:absolute;border-radius:50%;top:0;left:0;background:#45d69a;}
+  .puck{position:absolute;width:30px;height:30px;border-radius:50%;top:0;left:0;
+    background:radial-gradient(circle at 34% 30%, #e6fff5, #45d69a 56%, #17916a);
+    box-shadow:0 0 22px rgba(69,214,154,.65);}
+</style></head>
+<body>
+<div id="stage">
+
+  <div class="claim">
+    <div class="num">60<span class="fps">fps</span></div>
+    <div class="said">of a live window,<span>from a machine that isn't here.</span></div>
+    <div class="rule"></div>
+    <div class="spec">H.264 over the <b>WebRTC DataChannel</b></div>
+    <div class="sub">peer-to-peer · 2.6 Mbps · 17 ms glass to glass</div>
+  </div>
+
+  <svg width="1120" height="650" style="position:absolute;inset:0;z-index:0;">
+    <line x1="748" y1="96" x2="748" y2="176" stroke="#2f6a56" stroke-width="2" stroke-dasharray="2 7" stroke-linecap="round"/>
+    <circle id="beamdot" cx="748" cy="110" r="4" fill="#45d69a"/>
+  </svg>
+
+  <div class="machine">
+    <div class="studio"></div>
+    <div class="mlabel"><div class="n"><i></i>mac-studio</div><div class="s">Mac Studio · macOS</div></div>
+  </div>
+
+  <div class="viewer">
+    <div class="chrome"><i></i><i></i><i></i><span class="u">app.reminal.sh/mac-studio</span></div>
+    <div class="wbar"><i></i><i></i><i></i><span class="nm">orbit.mov — Motion</span>
+      <span class="host"><u></u>mirrored</span></div>
+    <div class="canvas">
+      <svg class="path" width="624" height="360"><path id="fig" fill="none"
+        stroke="rgba(90,200,160,.13)" stroke-width="1.5" stroke-dasharray="5 8"/></svg>
+      <div id="tail"></div>
+      <div class="puck" id="puck"></div>
+      <div class="rail"><u class="on"></u><u></u><u></u><u></u><u></u></div>
+      <div class="strip"><div class="wave" id="wave"></div><div class="ph" id="ph"></div></div>
+    </div>
+  </div>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+
+// 20 gif fps, 2-second loop. The mirror runs at 60, so three frames land between
+// every pair of gif frames — those are what the trail is made of.
+window.TOTAL = 40;
+const SUB = 1 / 120;             // one delivered frame, as a fraction of the loop
+
+// the composition the mirrored app is playing: a figure eight, so the loop closes
+const CX = 332, CY = 158, AX = 208, AY = 74, PUCK = 30;
+function pos(p) {
+  const a = p * Math.PI * 2;
+  return { x: CX + AX * Math.sin(a), y: CY + AY * Math.sin(2 * a) };
+}
+(function drawPath() {
+  let d = '';
+  for (let i = 0; i <= 220; i++) { const q = pos(i / 220); d += (i ? 'L' : 'M') + q.x.toFixed(1) + ',' + q.y.toFixed(1); }
+  $('fig').setAttribute('d', d + 'Z');
+})();
+
+// the app's own timeline waveform (static — only the playhead moves)
+$('wave').innerHTML = Array.from({ length: 58 }, (_, i) => {
+  const s = Math.abs(Math.sin(i * 12.9898) * 43758.5453) % 1;
+  return '<b style="height:' + (4 + Math.round(15 * s)) + 'px"></b>';
+}).join('');
+
+// motion trail — the last ~12 delivered frames, sampled twice each so the streak
+// reads as one continuous comet instead of a chain of beads
+const N = 24;
+$('tail').innerHTML = Array.from({ length: N }, () => '<div class="trail"></div>').join('');
+// built farthest-first, so nearer samples paint over older ones
+const TRAIL = [...$('tail').children].map((el, i) => {
+  const k = N - i, u = k / N;
+  return { el, back: k * SUB / 2, size: 26 * Math.pow(1 - u, 0.62) + 3, alpha: 0.4 * Math.pow(1 - u, 1.35) };
+});
+
+window.render = function (t) {
+  const p = t / window.TOTAL;
+  const q = pos(p);
+  $('puck').style.left = (q.x - PUCK / 2) + 'px';
+  $('puck').style.top = (q.y - PUCK / 2) + 'px';
+
+  TRAIL.forEach(g => {
+    const r = pos((p - g.back + 1) % 1);
+    g.el.style.width = g.el.style.height = g.size + 'px';
+    g.el.style.left = (r.x - g.size / 2) + 'px';
+    g.el.style.top = (r.y - g.size / 2) + 'px';
+    g.el.style.opacity = g.alpha;
+  });
+
+  $('ph').style.left = (12 + 552 * p) + 'px';
+  $('beamdot').setAttribute('cy', 100 + ((p * 3) % 1) * 74);
+};
+window.render(0);
+</script>
+</body></html>
