@@ -309,7 +309,7 @@ The mirroring you see above isn't macOS-only — window capture **and** full con
 | Owner connect (PIN-free) · `reminal machines` | ✅ | ✅ | ✅ |
 | Window & desktop mirroring + control | ✅ ScreenCaptureKit — H.264 up to 60 fps | ✅ X11 — `wmctrl` · `xdotool` · ImageMagick | ✅ Win32 — PrintWindow · SendInput |
 | Closed-lid mode (auto virtual display) | ✅ | — | — |
-| Hot restart (`reminal restart`) | ✅ | ✅ | — (no exec() — start a new session after upgrading) |
+| Hot restart (`reminal restart`) | ✅ | ✅ | ✅ background sessions (foreground: exit & re-run) |
 
 <sub>Linux capture needs an **X11** session (or Xwayland) — native Wayland blocks synthetic input, so it isn't supported yet. Apple Silicon, x86_64, and Windows ARM64 all supported.</sub>
 
@@ -320,7 +320,7 @@ The mirroring you see above isn't macOS-only — window capture **and** full con
 - **Firewall prompt on first mirror**: when a viewer first attaches to a window/desktop pane, Windows Firewall asks about reminal — that's the direct peer-to-peer (WebRTC) stream binding a UDP port, the same prompt any video-call app gets. **Allow** enables P2P; **Cancel** is also fine — streaming falls back to the encrypted relay path.
 - **Streaming**: Windows uses the JPEG capture path (~5–15 fps). The 60 fps H.264 pipeline is currently macOS-only.
 - **Mirroring needs a logged-in desktop** — a machine sitting at the login screen (or a service session) has no windows to capture; terminal sharing works regardless.
-- **Upgrades**: `reminal upgrade` swaps the exe in place (the running one is renamed aside). Hot restart isn't available — running sessions keep their old version until you start new ones; the background host restarts itself automatically.
+- **Upgrades & hot restart**: `reminal upgrade` swaps the exe in place (the running one is renamed aside), and `reminal restart` hot-swaps a *background* session's agent onto the new binary without touching the shell inside — each session's shell lives in a tiny ConPTY-holder process, so the agent can be replaced under it (the session's PID changes, unlike Unix). Foreground sessions can't hot-restart (the launching terminal owns the console) — exit and re-run those. The background host also restarts itself automatically after an upgrade.
 
 ### Commands
 

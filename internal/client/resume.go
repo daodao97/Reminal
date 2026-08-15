@@ -21,4 +21,8 @@ type ResumeState struct {
 	Token     string
 	StartedAt time.Time
 	PTY       *pty.Session
+	// HandshakeAddr is Windows-only: the OLD agent's loopback listener, so the
+	// resumed agent can report "registered" and release it to exit. Unix's
+	// exec-based restart has no separate process to notify.
+	HandshakeAddr string
 }

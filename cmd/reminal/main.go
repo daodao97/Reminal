@@ -22,6 +22,7 @@ import (
 	"github.com/reminal/reminal/internal/client"
 	"github.com/reminal/reminal/internal/keepawake"
 	"github.com/reminal/reminal/internal/proc"
+	"github.com/reminal/reminal/internal/pty"
 	"github.com/reminal/reminal/internal/session"
 	"github.com/reminal/reminal/internal/updater"
 	"golang.org/x/term"
@@ -52,7 +53,7 @@ func main() {
 		fmt.Fprintf(os.Stderr, "resume error: %v\n", err)
 		os.Exit(1)
 	} else if resume != nil {
-		agent, err := client.NewAgentWith(version, client.AgentOptions{Resume: resume})
+		agent, err := client.NewAgentWith(version, client.AgentOptions{Resume: resume, HandshakeAddr: resume.HandshakeAddr})
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "resume error: %v\n", err)
 			os.Exit(1)
@@ -66,6 +67,18 @@ func main() {
 
 	if len(os.Args) > 1 {
 		switch os.Args[1] {
+		case "__ptyhold":
+			// Hidden: the per-session ConPTY holder that owns the shell so hot
+			// restart can swap the agent underneath it (Windows-only; see
+			// internal/pty/holder_windows.go).
+			if len(os.Args) < 4 {
+				os.Exit(2)
+			}
+			if err := pty.RunHolder(os.Args[2], os.Args[3]); err != nil {
+				fmt.Fprintf(os.Stderr, "ptyhold: %v\n", err)
+				os.Exit(1)
+			}
+			return
 		case "relay":
 			port := ""
 			if len(os.Args) > 2 {

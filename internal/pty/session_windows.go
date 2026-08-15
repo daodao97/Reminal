@@ -15,7 +15,7 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-type Session struct {
+type directSession struct {
 	hpc     windows.Handle // the pseudo console (HPCON)
 	inPipe  *os.File       // our write end → shell stdin
 	outPipe *os.File       // our read end ← shell output
@@ -34,7 +34,7 @@ type Session struct {
 	closeErr  error
 }
 
-func Start(shell string, env ...string) (*Session, error) {
+func startDirect(shell string, env ...string) (*directSession, error) {
 	// ConPTY wiring: two anonymous pipe pairs. The pseudo console gets the
 	// input-read and output-write ends; we keep the opposite ends and expose
 	// them through Read/Write. There is no login-shell argv trick here — that
@@ -70,7 +70,7 @@ func Start(shell string, env ...string) (*Session, error) {
 		return nil, fmt.Errorf("CreatePseudoConsole: %w", err)
 	}
 
-	fail := func(err error) (*Session, error) {
+	fail := func(err error) (*directSession, error) {
 		windows.ClosePseudoConsole(hpc)
 		inWrite.Close()
 		outRead.Close()
@@ -127,7 +127,7 @@ func Start(shell string, env ...string) (*Session, error) {
 	}
 	windows.CloseHandle(pi.Thread) // never needed; the process handle is kept for Wait
 
-	s := &Session{
+	s := &directSession{
 		hpc:      hpc,
 		inPipe:   inWrite,
 		outPipe:  outRead,
@@ -149,7 +149,7 @@ func Start(shell string, env ...string) (*Session, error) {
 // dead shell would leave the session (and its viewers) hanging forever.
 // Closing the console EOFs outPipe, the pump drains the tail and returns, and
 // Wait callers unblock via waitDone.
-func (s *Session) reap() {
+func (s *directSession) reap() {
 	_, err := windows.WaitForSingleObject(s.proc, windows.INFINITE)
 	if err == nil {
 		var code uint32
@@ -167,7 +167,7 @@ func (s *Session) reap() {
 
 // closePseudoConsole closes the HPCON exactly once. Both the reaper and
 // Close race to call it; the mutex + flag make that safe.
-func (s *Session) closePseudoConsole() {
+func (s *directSession) closePseudoConsole() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if !s.hpcClosed {
@@ -176,15 +176,15 @@ func (s *Session) closePseudoConsole() {
 	}
 }
 
-func (s *Session) Read(p []byte) (int, error) {
+func (s *directSession) Read(p []byte) (int, error) {
 	return s.outPipe.Read(p)
 }
 
-func (s *Session) Write(p []byte) (int, error) {
+func (s *directSession) Write(p []byte) (int, error) {
 	return s.inPipe.Write(p)
 }
 
-func (s *Session) Resize(cols, rows uint16) error {
+func (s *directSession) Resize(cols, rows uint16) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.hpcClosed {
@@ -200,13 +200,13 @@ func (s *Session) Resize(cols, rows uint16) error {
 // Getsize reports the last size set on the pseudo console (the 80x24 default
 // from Start until a viewer resizes it). ConPTY has no getter, so we remember
 // what we told it.
-func (s *Session) Getsize() (cols, rows uint16, err error) {
+func (s *directSession) Getsize() (cols, rows uint16, err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.cols, s.rows, nil
 }
 
-func (s *Session) Wait() error {
+func (s *directSession) Wait() error {
 	<-s.waitDone
 	return s.waitErr
 }
@@ -216,7 +216,7 @@ func (s *Session) Wait() error {
 // HPCON close must come first so any Read blocked on outPipe unblocks before
 // outPipe.Close waits for it. Idempotent, and safe against the concurrent
 // reaper via closePseudoConsole's once-semantics.
-func (s *Session) Close() error {
+func (s *directSession) Close() error {
 	s.closeOnce.Do(func() {
 		s.closePseudoConsole()
 		s.closeErr = s.inPipe.Close()
@@ -227,24 +227,17 @@ func (s *Session) Close() error {
 	return s.closeErr
 }
 
-// Fd is only meaningful on the Unix hot-restart path, which passes the PTY
-// master across a syscall.Exec boundary. There is no equivalent on Windows.
-func (s *Session) Fd() uintptr {
-	return 0
-}
-
-// Pid returns the spawned shell's process id, used to read the live working
-// directory for `reminal list`.
-func (s *Session) Pid() int {
+// Pid returns the spawned shell's process id.
+func (s *directSession) Pid() int {
 	return s.pid
 }
 
-func (s *Session) CopyFrom(r io.Reader, done chan<- struct{}) {
+func (s *directSession) CopyFrom(r io.Reader, done chan<- struct{}) {
 	defer close(done)
 	_, _ = io.Copy(s.inPipe, r)
 }
 
-func (s *Session) CopyTo(w io.Writer, done chan<- struct{}) {
+func (s *directSession) CopyTo(w io.Writer, done chan<- struct{}) {
 	defer close(done)
 	_, _ = io.Copy(w, s.outPipe)
 }
