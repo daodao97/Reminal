@@ -52,6 +52,11 @@ const (
 	// envResumePTYSock carries the ConPTY holder's socket path — the Windows
 	// analogue of Unix's inherited PTY fd.
 	envResumePTYSock = "REMINAL_RESUME_PTY_SOCK"
+	// envResumeName carries the user-set session label; the predecessor's
+	// on-disk record can't be read back for it (its pid is dead by then).
+	envResumeName = "REMINAL_RESUME_NAME"
+	// envResumeHeadless preserves the session's headless mode across the swap.
+	envResumeHeadless = "REMINAL_RESUME_HEADLESS"
 )
 
 // LoadResumeState reconstructs a hot-restarted session in the successor
@@ -66,6 +71,7 @@ func LoadResumeState() (*ResumeState, error) {
 	pinHash := os.Getenv(envResumePinHash)
 	token := os.Getenv(envResumeToken)
 	sock := os.Getenv(envResumePTYSock)
+	name := os.Getenv(envResumeName)
 	if id == "" || pin == "" || pinHash == "" || sock == "" {
 		return nil, errors.New("resume requested but session id / pin / pin_hash / pty sock missing")
 	}
@@ -82,7 +88,7 @@ func LoadResumeState() (*ResumeState, error) {
 
 	// Scrub the resume env so children of the new agent never see it.
 	for _, k := range []string{envResume, envResumeSessionID, envResumePIN,
-		envResumePinHash, envResumeToken, envResumeStartedAt, envResumePTYSock} {
+		envResumePinHash, envResumeToken, envResumeStartedAt, envResumePTYSock, envResumeName} {
 		_ = os.Unsetenv(k)
 	}
 
@@ -93,11 +99,21 @@ func LoadResumeState() (*ResumeState, error) {
 		Token:     token,
 		StartedAt: startedAt,
 		PTY:       sess,
+		Name:      name,
+		Headless:  os.Getenv(envResumeHeadless) == "1",
 		// The old agent set up a loopback handshake (prepareHandshake put the
 		// address on our argv); report registration back so it knows it may
 		// exit. Empty when nothing was passed — then nobody is waiting.
 		HandshakeAddr: ParseHandshakeAddr(os.Args),
 	}, nil
+}
+
+// boolEnv renders a bool for the resume env.
+func boolEnv(b bool) string {
+	if b {
+		return "1"
+	}
+	return "0"
 }
 
 // executeRestart hands the session to a fresh process of the (presumably
@@ -123,6 +139,16 @@ func (a *Agent) executeRestart() error {
 	}
 	defer devnull.Close()
 
+	// From here on the successor may connect to the holder at any moment,
+	// which supersedes our PTY connection and makes Run() wind down through
+	// its shell-exit path concurrently. Flag the handoff FIRST so no exit
+	// path of ours clears the record the successor is about to own.
+	a.restarting.Store(true)
+
+	a.metaMu.Lock()
+	name := a.name
+	a.metaMu.Unlock()
+
 	cmd := exec.Command(exe)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = devnull, devnull, devnull
 	cmd.Env = append(os.Environ(),
@@ -133,15 +159,19 @@ func (a *Agent) executeRestart() error {
 		envResumeToken+"="+a.token,
 		envResumeStartedAt+"="+strconv.FormatInt(a.startedAt.Unix(), 10),
 		envResumePTYSock+"="+sock,
+		envResumeName+"="+name,
+		envResumeHeadless+"="+boolEnv(a.headless),
 	)
 	// prepareHandshake appends --handshake-addr to argv (ignored by the
 	// resume path except for ParseHandshakeAddr) and sets the detach attrs.
 	recv, afterStart, err := prepareHandshake(cmd)
 	if err != nil {
+		a.restarting.Store(false) // nothing spawned — we remain sole owner
 		return err
 	}
 	if err := cmd.Start(); err != nil {
 		afterStart()
+		a.restarting.Store(false) // successor never existed — we remain sole owner
 		return fmt.Errorf("start successor: %w", err)
 	}
 	afterStart()
@@ -151,6 +181,12 @@ func (a *Agent) executeRestart() error {
 	// started — so a broken new binary can't take the session down: if it
 	// never reports, we time out and stay in charge.
 	if _, err := recv(20 * time.Second); err != nil {
+		// NOTE: if the successor got far enough to touch the holder before
+		// dying, our PTY connection is already superseded and this agent can
+		// no longer serve the shell either — the holder's grace timer then
+		// ends the session. The flag stays SET in that case: the record (ours
+		// or the successor's) is cleared by liveness pruning, not by us
+		// racing a half-born successor for it.
 		return fmt.Errorf("successor didn't come up (still serving on the old binary): %w", err)
 	}
 

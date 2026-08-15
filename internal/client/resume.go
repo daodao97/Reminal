@@ -21,6 +21,16 @@ type ResumeState struct {
 	Token     string
 	StartedAt time.Time
 	PTY       *pty.Session
+	// Name is the user-set session label, carried through env on Windows —
+	// the predecessor's on-disk record can't be trusted for recovery there,
+	// since its pid is already dead by the time the successor reads it (and
+	// liveness pruning treats such records as stale). Unix leaves this empty
+	// and recovers the name from the record, which its same-pid restart keeps
+	// valid.
+	Name string
+	// Headless mirrors the predecessor's mode — a hot-restarted background
+	// session must keep reporting (and behaving) headless.
+	Headless bool
 	// HandshakeAddr is Windows-only: the OLD agent's loopback listener, so the
 	// resumed agent can report "registered" and release it to exit. Unix's
 	// exec-based restart has no separate process to notify.

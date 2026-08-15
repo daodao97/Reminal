@@ -186,6 +186,14 @@ type Agent struct {
 	// reconnect loop stops trying to reach the relay and the local shell
 	// keeps running on the host terminal as a plain interactive session.
 	paused atomic.Bool
+
+	// restarting marks a Windows hot restart in flight: the session record on
+	// disk belongs to the SUCCESSOR process now, so this (old) agent's exit
+	// paths must not clear it. The holder superseding our PTY connection makes
+	// Run() return through the normal shell-exit cleanup concurrently with
+	// executeRestart's own exit — both paths honor this flag. Never set on
+	// Unix (exec-based restart runs no defers at all).
+	restarting atomic.Bool
 	// currentConnMu guards currentConn so the SIGUSR1 handler can close
 	// the live WS the moment a pause is requested, instead of waiting up
 	// to readDeadline (60s) for the read to time out.
@@ -413,9 +421,10 @@ func NewAgentWith(version string, opts AgentOptions) (*Agent, error) {
 			term:           r.PTY,
 			startedAt:      r.StartedAt,
 			resumed:        true,
-			headless:       opts.Headless,
+			headless:       opts.Headless || r.Headless,
 			handshakeFD:    opts.HandshakeFD,
 			handshakeAddr:  opts.HandshakeAddr,
+			name:           strings.TrimSpace(r.Name),
 			cwd:            currentCwd(),
 		}, nil
 	}
@@ -512,15 +521,21 @@ func (a *Agent) Run() error {
 	if !a.resumed {
 		a.startedAt = time.Now()
 	} else if a.name == "" {
-		// Hot-restart preserves the PID, so the prior record is still on
-		// disk. Recover the user-set name (ResumeState doesn't carry it) so
-		// it survives `reminal restart`. cwd already survives via Getwd().
+		// On Unix, hot-restart preserves the PID, so the prior record is
+		// still on disk and valid — recover the user-set name from it. On
+		// Windows the name arrives via the resume env instead (the old
+		// record's pid is dead by now, so reading it back is unreliable);
+		// that value was applied in the constructor, making this a no-op.
 		if prev, err := session.ReadActiveByID(a.sessionID); err == nil {
 			a.name = prev.Name
 		}
 	}
 	_ = session.WriteActive(a.activeRecord(0))
-	defer func() { _ = session.ClearActive(a.sessionID) }()
+	defer func() {
+		if !a.restarting.Load() {
+			_ = session.ClearActive(a.sessionID)
+		}
+	}()
 
 	// Start the per-agent control socket so `reminal send <file>` (and any
 	// other future sibling commands) can talk to us locally without going
