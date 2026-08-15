@@ -20,6 +20,10 @@ import (
 //   - Linux: read /proc/<pid>/cwd — cheap, no subprocess.
 //   - macOS: shell out to lsof — there's no /proc, and proc_pidinfo needs
 //     cgo/libproc which the static (CGO_ENABLED=0) build doesn't have.
+//   - Windows: read the target's PEB (see shellcwd_windows.go) — preferring
+//     the most recently started DESCENDANT of the shell, which loosely mirrors
+//     the Unix "foreground process group" behavior so the Dir column tracks
+//     an editor or tool launched from the shell, not just the shell itself.
 //
 // Best-effort: any error yields "" and the caller keeps the previous value.
 func shellCwd(pid int) string {
@@ -31,6 +35,8 @@ func shellCwd(pid int) string {
 		if p, err := os.Readlink(fmt.Sprintf("/proc/%d/cwd", pid)); err == nil {
 			return p
 		}
+	case "windows":
+		return shellCwdWindows(pid)
 	case "darwin":
 		// `lsof -a -d cwd -p PID -Fn` prints field lines; the cwd path is the
 		// one prefixed with "n", e.g.:  p<pid>\nfcwd\nn/Users/me/project

@@ -135,6 +135,22 @@ if ((`$env:Path -split ';') -notcontains "$installDir") { `$env:Path += ";$insta
 if (Get-Command reminal -ErrorAction SilentlyContinue) {
     reminal completion powershell | Out-String | Invoke-Expression
 }
+# Keep the PROCESS working directory in sync with Set-Location. PowerShell
+# deliberately doesn't chdir on cd (locations are per-runspace), which leaves
+# the directory other tools read (reminal's Dir column, anything inspecting
+# the process) frozen at launch. Wrapping the prompt is the only mechanism
+# that works on BOTH Windows PowerShell 5.1 and pwsh (LocationChangedAction
+# is 6+); the existing prompt is preserved by delegation, and the wrap-once
+# guard keeps installer re-runs from stacking wrappers.
+try {
+    if (`$null -eq `$global:__reminalPromptBase) {
+        `$global:__reminalPromptBase = `$function:prompt
+        function global:prompt {
+            try { if (`$pwd.Provider.Name -eq 'FileSystem') { [Environment]::CurrentDirectory = `$pwd.ProviderPath } } catch {}
+            & `$global:__reminalPromptBase
+        }
+    }
+} catch {}
 $end
 "@
     $docs = [Environment]::GetFolderPath("MyDocuments")
