@@ -194,6 +194,11 @@ type Agent struct {
 	// executeRestart's own exit — both paths honor this flag. Never set on
 	// Unix (exec-based restart runs no defers at all).
 	restarting atomic.Bool
+	// converting is the terminal phase of a FOREGROUND Windows restart: the
+	// console is being handed to the in-process viewer. pumpHostStdin exits
+	// on this (and only this) so a transient/failed restart never kills the
+	// host keyboard permanently.
+	converting atomic.Bool
 	// currentConnMu guards currentConn so the SIGUSR1 handler can close
 	// the live WS the moment a pause is requested, instead of waiting up
 	// to readDeadline (60s) for the read to time out.
@@ -536,6 +541,26 @@ func (a *Agent) Run() error {
 			_ = session.ClearActive(a.sessionID)
 		}
 	}()
+	// During a Windows hot restart, Run winds down the moment the successor
+	// adopts the holder — potentially BEFORE the successor has written its
+	// own record. If this process died right then, the record on disk would
+	// briefly carry a dead pid, and a `reminal list` in that window would see
+	// no session (and prune the file). Linger until executeRestart's os.Exit
+	// ends us the moment the successor confirms registration; the timeout
+	// only matters when the successor dies mid-handoff, so the old process
+	// can't hang around forever as a ghost.
+	defer func() {
+		if !a.restarting.Load() {
+			return
+		}
+		if a.localActive {
+			// Foreground conversion: executeRestart turns this process into
+			// an attached viewer and eventually os.Exit()s. Parking here
+			// keeps main() from returning underneath it.
+			select {}
+		}
+		time.Sleep(30 * time.Second)
+	}()
 
 	// Start the per-agent control socket so `reminal send <file>` (and any
 	// other future sibling commands) can talk to us locally without going
@@ -605,14 +630,30 @@ func (a *Agent) Run() error {
 		oldState, terr := xterm.MakeRaw(int(os.Stdin.Fd()))
 		if terr == nil {
 			a.hostOldState = oldState
-			defer xterm.Restore(int(os.Stdin.Fd()), oldState)
+			// All three restores are skipped mid-hot-restart (Windows): the
+			// console is being handed to the in-process viewer, which manages
+			// its own raw mode and indicator — a late cooked-mode restore
+			// here would clobber it.
+			defer func() {
+				if !a.restarting.Load() {
+					_ = xterm.Restore(int(os.Stdin.Fd()), oldState)
+				}
+			}()
 			// Registered after Restore so it runs before it (LIFO): disable any
 			// terminal modes (e.g. color-scheme notifications) that inner
 			// programs leaked onto the host terminal, so they don't spew stray
 			// reports at the user's shell prompt after reminal exits.
-			defer resetLeakedTermModes()
+			defer func() {
+				if !a.restarting.Load() {
+					resetLeakedTermModes()
+				}
+			}()
 			setHostIndicator(a.sessionID)
-			defer clearHostIndicator()
+			defer func() {
+				if !a.restarting.Load() {
+					clearHostIndicator()
+				}
+			}()
 			a.localActive = true
 			a.syncSizeToPTY()
 			go a.pumpHostStdin()
@@ -639,6 +680,9 @@ func (a *Agent) Run() error {
 	// Skipped in headless mode (no host terminal to print to).
 	if !a.headless {
 		defer func() {
+			if a.restarting.Load() {
+				return // hot restart, not an ending — becomeViewer narrates it
+			}
 			agentNotify("\n  [%s] Session ended (v%s) · ran for %v\n  Run `reminal` again to start a new session.\n",
 				time.Now().Format("15:04:05"),
 				a.version,
@@ -1082,6 +1126,7 @@ func (a *Agent) activeRecord(viewers int) session.Active {
 		OpenURL:      fmt.Sprintf("%s/?s=%s", a.webURL, a.sessionID),
 		PID:          os.Getpid(),
 		StartedAt:    a.startedAt,
+		PidStartedAt: session.SelfStartTime(),
 		Headless:     a.headless,
 		Viewers:      viewers,
 		Name:         name,
@@ -2267,6 +2312,25 @@ func (a *Agent) pumpHostStdin() {
 	buf := make([]byte, 4096)
 	for {
 		n, err := os.Stdin.Read(buf)
+		if a.converting.Load() {
+			// The console now belongs to the in-process viewer becomeViewer
+			// is starting; stop competing for stdin. The chunk in hand is
+			// the wake-up nudge (or a doomed keystroke), not input to
+			// forward.
+			return
+		}
+		if a.restarting.Load() {
+			// Handoff in flight but the console's fate isn't decided yet —
+			// keep the pump ALIVE (a failed restart reclaims this session
+			// and still needs a working keyboard), just don't forward: the
+			// shell connection is (or is about to be) superseded. A read
+			// error still ends the pump — spinning on an erroring stdin
+			// would burn a core for the whole handoff window.
+			if err != nil {
+				return
+			}
+			continue
+		}
 		if n > 0 {
 			data := buf[:n]
 			if i := bytes.IndexByte(data, escapeKey); i >= 0 {

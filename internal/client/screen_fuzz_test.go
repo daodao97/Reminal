@@ -27,11 +27,11 @@ var (
 func FuzzRawEmulatorWrite(f *testing.F) {
 	seeds := [][]byte{
 		[]byte("hello\r\nworld\r\n\x1b[2J"),
-		[]byte("\x1b[r\x88"),         // vviewWriter's trigger — harmless to the raw emulator, but seed it
+		[]byte("\x1b[r\x88"), // vviewWriter's trigger — harmless to the raw emulator, but seed it
 		[]byte("\x1b[999;999H\x1b[J"),
 		[]byte("\x1b]0;title\x07"),
-		[]byte("\x1b#8\x1b[1;1H"),    // DECALN
-		[]byte("\x1bP+q544e\x1b\\"),  // DCS
+		[]byte("\x1b#8\x1b[1;1H"),   // DECALN
+		[]byte("\x1bP+q544e\x1b\\"), // DCS
 		[]byte("\x1b[38;2;255;0;0m\x1b[48;5;16m"),
 		[]byte("\x1b[6n\x1b[?2004h\x1b[?1049h\x1b[?1049l"),
 	}

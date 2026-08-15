@@ -24,20 +24,26 @@ package client
 // it); everything that consumes the pid — active record, control socket —
 // is re-derived by the successor at startup.
 //
-// Foreground sessions are refused: the agent's console is owned by whatever
-// terminal launched it, and when the old process exits, that shell reclaims
-// the console and would fight the successor for stdin. Headless sessions
-// (`reminal new`, daemon-spawned) have no console and restart cleanly.
+// Foreground sessions restart by CONVERSION: the successor is spawned
+// headless (same as any background restart), and the old process — which owns
+// the launching terminal's console and must not exit (the invoking shell
+// would reclaim the prompt and fight anything else reading the console) —
+// turns itself into an attached viewer of its own session. One console owner
+// throughout, the user keeps typing into the same shell, and any FURTHER
+// restart is then a plain headless restart with the viewer riding through the
+// relay's reconnect supersede.
 
 import (
 	"errors"
 	"fmt"
 	"os"
 	"os/exec"
+	"os/signal"
 	"strconv"
 	"time"
 
 	"github.com/reminal/reminal/internal/pty"
+	xterm "golang.org/x/term"
 )
 
 // Env keys shared with the Unix restart (same names, so tooling that knows
@@ -86,9 +92,12 @@ func LoadResumeState() (*ResumeState, error) {
 		return nil, fmt.Errorf("resume: reattach pty holder: %w", err)
 	}
 
+	headless := os.Getenv(envResumeHeadless) == "1"
+
 	// Scrub the resume env so children of the new agent never see it.
 	for _, k := range []string{envResume, envResumeSessionID, envResumePIN,
-		envResumePinHash, envResumeToken, envResumeStartedAt, envResumePTYSock, envResumeName} {
+		envResumePinHash, envResumeToken, envResumeStartedAt, envResumePTYSock,
+		envResumeName, envResumeHeadless} {
 		_ = os.Unsetenv(k)
 	}
 
@@ -100,7 +109,7 @@ func LoadResumeState() (*ResumeState, error) {
 		StartedAt: startedAt,
 		PTY:       sess,
 		Name:      name,
-		Headless:  os.Getenv(envResumeHeadless) == "1",
+		Headless:  headless,
 		// The old agent set up a loopback handshake (prepareHandshake put the
 		// address on our argv); report registration back so it knows it may
 		// exit. Empty when nothing was passed — then nobody is waiting.
@@ -121,12 +130,12 @@ func boolEnv(b bool) string {
 // only when the handoff couldn't be completed — the current agent is then
 // still fully in charge.
 func (a *Agent) executeRestart() error {
-	if a.localActive {
-		return errors.New("hot restart isn't supported for foreground sessions on Windows — it works for background sessions (`reminal new`); for this one, exit and re-run reminal")
-	}
 	exe, err := os.Executable()
 	if err != nil {
 		return fmt.Errorf("locate self for restart: %w", err)
+	}
+	if a.term == nil {
+		return errors.New("session is still starting — retry in a moment")
 	}
 	sock := a.term.SockPath()
 	if sock == "" {
@@ -142,8 +151,13 @@ func (a *Agent) executeRestart() error {
 	// From here on the successor may connect to the holder at any moment,
 	// which supersedes our PTY connection and makes Run() wind down through
 	// its shell-exit path concurrently. Flag the handoff FIRST so no exit
-	// path of ours clears the record the successor is about to own.
-	a.restarting.Store(true)
+	// path of ours clears the record the successor is about to own. The CAS
+	// also serialises restarts: a second `reminal restart` while one is in
+	// flight would spawn a second successor to fight the first over the
+	// holder.
+	if !a.restarting.CompareAndSwap(false, true) {
+		return errors.New("a restart is already in flight")
+	}
 
 	a.metaMu.Lock()
 	name := a.name
@@ -151,6 +165,16 @@ func (a *Agent) executeRestart() error {
 
 	cmd := exec.Command(exe)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = devnull, devnull, devnull
+	// Diagnosability: the successor's death is otherwise silent (stdio is
+	// devnull). With REMINAL_RESTART_DEBUG=1 its stderr lands in a file.
+	if os.Getenv("REMINAL_RESTART_DEBUG") == "1" {
+		if home, herr := os.UserHomeDir(); herr == nil {
+			if f, ferr := os.OpenFile(home+"/.reminal/restart-debug.log", os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600); ferr == nil {
+				cmd.Stdout, cmd.Stderr = f, f
+				defer f.Close() // our copy; the successor holds its own handle
+			}
+		}
+	}
 	cmd.Env = append(os.Environ(),
 		envResume+"=1",
 		envResumeSessionID+"="+a.sessionID,
@@ -160,7 +184,9 @@ func (a *Agent) executeRestart() error {
 		envResumeStartedAt+"="+strconv.FormatInt(a.startedAt.Unix(), 10),
 		envResumePTYSock+"="+sock,
 		envResumeName+"="+name,
-		envResumeHeadless+"="+boolEnv(a.headless),
+		// A converting foreground session comes back HEADLESS — its old
+		// process becomes a viewer, not a host terminal.
+		envResumeHeadless+"="+boolEnv(a.headless || a.localActive),
 	)
 	// prepareHandshake appends --handshake-addr to argv (ignored by the
 	// resume path except for ParseHandshakeAddr) and sets the detach attrs.
@@ -175,26 +201,99 @@ func (a *Agent) executeRestart() error {
 		return fmt.Errorf("start successor: %w", err)
 	}
 	afterStart()
-	_ = cmd.Process.Release()
+	// Deliberately NOT Release()d: on timeout we must be able to kill it.
 
 	// Wait until the successor is REGISTERED with the relay — not merely
 	// started — so a broken new binary can't take the session down: if it
 	// never reports, we time out and stay in charge.
 	if _, err := recv(20 * time.Second); err != nil {
-		// NOTE: if the successor got far enough to touch the holder before
-		// dying, our PTY connection is already superseded and this agent can
-		// no longer serve the shell either — the holder's grace timer then
-		// ends the session. The flag stays SET in that case: the record (ours
-		// or the successor's) is cleared by liveness pruning, not by us
-		// racing a half-born successor for it.
-		return fmt.Errorf("successor didn't come up (still serving on the old binary): %w", err)
+		// Kill FIRST, check ownership second: a slow-but-alive successor
+		// (Defender scanning a fresh binary can stall a launch >20s) must
+		// not adopt the holder AFTER we've reclaimed — that's a split brain
+		// where our wind-down deletes its record and strands the session.
+		_ = cmd.Process.Kill()
+		go func() { _, _ = cmd.Process.Wait() }() // reap; the handle isn't needed again
+		// Brief settle: if the successor adopted at the very edge of the
+		// timeout, our read pump needs a beat to observe the superseded
+		// connection — a false "still alive" here would reclaim a session
+		// we no longer own and delete the successor's record on wind-down.
+		time.Sleep(150 * time.Millisecond)
+		if !a.term.Dead() {
+			// The successor never adopted the holder — we still own the
+			// shell, so reclaim sole ownership and keep serving.
+			a.restarting.Store(false)
+			return fmt.Errorf("successor didn't come up (still serving on the old binary): %w", err)
+		}
+		// The successor adopted the holder and THEN failed to register: our
+		// PTY connection is superseded, so nobody can serve the shell — the
+		// holder's grace timer ends the session. The flag stays SET so we
+		// don't race a half-born successor for the record (liveness pruning
+		// cleans it), and a FOREGROUND process must not park forever on the
+		// linger defer: restore the console and exit here.
+		if a.localActive {
+			if a.hostOldState != nil {
+				_ = xterm.Restore(int(os.Stdin.Fd()), a.hostOldState)
+			}
+			clearHostIndicator()
+			fmt.Fprintf(os.Stderr, "\nrestart failed after handoff began — the session is winding down: %v\n", err)
+			os.Exit(1)
+		}
+		return fmt.Errorf("successor adopted the session but never registered — session is winding down: %w", err)
 	}
+	_ = cmd.Process.Release()
 
 	// Successor owns the session now: it holds the pty socket, has rewritten
 	// the active record under its pid, and serves the relay. Tear down the
-	// pieces the successor re-creates, then exit WITHOUT defers — our
-	// deferred ClearActive would delete the record the successor just wrote.
+	// pieces the successor re-creates, then leave WITHOUT running Run's
+	// defers — our deferred ClearActive would delete the record the
+	// successor just wrote.
 	a.stopControlListener()
+
+	if a.localActive {
+		a.becomeViewer()
+		// unreachable — becomeViewer always ends in os.Exit
+	}
 	os.Exit(0)
 	return nil // unreachable
+}
+
+// becomeViewer is the tail of a foreground conversion: reclaim the console
+// from the (superseded) host machinery and attach to our own — now headless —
+// session as an ordinary viewer. Never returns.
+func (a *Agent) becomeViewer() {
+	// Terminal phase: from here the console belongs to the viewer. Set BEFORE
+	// the nudge so the woken pumpHostStdin read observes it and exits (it
+	// merely discards chunks during the earlier, still-revocable phase).
+	a.converting.Store(true)
+	// The conversion outlives Run()'s signal handling (its Notify was already
+	// Stopped); between the cooked-mode restore below and the viewer's own
+	// raw mode, a stray Ctrl-C would kill the process mid-conversion.
+	signal.Ignore(os.Interrupt)
+	// Unblock pumpHostStdin's pending console read, give it a beat to
+	// consume the nudge and exit, then flush the console input queue so the
+	// synthetic ENTER (or any doomed mid-conversion keystroke) can't leak
+	// through the viewer to the shell as a stray keypress.
+	nudgeConsoleStdin()
+	time.Sleep(150 * time.Millisecond)
+	flushConsoleStdin()
+
+	// The viewer expects a cooked terminal to start from (it does its own
+	// MakeRaw); Run's restore defers were suppressed by the restarting flag,
+	// so restore here, exactly once, on the conversion path.
+	if a.hostOldState != nil {
+		_ = xterm.Restore(int(os.Stdin.Fd()), a.hostOldState)
+	}
+	clearHostIndicator()
+	fmt.Printf("\r\n  [%s] Hot-restarted onto the new binary. The session now runs in the background;\r\n  this terminal is attached as a viewer — everything works as before. Ctrl-] detaches (session keeps running).\r\n\r\n",
+		time.Now().Format("15:04:05"))
+
+	v, err := NewViewer(a.sessionID, a.pin)
+	if err == nil {
+		err = v.Run()
+	}
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "viewer: %v\nreattach with: reminal attach %s\n", err, a.sessionID)
+		os.Exit(1)
+	}
+	os.Exit(0)
 }

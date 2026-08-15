@@ -36,8 +36,8 @@ func FuzzVViewWrite(f *testing.F) {
 		[]byte("\x1b[H\x1b[2J\x1b[31mred\x1b[0m"),
 		[]byte("\x1b[10;20Hpos\x1b[1B\x1b[2K"),
 		[]byte("\x1b[999999999;999999999H"), // absurd params
-		[]byte("\x1b["),                      // truncated CSI at edge
-		[]byte("\x1b[?25l\x1b[6n"),           // private + DSR (generates a response)
+		[]byte("\x1b["),                     // truncated CSI at edge
+		[]byte("\x1b[?25l\x1b[6n"),          // private + DSR (generates a response)
 		[]byte("\x1b[;;;;;;m\x1b[J\x1b[0J\x1b[1J\x1b[2J\x1b[3J"),
 		[]byte("\x1b[r\x1b[10;20r\x1b[A\x1b[B\x1b[C\x1b[D"), // DECSTBM + cursor moves
 		[]byte("\x1b[r\x88"),                                // regression: empty DECSTBM then a C1 byte

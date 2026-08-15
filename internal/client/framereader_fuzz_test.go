@@ -15,11 +15,11 @@ import (
 // (a finite reader must always reach EOF and close h.dead).
 func FuzzWinHelperReadLoop(f *testing.F) {
 	seeds := [][]byte{
-		{0, 0, 0, 3, 1, 2, 3},      // len=3, exactly 3 bytes
-		{0, 0, 0, 0},               // len=0 (rejected)
-		{0xFF, 0xFF, 0xFF, 0xFF},   // len ~4 GiB (> cap, rejected)
-		{0, 0, 0, 5, 1, 2},         // len=5 but only 2 bytes -> short read -> EOF
-		{},                         // empty
+		{0, 0, 0, 3, 1, 2, 3},             // len=3, exactly 3 bytes
+		{0, 0, 0, 0},                      // len=0 (rejected)
+		{0xFF, 0xFF, 0xFF, 0xFF},          // len ~4 GiB (> cap, rejected)
+		{0, 0, 0, 5, 1, 2},                // len=5 but only 2 bytes -> short read -> EOF
+		{},                                // empty
 		{0, 0, 0, 2, 9, 9, 0, 0, 0, 1, 7}, // two frames back-to-back
 	}
 	for _, s := range seeds {

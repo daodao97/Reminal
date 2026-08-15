@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/reminal/reminal/internal/proc"
@@ -30,6 +31,13 @@ type Active struct {
 	OpenURL   string    `json:"open_url"`
 	PID       int       `json:"pid"`
 	StartedAt time.Time `json:"started_at"`
+	// PidStartedAt is when the process currently identified by PID began — the
+	// liveness anchor for the PID-reuse check. Distinct from StartedAt: a
+	// Windows hot restart hands the SESSION to a fresh process, so the session
+	// birth time and the serving process's start time diverge (on Unix, exec
+	// keeps both). Zero in records written by older builds; the reuse check
+	// then falls back to StartedAt.
+	PidStartedAt time.Time `json:"pid_started_at,omitzero"`
 	// Kind distinguishes shell sessions ("" or "shell") from port
 	// forwards ("port"). Empty means shell for back-compat with
 	// records written before port-forwarding existed.
@@ -183,7 +191,7 @@ func ReadActiveByID(id string) (*Active, error) {
 	if err != nil {
 		return nil, err
 	}
-	if !pidAlive(a.PID) || pidReused(a.PID, a.StartedAt) {
+	if !pidAlive(a.PID) || pidReused(a.PID, a.pidAnchor()) {
 		_ = os.Remove(p)
 		return nil, os.ErrNotExist
 	}
@@ -196,6 +204,36 @@ func ReadActiveByID(id string) (*Active, error) {
 // record was written can only be a different process that inherited a recycled
 // PID — so the recorded session is dead.
 const pidReuseTolerance = 60 * time.Second
+
+// SelfStartTime returns this process's own kernel start time for stamping
+// into Active.PidStartedAt — falling back to "when first asked" on platforms
+// without a reader, which is still a safe (early) anchor. Cached: the value
+// must stay constant across record rewrites.
+func SelfStartTime() time.Time {
+	selfStartOnce.Do(func() {
+		if t, ok := procStartTime(os.Getpid()); ok {
+			selfStart = t
+			return
+		}
+		selfStart = time.Now()
+	})
+	return selfStart
+}
+
+var (
+	selfStartOnce sync.Once
+	selfStart     time.Time
+)
+
+// pidAnchor is the timestamp pidReused compares the process's kernel start
+// time against: the recorded process start when present, else the session
+// birth (legacy records, where the two coincide).
+func (a Active) pidAnchor() time.Time {
+	if !a.PidStartedAt.IsZero() {
+		return a.PidStartedAt
+	}
+	return a.StartedAt
+}
 
 // pidReused reports whether the process currently at pid started meaningfully
 // AFTER the session recorded startedAt — i.e. the OS reused the PID for an
@@ -240,7 +278,7 @@ func ReadAllActive() ([]Active, error) {
 		if err != nil {
 			continue // skip corrupt entries silently — best-effort enumeration
 		}
-		if !pidAlive(a.PID) || pidReused(a.PID, a.StartedAt) {
+		if !pidAlive(a.PID) || pidReused(a.PID, a.pidAnchor()) {
 			_ = os.Remove(full)
 			continue
 		}

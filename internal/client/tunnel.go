@@ -214,13 +214,14 @@ func (t *Tunnel) Run() error {
 
 func (t *Tunnel) activeRecord() session.Active {
 	return session.Active{
-		ID:        t.sessionID,
-		PIN:       t.pin,
-		OpenURL:   t.PublicURL(),
-		PID:       os.Getpid(),
-		StartedAt: t.startedAt,
-		Kind:      session.KindPort,
-		Port:      t.port,
+		ID:           t.sessionID,
+		PidStartedAt: session.SelfStartTime(),
+		PIN:          t.pin,
+		OpenURL:      t.PublicURL(),
+		PID:          os.Getpid(),
+		StartedAt:    t.startedAt,
+		Kind:         session.KindPort,
+		Port:         t.port,
 	}
 }
 

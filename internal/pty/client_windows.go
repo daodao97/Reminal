@@ -17,6 +17,7 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -58,8 +59,17 @@ func Start(shell string, env ...string) (*Session, error) {
 
 	cmd := exec.Command(exe, "__ptyhold", sock, shell)
 	// The holder composes the shell's environment from its own (shellEnv), so
-	// session-specific extras ride the holder's env block.
-	cmd.Env = append(os.Environ(), env...)
+	// session-specific extras ride the holder's env block. The one-shot
+	// handshake token is stripped first: the shell has no business seeing the
+	// secret that authenticates the credentials report to our parent.
+	base := os.Environ()
+	kept := base[:0]
+	for _, kv := range base {
+		if !strings.HasPrefix(kv, "REMINAL_HS_TOKEN=") {
+			kept = append(kept, kv)
+		}
+	}
+	cmd.Env = append(kept, env...)
 	cmd.SysProcAttr = &syscall.SysProcAttr{
 		HideWindow:    true,
 		CreationFlags: syscall.CREATE_NEW_PROCESS_GROUP | detachedProcessFlag,
@@ -94,7 +104,10 @@ func AttachHolder(sock string) (*Session, error) {
 		time.Sleep(100 * time.Millisecond)
 	}
 
+	// A wedged holder must fail the attach, not hang it forever.
+	_ = conn.SetReadDeadline(time.Now().Add(10 * time.Second))
 	typ, payload, err := readFrame(conn)
+	_ = conn.SetReadDeadline(time.Time{})
 	if err != nil || typ != frHello || len(payload) != 8 {
 		_ = conn.Close()
 		if err == nil {
@@ -205,6 +218,19 @@ func (s *Session) Getsize() (cols, rows uint16, err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.cols, s.rows, nil
+}
+
+// Dead reports (without blocking) whether this client's link to the shell is
+// over — the shell exited, the holder vanished, or a hot-restart successor
+// superseded this connection. Used by executeRestart to decide whether a
+// failed handoff can be safely reclaimed.
+func (s *Session) Dead() bool {
+	select {
+	case <-s.waitDone:
+		return true
+	default:
+		return false
+	}
 }
 
 // Wait blocks until the shell inside the holder exits. The exit signal

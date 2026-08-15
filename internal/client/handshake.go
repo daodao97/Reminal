@@ -23,7 +23,12 @@ func handshakeWriter(fd int, addr string) (io.WriteCloser, error) {
 		if err != nil {
 			return nil, fmt.Errorf("dial handshake %s: %w", addr, err)
 		}
-		if _, err := io.WriteString(conn, "tok "+os.Getenv("REMINAL_HS_TOKEN")+"\n"); err != nil {
+		tok := os.Getenv("REMINAL_HS_TOKEN")
+		// One-shot secret: scrub it immediately so it can't leak into child
+		// processes — and so a later restart's fresh token can't end up as a
+		// DUPLICATE env entry alongside this one (ambiguous block ordering).
+		_ = os.Unsetenv("REMINAL_HS_TOKEN")
+		if _, err := io.WriteString(conn, "tok "+tok+"\n"); err != nil {
 			_ = conn.Close()
 			return nil, err
 		}

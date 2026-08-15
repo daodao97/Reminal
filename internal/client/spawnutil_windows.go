@@ -54,7 +54,16 @@ func prepareHandshake(cmd *exec.Cmd) (recv func(timeout time.Duration) (string, 
 	if cmd.Env == nil {
 		cmd.Env = os.Environ()
 	}
-	cmd.Env = append(cmd.Env, hsTokenEnv+"="+token)
+	// Drop any inherited token entry first — down a chain of restarts the
+	// parent's own environment can still carry one, and a duplicate key in
+	// the child's env block makes which value wins ambiguous.
+	kept := cmd.Env[:0]
+	for _, kv := range cmd.Env {
+		if !strings.HasPrefix(kv, hsTokenEnv+"=") {
+			kept = append(kept, kv)
+		}
+	}
+	cmd.Env = append(kept, hsTokenEnv+"="+token)
 	cmd.SysProcAttr = &syscall.SysProcAttr{
 		HideWindow:    true,
 		CreationFlags: syscall.CREATE_NEW_PROCESS_GROUP | detachedProcess,

@@ -239,7 +239,11 @@ func (a *Agent) handleWebRTCHello(conn *websocket.Conn, encData string) {
 		// Runs in pion's read goroutine, outside every other recover, on
 		// viewer-supplied data. Contain any panic so a crafted DataChannel message
 		// can't crash the agent.
-		defer func() { if r := recover(); r != nil { recoverLog("dc.OnMessage", r) } }()
+		defer func() {
+			if r := recover(); r != nil {
+				recoverLog("dc.OnMessage", r)
+			}
+		}()
 		// The only viewer→agent traffic on this channel is frame acks. Because
 		// the viewer acks a frame over the SAME transport it arrived on, an ack
 		// here proves a full frame really traversed this channel — so it's now

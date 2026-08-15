@@ -70,6 +70,20 @@ const (
 	reconnectGrace = 15 * time.Second
 )
 
+// connWriteTimeout bounds any single frame write to a client. A client that
+// stops draining (wedged agent, quick-edit console freeze on its stdout) must
+// read as "detached" — NOT hold the holder's lock forever, which would block
+// the very supersede a hot restart needs to rescue the session.
+const connWriteTimeout = 2 * time.Second
+
+// frameTo writes one frame to a client conn under that deadline.
+func frameTo(conn net.Conn, typ byte, payload []byte) error {
+	_ = conn.SetWriteDeadline(time.Now().Add(connWriteTimeout))
+	err := writeFrame(conn, typ, payload)
+	_ = conn.SetWriteDeadline(time.Time{})
+	return err
+}
+
 // writeFrame emits one frame; the caller serialises via its own lock.
 func writeFrame(w io.Writer, typ byte, payload []byte) error {
 	hdr := [3]byte{typ, byte(len(payload)), byte(len(payload) >> 8)}
@@ -211,9 +225,10 @@ func (h *holderState) attach(conn net.Conn) {
 	binary.LittleEndian.PutUint32(hello[0:], uint32(h.sess.Pid()))
 	binary.LittleEndian.PutUint16(hello[4:], cols)
 	binary.LittleEndian.PutUint16(hello[6:], rows)
-	if writeFrame(conn, frHello, hello[:]) != nil {
+	if frameTo(conn, frHello, hello[:]) != nil {
 		_ = conn.Close()
 		h.conn = nil
+		h.lastDetach = time.Now() // failed attach still resets the grace clock
 		return
 	}
 	// Replay everything the shell said while nobody was listening.
@@ -222,9 +237,10 @@ func (h *holderState) attach(conn net.Conn) {
 		if end > len(h.ring) {
 			end = len(h.ring)
 		}
-		if writeFrame(conn, frData, h.ring[off:end]) != nil {
+		if frameTo(conn, frData, h.ring[off:end]) != nil {
 			_ = conn.Close()
 			h.conn = nil
+			h.lastDetach = time.Now()
 			return
 		}
 	}
@@ -236,7 +252,7 @@ func (h *holderState) deliver(b []byte) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if h.conn != nil {
-		if writeFrame(h.conn, frData, b) == nil {
+		if frameTo(h.conn, frData, b) == nil {
 			return
 		}
 		// Client write failed — treat as detached and fall through to buffer.
@@ -262,7 +278,7 @@ func (h *holderState) sendExit(code int32) {
 	if h.conn != nil {
 		var p [4]byte
 		binary.LittleEndian.PutUint32(p[:], uint32(code))
-		_ = writeFrame(h.conn, frExit, p[:])
+		_ = frameTo(h.conn, frExit, p[:])
 		_ = h.conn.Close()
 		h.conn = nil
 	}

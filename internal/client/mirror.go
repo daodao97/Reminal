@@ -88,7 +88,11 @@ func serveMirror(stop <-chan struct{}) {
 func handleMirrorConn(conn net.Conn) {
 	// Spawned per connection (go handleMirrorConn); a panic here would crash the
 	// always-on daemon and take down capture/input for every session. Contain it.
-	defer func() { if r := recover(); r != nil { recoverLog("handleMirrorConn", r) } }()
+	defer func() {
+		if r := recover(); r != nil {
+			recoverLog("handleMirrorConn", r)
+		}
+	}()
 	br := bufio.NewReader(conn)
 	line, err := br.ReadString('\n')
 	if err != nil {
