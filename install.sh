@@ -71,19 +71,32 @@ setup_shell() {
         echo "  + reminal shell setup written to $_rc"
     }
 
+    # OSC 7 cwd announcement: lets reminal's Dir column (and any modern
+    # terminal) follow cd's as EVENTS instead of being polled — the shell
+    # tells the terminal where it is. Percent-encodes the minimum that breaks
+    # a file:// URI. Harmless anywhere: unknown OSC is ignored by terminals.
+    _osc7_fn='__reminal_osc7() {
+  _p=$(printf "%s" "$PWD" | sed "s/%/%25/g; s/ /%20/g; s/#/%23/g")
+  printf "\033]7;file://%s%s\007" "${HOST:-$(hostname 2>/dev/null)}" "$_p"
+}'
+
     case "$(basename "${SHELL:-sh}")" in
         zsh)
             _add_to_rc "${ZDOTDIR:-$HOME}/.zshrc" "$_path_snip
 if command -v reminal >/dev/null 2>&1; then
   (( \$+functions[compdef] )) || { autoload -Uz compinit && compinit -u; }
   source <(reminal completion zsh)
-fi"
+fi
+$_osc7_fn
+autoload -Uz add-zsh-hook 2>/dev/null && { add-zsh-hook chpwd __reminal_osc7; __reminal_osc7; }"
             ;;
         bash)
             _rcfile="$HOME/.bashrc"
             [ "$OS" = "darwin" ] && [ -e "$HOME/.bash_profile" ] && _rcfile="$HOME/.bash_profile"
             _add_to_rc "$_rcfile" "$_path_snip
-command -v reminal >/dev/null 2>&1 && source <(reminal completion bash)"
+command -v reminal >/dev/null 2>&1 && source <(reminal completion bash)
+$_osc7_fn
+case \";\$PROMPT_COMMAND;\" in *\";__reminal_osc7;\"*) ;; *) PROMPT_COMMAND=\"__reminal_osc7\${PROMPT_COMMAND:+;\$PROMPT_COMMAND}\" ;; esac"
             ;;
         fish)
             _fdir="${XDG_CONFIG_HOME:-$HOME/.config}/fish/completions"

@@ -104,6 +104,12 @@ func AttachHolder(sock string) (*Session, error) {
 		time.Sleep(100 * time.Millisecond)
 	}
 
+	// Claim the session: the holder only adopts (and supersedes the previous
+	// client) after this frame, so probes can't hijack a live session.
+	if err := writeFrame(conn, frClaim, nil); err != nil {
+		_ = conn.Close()
+		return nil, fmt.Errorf("claim holder: %w", err)
+	}
 	// A wedged holder must fail the attach, not hang it forever.
 	_ = conn.SetReadDeadline(time.Now().Add(10 * time.Second))
 	typ, payload, err := readFrame(conn)

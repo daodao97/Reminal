@@ -55,6 +55,11 @@ const (
 	frResize = 0x03
 	frExit   = 0x04
 	frKill   = 0x05
+	// frClaim is the client's opening move: the holder adopts a connection
+	// (superseding the previous client) only AFTER a claim. Anything else —
+	// a liveness probe, a port scanner, the stale-socket sweep — can connect
+	// and disconnect without disturbing the live session.
+	frClaim = 0x06
 
 	// maxFramePayload bounds one frame; shell output is chunked to fit.
 	maxFramePayload = 32 * 1024
@@ -179,15 +184,25 @@ func RunHolder(sockPath, shell string) error {
 		}
 	}()
 
-	// Accept loop: one client at a time; new connection supersedes old.
+	// Accept loop: one client at a time; a connection supersedes the current
+	// client only once it CLAIMS the session (see frClaim).
 	go func() {
 		for {
 			conn, err := ln.Accept()
 			if err != nil {
 				return // listener closed — holder is exiting
 			}
-			h.attach(conn)
-			go h.serveClient(conn)
+			go func(conn net.Conn) {
+				_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+				typ, _, err := readFrame(conn)
+				if err != nil || typ != frClaim {
+					_ = conn.Close() // probe or stray dialer — not a client
+					return
+				}
+				_ = conn.SetReadDeadline(time.Time{})
+				h.attach(conn)
+				h.serveClient(conn)
+			}(conn)
 		}
 	}()
 

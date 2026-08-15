@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -160,6 +161,15 @@ type Agent struct {
 	// the last on-disk flush; the meta-flush loop clears it when it writes.
 	// Keeps idle sessions from churning the active record.
 	metaDirty atomic.Bool
+	// metaKick asks metaFlushLoop for an immediate flush (buffered 1, best
+	// effort) — used when the shell ANNOUNCES a cwd change via OSC so `list`
+	// reflects a cd in ~instantly instead of at the next 10s tick.
+	metaKick chan struct{}
+	// cwdFromOsc marks that this shell emits cwd escapes (OSC 7 / OSC 9;9),
+	// which are exact and event-driven; while true, the polled probe in
+	// refreshCwd stands down so a stale poll can't overwrite a fresh event.
+	// Guarded by metaMu.
+	cwdFromOsc bool
 	// curViewers caches the latest relay-reported viewer count so the
 	// meta-flush loop can rewrite the record without losing it (the
 	// viewer-count path passes the count explicitly; the meta path can't).
@@ -694,6 +704,13 @@ func (a *Agent) Run() error {
 	// very first byte (snapshot-on-attach; REMINAL_SNAPSHOT=0 disables it).
 	a.initScreen()
 
+	// Created before the PTY pump starts: the pump's OSC sniffer kicks this
+	// channel the moment the shell announces a cwd change.
+	a.metaKick = make(chan struct{}, 1)
+
+	// Housekeeping: clear socket litter left by crashed/killed predecessors.
+	go sweepStaleSockets()
+
 	shellExit := make(chan struct{})
 	go func() {
 		a.pumpPTY()
@@ -1136,6 +1153,56 @@ func (a *Agent) activeRecord(viewers int) session.Active {
 	}
 }
 
+// commitOscCwd records a cwd the SHELL announced via escape sequence — exact
+// and event-driven, so it also kicks an immediate record flush. Once a shell
+// proves it emits these, the polled probe stands down for the session.
+func (a *Agent) commitOscCwd(path string) {
+	path = strings.TrimSpace(path)
+	if path == "" || len(path) > 1024 {
+		return
+	}
+	a.metaMu.Lock()
+	changed := path != a.cwd
+	a.cwd = path
+	a.cwdFromOsc = true
+	a.metaMu.Unlock()
+	if changed {
+		a.metaDirty.Store(true)
+		if a.metaKick != nil {
+			select {
+			case a.metaKick <- struct{}{}:
+			default: // a kick is already pending — coalesce
+			}
+		}
+	}
+}
+
+// parseOSC7 extracts a filesystem path from an OSC 7 file:// URI. Parsed by
+// hand rather than url.Parse: the emitters are shell prompt hooks whose
+// escaping is best-effort, and a path with a space or '#' must still land.
+// Windows URIs arrive as file:///C:/dir — the leading slash before the drive
+// letter is URI syntax, not path.
+func parseOSC7(raw string) string {
+	raw = strings.TrimSpace(raw)
+	rest, ok := strings.CutPrefix(raw, "file://")
+	if !ok {
+		return ""
+	}
+	// Drop the authority (hostname) — everything before the first slash.
+	if i := strings.IndexByte(rest, '/'); i >= 0 {
+		rest = rest[i:]
+	} else {
+		return ""
+	}
+	if dec, err := url.PathUnescape(rest); err == nil {
+		rest = dec
+	}
+	if len(rest) >= 3 && rest[0] == '/' && rest[2] == ':' {
+		rest = rest[1:] // /C:/x → C:/x
+	}
+	return rest
+}
+
 // refreshCwd updates the recorded cwd from the shell's live working directory
 // so `reminal list` follows cd's instead of showing the launch dir. The PID is
 // read fresh each call (not cached) because after a hot-restart it comes from
@@ -1144,6 +1211,12 @@ func (a *Agent) activeRecord(viewers int) session.Active {
 func (a *Agent) refreshCwd() {
 	if a.term == nil {
 		return
+	}
+	a.metaMu.Lock()
+	fromOsc := a.cwdFromOsc
+	a.metaMu.Unlock()
+	if fromOsc {
+		return // the shell announces its cwd itself — don't fight it with a poll
 	}
 	if c := shellCwd(a.term.Pid()); c != "" {
 		a.metaMu.Lock()
@@ -1245,8 +1318,24 @@ func (a *Agent) commitTitle() {
 	if i < 0 {
 		return
 	}
-	if ps := s[:i]; ps != "0" && ps != "2" {
-		return // not a title-setting OSC (e.g. OSC 1 icon, OSC 12 cursor)
+	switch ps := s[:i]; ps {
+	case "7":
+		// OSC 7 (file://host/path) — the shell announcing its cwd; emitted by
+		// VS Code / Apple Terminal shell integrations.
+		a.commitOscCwd(parseOSC7(s[i+1:]))
+		return
+	case "9":
+		// OSC 9;9;<path> — the Windows Terminal / ConEmu cwd convention; our
+		// PowerShell prompt hook emits it (see install.ps1).
+		rest := s[i+1:]
+		if j := strings.IndexByte(rest, ';'); j >= 0 && rest[:j] == "9" {
+			a.commitOscCwd(strings.Trim(rest[j+1:], `"`))
+		}
+		return
+	case "0", "2":
+		// title-setting OSC — handled below
+	default:
+		return // e.g. OSC 1 icon, OSC 12 cursor
 	}
 	title := sanitizeTitle(s[i+1:])
 	if title == "" {
@@ -1287,21 +1376,28 @@ func sanitizeTitle(s string) string {
 func (a *Agent) metaFlushLoop(stop <-chan struct{}) {
 	t := time.NewTicker(10 * time.Second)
 	defer t.Stop()
+	flush := func() {
+		if a.paused.Load() {
+			return
+		}
+		if a.metaDirty.Swap(false) {
+			// A cd shows up as PTY output (the new prompt), so a dirty
+			// record is exactly when the cwd may have changed — refresh
+			// it before persisting.
+			a.refreshCwd()
+			_ = session.WriteActive(a.activeRecord(int(a.curViewers.Load())))
+		}
+	}
 	for {
 		select {
 		case <-stop:
 			return
 		case <-t.C:
-			if a.paused.Load() {
-				continue
-			}
-			if a.metaDirty.Swap(false) {
-				// A cd shows up as PTY output (the new prompt), so a dirty
-				// record is exactly when the cwd may have changed — refresh
-				// it before persisting.
-				a.refreshCwd()
-				_ = session.WriteActive(a.activeRecord(int(a.curViewers.Load())))
-			}
+			flush()
+		case <-a.metaKick:
+			// The shell announced a cwd change — reflect it now. Kicks are
+			// human-paced (one per cd), so no extra throttling needed.
+			flush()
 		}
 	}
 }

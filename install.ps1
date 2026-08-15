@@ -146,7 +146,15 @@ try {
     if (`$null -eq `$global:__reminalPromptBase) {
         `$global:__reminalPromptBase = `$function:prompt
         function global:prompt {
-            try { if (`$pwd.Provider.Name -eq 'FileSystem') { [Environment]::CurrentDirectory = `$pwd.ProviderPath } } catch {}
+            try {
+                if (`$pwd.Provider.Name -eq 'FileSystem') {
+                    [Environment]::CurrentDirectory = `$pwd.ProviderPath
+                    # OSC 9;9 -- announce the cwd to the hosting terminal
+                    # (Windows Terminal convention; reminal picks it up as an
+                    # instant, event-driven Dir update). Invisible on screen.
+                    [Console]::Write([char]27 + ']9;9;' + `$pwd.ProviderPath + [char]7)
+                }
+            } catch {}
             & `$global:__reminalPromptBase
         }
     }
@@ -168,6 +176,52 @@ $end
         }
     }
 }
+
+# Windows citizenship: an Apps & Features entry backed by a local
+# uninstall.ps1 that reverses everything this installer did. HKCU only --
+# no admin, uninstall scoped to this user.
+$uninst = Join-Path $installDir "uninstall.ps1"
+@'
+# reminal uninstaller (written by install.ps1)
+$ErrorActionPreference = "SilentlyContinue"
+$installDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+Get-Process reminal | Stop-Process -Force
+Start-Sleep 1
+# autostart + Apps & Features entries
+Remove-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run" -Name "reminal-daemon"
+Remove-Item -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\reminal" -Recurse
+# user PATH entry
+$userPath = [Environment]::GetEnvironmentVariable("Path", "User")
+if ($userPath) {
+    $newPath = ($userPath -split ";" | Where-Object { $_ -and $_ -ne $installDir }) -join ";"
+    [Environment]::SetEnvironmentVariable("Path", $newPath, "User")
+}
+# profile blocks
+$docs = [Environment]::GetFolderPath("MyDocuments")
+foreach ($profDir in @("WindowsPowerShell", "PowerShell")) {
+    $prof = Join-Path (Join-Path $docs $profDir) "profile.ps1"
+    if (Test-Path $prof) {
+        $existing = Get-Content $prof -Raw
+        $stripped = $existing -replace "(?ms)\r?\n?# >>> reminal >>>.*?# <<< reminal <<<\r?\n?", ""
+        Set-Content -Path $prof -Value $stripped.TrimEnd()
+    }
+}
+Write-Host "reminal removed. Session data in $env:USERPROFILE\.reminal was kept; delete it to remove keys and history."
+# The install dir contains THIS script and possibly a running console's exe --
+# delete it from a detached shell after we exit.
+Start-Process cmd -ArgumentList "/c", "timeout /t 2 /nobreak >nul & rmdir /s /q `"$installDir`"" -WindowStyle Hidden
+'@ | Set-Content -Path $uninst
+
+$uk = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\reminal"
+New-Item -Path $uk -Force | Out-Null
+Set-ItemProperty -Path $uk -Name "DisplayName" -Value "reminal"
+Set-ItemProperty -Path $uk -Name "DisplayVersion" -Value $version
+Set-ItemProperty -Path $uk -Name "Publisher" -Value "reminal"
+Set-ItemProperty -Path $uk -Name "DisplayIcon" -Value (Join-Path $installDir "reminal.exe")
+Set-ItemProperty -Path $uk -Name "InstallLocation" -Value $installDir
+Set-ItemProperty -Path $uk -Name "UninstallString" -Value "powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$uninst`""
+Set-ItemProperty -Path $uk -Name "NoModify" -Value 1 -Type DWord
+Set-ItemProperty -Path $uk -Name "NoRepair" -Value 1 -Type DWord
 
 Write-Host ""
 Write-Host "reminal v$version installed to $installDir"

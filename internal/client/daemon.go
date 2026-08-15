@@ -41,6 +41,7 @@ func RunDaemon() error {
 	// consistency; launchd/systemd simply never read it.
 	writeDaemonPID()
 	defer clearDaemonPID()
+	go sweepStaleSockets()
 	go watchBinaryAndExit(stop)
 	if runtime.GOOS == "darwin" {
 		// The daemon is the single granted process that does all window/desktop
