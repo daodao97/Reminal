@@ -98,6 +98,35 @@ if (($env:Path -split ";") -notcontains $installDir) {
 # duplicated); skip with REMINAL_NO_RC=1. Written for both Windows PowerShell
 # and PowerShell 7 profiles so whichever the user opens works.
 if ($env:REMINAL_NO_RC -ne "1") {
+    # Stock Windows clients ship with execution policy "Restricted", which
+    # blocks ALL script files — including the profile blocks below, which
+    # would then print a red PSSecurityException in every new shell instead
+    # of loading. Lift the policy to RemoteSigned (locally created scripts
+    # run; downloaded ones still need unblocking) for the CURRENT USER only —
+    # no admin, and both engines get it since each keeps its own setting. If
+    # policy is enforced by Group Policy this fails; then we must NOT write
+    # profiles at all (they'd error on every launch), so fall back to a hint.
+    $profilesOk = $true
+    if ((Get-ExecutionPolicy) -in @("Restricted", "AllSigned")) {
+        try {
+            Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy RemoteSigned -Force -ErrorAction Stop
+            Write-Host "  + profile scripts enabled (execution policy: CurrentUser -> RemoteSigned)"
+        } catch {
+            $profilesOk = $false
+        }
+        foreach ($engine in @("powershell", "pwsh")) {
+            if (Get-Command $engine -ErrorAction SilentlyContinue) {
+                & $engine -NoProfile -Command "try { Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy RemoteSigned -Force } catch {}" 2>$null | Out-Null
+            }
+        }
+    }
+    if (-not $profilesOk) {
+        Write-Host "  ! execution policy is locked down (likely Group Policy) — skipping profile setup."
+        Write-Host "    PATH is set for new processes; for completion, run: reminal completion powershell | Out-String | Invoke-Expression"
+        $env:REMINAL_NO_RC = "1"
+    }
+}
+if ($env:REMINAL_NO_RC -ne "1") {
     $begin = "# >>> reminal >>>"
     $end = "# <<< reminal <<<"
     $block = @"
