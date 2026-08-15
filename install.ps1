@@ -25,12 +25,24 @@ if ($env:PROCESSOR_ARCHITECTURE -eq "ARM64") { $arch = "arm64" }
 $version = $env:REMINAL_VERSION
 if (-not $version) {
     # /releases/latest redirects to /releases/tag/<ver> — same tokenless trick
-    # install.sh uses.
-    $resp = Invoke-WebRequest -Uri "https://github.com/$repo/releases/latest" -Method Head -MaximumRedirection 0 -SkipHttpErrorCheck -ErrorAction SilentlyContinue
-    $location = $resp.Headers.Location
+    # install.sh uses. Both PowerShell generations treat the un-followed 302 as
+    # an error (and 5.1 has no -SkipHttpErrorCheck), so read the Location out
+    # of the catch: 5.1 throws a WebException carrying a WebHeaderCollection,
+    # 7+ throws with an HttpResponseMessage whose Location is a Uri.
+    $location = $null
+    try {
+        $resp = Invoke-WebRequest -Uri "https://github.com/$repo/releases/latest" -Method Head -MaximumRedirection 0 -UseBasicParsing -ErrorAction Stop
+        $location = $resp.Headers.Location
+    } catch {
+        $r = $_.Exception.Response
+        if ($r) {
+            if ($r.Headers -is [System.Net.WebHeaderCollection]) { $location = $r.Headers["Location"] }
+            elseif ($r.Headers.Location) { $location = $r.Headers.Location.ToString() }
+        }
+    }
     if ($location -is [array]) { $location = $location[0] }
     if (-not $location) { throw "could not resolve the latest release — set `$env:REMINAL_VERSION and retry" }
-    $version = ($location -split "/")[-1]
+    $version = ("$location" -split "/")[-1]
 }
 $version = $version.TrimStart("v")
 
@@ -45,7 +57,9 @@ New-Item -ItemType Directory -Force -Path $tmp | Out-Null
 try {
     Write-Host "Downloading reminal v$version (windows/$arch)..."
     $tarball = Join-Path $tmp $archive
-    Invoke-WebRequest -Uri $url -OutFile $tarball
+    # -UseBasicParsing: required on stock Windows PowerShell 5.1 boxes where the
+    # IE parsing engine was never initialized; harmless (deprecated no-op) on 7+.
+    Invoke-WebRequest -Uri $url -OutFile $tarball -UseBasicParsing
 
     # tar.exe ships with Windows 10 1803+.
     tar -xzf $tarball -C $tmp
