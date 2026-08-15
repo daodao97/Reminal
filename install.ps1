@@ -24,7 +24,7 @@ if ($env:PROCESSOR_ARCHITECTURE -eq "ARM64") { $arch = "arm64" }
 
 $version = $env:REMINAL_VERSION
 if (-not $version) {
-    # /releases/latest redirects to /releases/tag/<ver> — same tokenless trick
+    # /releases/latest redirects to /releases/tag/<ver> -- same tokenless trick
     # install.sh uses. Invoke-WebRequest can't observe an un-followed 302
     # portably across PowerShell 5.1 and 7 (each treats it as a different
     # error shape), so drop to .NET WebRequest, where a 3xx with
@@ -41,7 +41,7 @@ if (-not $version) {
         $location = $resp.Headers["Location"]
         $resp.Close()
     } catch {}
-    if (-not $location) { throw "could not resolve the latest release — set `$env:REMINAL_VERSION and retry" }
+    if (-not $location) { throw "could not resolve the latest release -- set `$env:REMINAL_VERSION and retry" }
     $version = ("$location" -split "/")[-1]
 }
 $version = $version.TrimStart("v")
@@ -66,7 +66,7 @@ try {
     if ($LASTEXITCODE -ne 0) { throw "failed to extract $archive" }
 
     $exe = Join-Path $installDir "reminal.exe"
-    # A running reminal.exe can't be overwritten — but it can be renamed aside
+    # A running reminal.exe can't be overwritten -- but it can be renamed aside
     # (same trick the in-app updater uses).
     if (Test-Path $exe) {
         $old = "$exe.old"
@@ -88,21 +88,21 @@ if (($env:Path -split ";") -notcontains $installDir) {
     $env:Path = "$env:Path;$installDir"
 }
 
-# Shell setup — the Windows twin of install.sh's setup_shell(): a single
+# Shell setup -- the Windows twin of install.sh's setup_shell(): a single
 # marker-guarded block in the PowerShell profile that (a) guarantees reminal is
 # on PATH for every new shell and (b) loads tab completion. The PATH line looks
 # redundant next to the registry write above, but it isn't: an already-running
 # Windows Terminal hands new tabs its own CACHED environment, so freshly
-# installed registry PATH entries don't reach them — the profile runs in every
+# installed registry PATH entries don't reach them -- the profile runs in every
 # new shell and repairs that. Idempotent (the block is rewritten, never
 # duplicated); skip with REMINAL_NO_RC=1. Written for both Windows PowerShell
 # and PowerShell 7 profiles so whichever the user opens works.
 if ($env:REMINAL_NO_RC -ne "1") {
     # Stock Windows clients ship with execution policy "Restricted", which
-    # blocks ALL script files — including the profile blocks below, which
+    # blocks ALL script files -- including the profile blocks below, which
     # would then print a red PSSecurityException in every new shell instead
     # of loading. Lift the policy to RemoteSigned (locally created scripts
-    # run; downloaded ones still need unblocking) for the CURRENT USER only —
+    # run; downloaded ones still need unblocking) for the CURRENT USER only --
     # no admin, and both engines get it since each keeps its own setting. If
     # policy is enforced by Group Policy this fails; then we must NOT write
     # profiles at all (they'd error on every launch), so fall back to a hint.
@@ -121,7 +121,7 @@ if ($env:REMINAL_NO_RC -ne "1") {
         }
     }
     if (-not $profilesOk) {
-        Write-Host "  ! execution policy is locked down (likely Group Policy) — skipping profile setup."
+        Write-Host "  ! execution policy is locked down (likely Group Policy) -- skipping profile setup."
         Write-Host "    PATH is set for new processes; for completion, run: reminal completion powershell | Out-String | Invoke-Expression"
         $env:REMINAL_NO_RC = "1"
     }
@@ -148,7 +148,7 @@ $end
             Set-Content -Path $prof -Value ($existing.TrimEnd() + "`r`n`r`n" + $block + "`r`n")
             Write-Host "  + reminal shell setup written to $prof"
         } catch {
-            # Best-effort — never fail the install over a profile write.
+            # Best-effort -- never fail the install over a profile write.
         }
     }
 }
