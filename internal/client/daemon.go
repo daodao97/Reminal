@@ -12,6 +12,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/reminal/reminal/internal/proc"
 )
 
 // RunDaemon runs this machine's directory host in the foreground until it gets
@@ -77,6 +79,25 @@ func writeDaemonPID() {
 		return
 	}
 	_ = os.WriteFile(path, []byte(strconv.Itoa(os.Getpid())+"\n"), 0o600)
+}
+
+// daemonAlive reports whether the pid recorded in daemon.pid is a live
+// process — the "is anyone actually home?" check behind the directory-host
+// deferral. Missing or unparsable pid file counts as dead.
+func daemonAlive() bool {
+	path, err := daemonPIDPath()
+	if err != nil {
+		return false
+	}
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return false
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(string(b)))
+	if err != nil || pid <= 0 {
+		return false
+	}
+	return proc.Alive(pid)
 }
 
 func clearDaemonPID() {

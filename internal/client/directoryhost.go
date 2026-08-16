@@ -72,6 +72,17 @@ func runDirectoryHost(stop <-chan struct{}, isDaemon bool) {
 		// offline. Deferring here removes that deadlock: only the daemon serves when
 		// it's installed; sessions serve only as a fallback when there's no daemon.
 		if !isDaemon && DaemonServiceInstalled() {
+			// Deferring only makes sense if the daemon actually EXISTS. On
+			// Windows nothing supervises it (the Run key fires at logon
+			// only), so a killed daemon plus this deferral would leave the
+			// machine offline in `reminal machines` forever — resurrect it
+			// instead. No-op on launchd/systemd platforms, whose service
+			// managers own the daemon's lifecycle.
+			if !daemonAlive() {
+				if exe, err := os.Executable(); err == nil {
+					respawnDaemonAfterUpgrade(exe)
+				}
+			}
 			if sleepOrStop(stop, dirHostOwnerRecheck) {
 				return
 			}
