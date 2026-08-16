@@ -2,14 +2,30 @@
 
 # reminal
 
-### Your machines — every terminal, window, and desktop — in any browser.
+### Every window, desktop and terminal on your machines — live in any browser.
 
-**One command. Scan a QR. Your phone is a live terminal on your machine** — then reach in and control any app window, mirror the whole screen, and drive your whole fleet from one browser.
-No open ports, no keys on disk, no client to install.
+**Close the laptop lid and walk away.** reminal keeps the machine serving — and hands you its actual apps, not just a shell — in any browser, from anywhere.
+No open ports, no keys on disk, nothing to install on the device you're holding.
 
-[![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-blue.svg)](LICENSE) [![Release](https://img.shields.io/github/v/release/harshalgajjar/Reminal?color=success&label=release)](https://github.com/harshalgajjar/Reminal/releases) [![Go](https://img.shields.io/badge/go-1.25%2B-00ADD8?logo=go&logoColor=white)](https://go.dev/) [![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey)](https://github.com/harshalgajjar/Reminal/releases) [![Encryption](https://img.shields.io/badge/encryption-AES--256--GCM-success)](#security) [![Relay](https://img.shields.io/badge/relay-Cloudflare%20free%20tier-F38020?logo=cloudflare&logoColor=white)](cloudflare/README.md)
+[![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-blue.svg)](LICENSE) [![Release](https://img.shields.io/github/v/release/harshalgajjar/Reminal?color=success&label=release)](https://github.com/harshalgajjar/Reminal/releases) [![Go](https://img.shields.io/badge/go-1.25%2B-00ADD8?logo=go&logoColor=white)](https://go.dev/) [![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey)](https://github.com/harshalgajjar/Reminal/releases) [![Encryption](https://img.shields.io/badge/encryption-AES--256--GCM-success)](#security) [![Relay](https://img.shields.io/badge/relay-Cloudflare-F38020?logo=cloudflare&logoColor=white)](cloudflare/README.md)
+
+<img src="docs/lid.gif" alt="Animation: a MacBook desktop with VS Code, Keynote and Mail windows folds its lid shut — then the same windows appear live as panes in the reminal web viewer, still controllable, with nothing plugged in" width="900">
+
+<sub>The lid shuts with no monitor and no dongle attached — and the windows keep streaming, live and controllable, into a browser.</sub>
 
 </div>
+
+---
+
+## No monitor. No dummy plug. No dongle.
+
+Close a MacBook's lid and macOS puts it to sleep — unless it's on power with a monitor *and* keyboard attached. The usual fix is a hardware "dummy" HDMI plug that fakes a display, or just leaving the lid propped open on your desk.
+
+**Closed-lid mode does it in software.** Flip it on and leave — no monitor, no dongle, in any order. reminal disables clamshell sleep and, because GUI apps need a screen to draw on, spins up a virtual display the moment the Mac goes headless — so window mirroring keeps working with nothing plugged in. Toggle it off and everything is undone.
+
+<sub>Closed-lid mode is macOS-only; everything else below works on macOS, Linux and Windows alike.</sub>
+
+---
 
 ## Set it up in one line
 
@@ -25,46 +41,18 @@ irm https://raw.githubusercontent.com/harshalgajjar/Reminal/main/install.ps1 | i
 reminal
 ```
 
-`reminal` prints a session ID, a PIN, and a QR code. Scan it, and your phone is a **full terminal on your machine** — real color, touch text-selection, on-screen modifier keys. No port forwarding. No keys to manage. Nothing to install on the phone; the browser is the client.
-
-<div align="center">
-<img src="docs/setup.gif" alt="A terminal runs reminal and prints a QR code; a phone scans it and joins the same session — end-to-end encrypted" width="900">
-
-<sub>That's the whole setup. The fastest SSH you'll ever configure — because there's nothing to configure.</sub>
-</div>
+That's the whole setup — one command on the machine you're leaving behind. Everything else you own is already a client, because the client is a browser.
 
 ---
 
-## …but reminal isn't just a terminal
+## Reach in and drive the apps
 
-Once you're in, any app window streams live into your browser — and you don't just watch it, you **drive** it: cursor, click and right-click, type, scroll, drag, pinch-zoom. Not open yet? **Launch any installed app** on the host from the **Apps** menu, then drive it. Or tap **Host → View full desktop** to run the whole machine at once. On a phone the screen becomes a trackpad — your Mac, fully hands-on, from your pocket.
+Any app window streams live into your browser — and you don't just watch it, you **drive** it: cursor, click and right-click, type, scroll, drag, pinch-zoom. Not open yet? **Launch any installed app** on the host from the **Apps** menu, then drive it. Or tap **Host → View full desktop** to run the whole machine at once. On a phone the screen becomes a trackpad — your Mac, fully hands-on, from your pocket.
 
 <div align="center">
 <img src="docs/hero.gif" alt="Real capture: a phone opens the Mac's TextEdit window and types 'Hello from my phone!' — the words land in the real app on the Mac, live — then the phone mirrors the entire desktop" width="880">
 
 <sub><b>Real capture, unedited.</b> The phone picks a window, types into it — the words appear in the real app on the Mac — then mirrors the whole desktop. Native capture, streamed peer-to-peer.</sub>
-</div>
-
----
-
-## Close the lid and walk away
-
-Close a MacBook's lid and macOS puts it to sleep — unless it's on power with a monitor *and* keyboard attached. The usual fix is a hardware "dummy" HDMI plug that fakes a display, or just leaving the lid propped open on your desk.
-
-**Closed-lid mode does it in software.** Flip it on and leave — no monitor, no dongle, in any order. reminal disables clamshell sleep and, because GUI apps need a screen to draw on, spins up a virtual display the moment the Mac goes headless — so window mirroring keeps working with nothing plugged in. Toggle it off and everything is undone.
-
-<div align="center">
-<img src="docs/lid.gif" alt="Animation: a MacBook desktop with VS Code, Keynote and Mail windows folds its lid shut — then the same windows appear live as panes in the reminal web viewer, still controllable, with nothing plugged in" width="900">
-</div>
-
----
-
-## Interact with your machines like they're right here
-
-Pop any remote window out onto your desktop and it sits there like a native app — except it's running on another machine entirely. Line up an editor from your MacBook, a terminal on a cloud box, and a dashboard from the Mac mini at home, and work across all of them as if they were local.
-
-<div align="center">
-<img src="docs/machines.gif" alt="Three native windows in front — an editor, a terminal, and a dashboard — each linked by a dotted line to the machine behind it: a MacBook (studio-mac), a cloud VM (aws-eu-1), and a Mac mini (mini-01)" width="900">
 </div>
 
 ---
@@ -81,12 +69,24 @@ And nothing about those windows says *stream*. Drag it, scrub a video inside it,
 
 ---
 
-## Point an AI agent at your fleet
+## A full terminal, too — scan a QR and you're in
 
-Hand the session ID and PIN to an agent and it connects like any other viewer — to every machine you've shared. One credential, and it can triage an incident, run scans, and kick off or delegate long-running jobs across all your hardware at once, while you watch it happen in the same browser.
+`reminal` prints a session ID, a PIN, and a QR code. Scan it, and your phone is a **full terminal on your machine** — real color, touch text-selection, on-screen modifier keys. No port forwarding. No keys to manage. Nothing to install on the phone; the browser is the client.
 
 <div align="center">
-<img src="docs/agent.gif" alt="An AI agent given the session key dispatches jobs in parallel to three machines — run test suite on studio-mac, scan and patch on aws-eu-1, rotate backups on mini-01" width="900">
+<img src="docs/setup.gif" alt="A terminal runs reminal and prints a QR code; a phone scans it and joins the same session — end-to-end encrypted" width="900">
+
+<sub>The fastest SSH you'll ever configure — because there's nothing to configure.</sub>
+</div>
+
+---
+
+## Interact with your machines like they're right here
+
+Pop any remote window out onto your desktop and it sits there like a native app — except it's running on another machine entirely. Line up an editor from your MacBook, a terminal on a cloud box, and a dashboard from the Mac mini at home, and work across all of them as if they were local.
+
+<div align="center">
+<img src="docs/machines.gif" alt="Three native windows in front — an editor, a terminal, and a dashboard — each linked by a dotted line to the machine behind it: a MacBook (studio-mac), a cloud VM (aws-eu-1), and a Mac mini (mini-01)" width="900">
 </div>
 
 ---
@@ -99,6 +99,16 @@ That single pane works because you *own* the machines. Enroll a device once — 
 
 <div align="center">
 <img src="docs/own.gif" alt="A live 'reminal machines' view of a fleet you own — studio-mac, aws-eu-1 and mini-01, all online — each showing its sessions: agents running a test suite, patching a CVE and rotating backups, alongside ordinary sessions like api-prod, worker and grafana, with live indicators and viewer counts" width="900">
+</div>
+
+---
+
+## Point an AI agent at your fleet
+
+Hand the session ID and PIN to an agent and it connects like any other viewer — to every machine you've shared. One credential, and it can triage an incident, run scans, and kick off or delegate long-running jobs across all your hardware at once, while you watch it happen in the same browser.
+
+<div align="center">
+<img src="docs/agent.gif" alt="An AI agent given the session key dispatches jobs in parallel to three machines — run test suite on studio-mac, scan and patch on aws-eu-1, rotate backups on mini-01" width="900">
 </div>
 
 ---
