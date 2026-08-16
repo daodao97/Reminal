@@ -129,7 +129,11 @@
       padding: 8px;
       overflow: hidden;
       overscroll-behavior: contain;
-      touch-action: pan-y;
+      /* NONE, not pan-y: pan-y hands vertical drags to the BROWSER's native
+         pan recognizer, which races our JS scroller, claims the gesture
+         mid-drag (touchcancel), and kills it after ~a line. Every touch
+         gesture here — scroll, glide, long-press select, grips — is ours. */
+      touch-action: none;
     }
     /* xterm's internal scroll surface gets the same containment so a
        swipe past the top of the scrollback can't escape to the
@@ -5390,13 +5394,84 @@
       }
 
       // --- long-press on the terminal to start a selection ---
-      const LP_MS = 380, MOVE_CANCEL = 10;
-      let lpTimer = null, lpStart = null, extending = false, downAt = 0;
+      // LP_MS is deliberately LONGER than a platform long-press (~500ms):
+      // in a terminal, touches overwhelmingly mean scroll/tap — a thumb that
+      // lands on a word and rests half a beat must not sprout a selection.
+      // Selection is press-and-HOLD; the grips do the precision work after.
+      const LP_MS = 650, MOVE_CANCEL = 10;
+      // Scroll-rescue: a long-press whose follow-up drag is clearly VERTICAL
+      // was a scroll the user started from rest (thumb planted while reading,
+      // then swiped) — not a selection-extend. The first decisive movement
+      // after the press classifies the gesture, however long the rest was:
+      //   - vertical-dominant  → dismiss the just-created selection and hand
+      //     the drag to the scroller, so a scroll can never be hijacked;
+      //   - horizontal-leaning → the drag commits to extending (and may then
+      //     move vertically freely, e.g. right-then-down across lines).
+      // Same-finger VERTICAL-first extension is deliberately given up — that
+      // is what the drag grips are for, and they are untouched by this.
+      const RESCUE_RATIO = 2, EXTEND_COMMIT_PX = 24;
+      let lpTimer = null, lpStart = null, extending = false, downAt = 0, extendCommitted = false;
       // One-finger swipe scrolls the scrollback. The DOM renderer's .xterm-screen
       // sits ON TOP of the scrollable .xterm-viewport, so a touch-drag never reaches
       // the viewport — inside a full-frame TUI (Claude Code) that means you can't
       // scroll at all. Drive xterm's own scrollLines() from the swipe delta instead.
       let scrolling = false, scrollLastY = 0, scrollAcc = 0;
+      // Inertia: velocity is sampled over the drag's last ~100ms; on lift, a
+      // rAF loop keeps feeding the same scroll router with exponentially
+      // decaying deltas — butter over the exact plumbing the finger used, so
+      // normal-screen scrollback and alt-screen apps both behave. A touch
+      // during the glide CATCHES it (stops dead, never selects, and the same
+      // finger can immediately continue scrolling) — momentum and selection
+      // must never fight.
+      const GLIDE_START_V = 0.25;   // px/ms of lift velocity needed to glide
+      const GLIDE_MIN_V = 0.02;    // px/ms — glide ends below this
+      const GLIDE_DECAY = 0.95;    // per-16.7ms decay factor
+      const GLIDE_MAX_MS = 3000;   // hard stop — no runaway flicks
+      let velSamples = [];          // {t, y} ring from the live drag
+      let glideRAF = null, glideV = 0, glideLastT = 0, glideStartT = 0, glideAt = { x: 200, y: 200 };
+      function stopGlide() {
+        if (glideRAF) { cancelAnimationFrame(glideRAF); glideRAF = null; }
+        glideV = 0;
+      }
+      function startGlide(v, cx, cy) {
+        stopGlide();
+        glideV = v; glideAt = { x: cx, y: cy };
+        glideStartT = glideLastT = performance.now();
+        const step = (now) => {
+          glideRAF = null;
+          const dt = Math.min(50, now - glideLastT);
+          glideLastT = now;
+          routeScroll(glideV * dt, glideAt.x, glideAt.y);
+          glideV *= Math.pow(GLIDE_DECAY, dt / 16.7);
+          if (Math.abs(glideV) > GLIDE_MIN_V && now - glideStartT < GLIDE_MAX_MS) {
+            glideRAF = requestAnimationFrame(step);
+          } else {
+            glideV = 0;
+          }
+        };
+        glideRAF = requestAnimationFrame(step);
+      }
+      // routeScroll: one door for every scroll delta (live finger AND glide) —
+      // whole cells to the native scrollback, paced 3-cell wheel notches to an
+      // alt-screen app, remainder carried in scrollAcc either way.
+      function routeScroll(dy, cx, cy) {
+        scrollAcc += dy;
+        const h = cellDims().h || 16;
+        if (scrollForwardToApp()) {
+          const notch = 3 * h;
+          const notches = (scrollAcc / notch) | 0;
+          if (notches) {
+            scrollAcc -= notches * notch;
+            queueNotches(notches, notch, cx, cy);
+          }
+        } else {
+          const lines = (scrollAcc / h) | 0;
+          if (lines) {
+            scrollAcc -= lines * h;
+            term.scrollLines(lines);
+          }
+        }
+      }
       // Scroll routing: the app gets the scroll only when it's a full-screen
       // (alternate-buffer) app with mouse reporting on. Inline TUIs on the
       // normal screen scroll the native scrollback instead (see onTouchMove).
@@ -5449,22 +5524,71 @@
 
       let touchId = null;                           // identifier of THE gesture finger
       let extendMoved = false;                      // long-press drag actually moved
+
+      // ---- gesture-target pinning ----
+      // Touch event streams dispatch to the element the finger LANDED on for
+      // the whole gesture. Over text that's a row node inside xterm's DOM
+      // renderer — which REPLACES row nodes on every scrolled frame. One line
+      // into a scroll the target is detached, detached nodes don't bubble,
+      // and the wrap listeners go silent: the drag dies after exactly one
+      // line. Events DO keep firing on the detached node though, so we pin
+      // per-gesture listeners to the start target and dedupe (the same Event
+      // object arrives twice while the node is still attached).
+      let gestureNode = null, lastGestureEvent = null;
+      function seenGestureEvent(e) {
+        if (e === lastGestureEvent) return true;
+        lastGestureEvent = e;
+        return false;
+      }
+      function pinGestureTarget(target) {
+        unpinGestureTarget();
+        if (!target || target === wrap || !(target instanceof Element)) return;
+        gestureNode = target;
+        gestureNode.addEventListener('touchmove', onTouchMove, { passive: false });
+        gestureNode.addEventListener('touchend', onTouchEnd, { passive: true });
+        gestureNode.addEventListener('touchcancel', onTouchCancelPinned, { passive: true });
+      }
+      function unpinGestureTarget() {
+        if (!gestureNode) return;
+        gestureNode.removeEventListener('touchmove', onTouchMove);
+        gestureNode.removeEventListener('touchend', onTouchEnd);
+        gestureNode.removeEventListener('touchcancel', onTouchCancelPinned);
+        gestureNode = null;
+      }
+      function onTouchCancelPinned() { onTouchCancelShared(); }
       function onTouchStart(e) {
+        if (seenGestureEvent(e)) return;
         if (e.touches.length !== 1) { cancelLP(); return; }
         const t = e.touches[0];
+        pinGestureTarget(e.target);
         touchId = t.identifier;
         downAt = Date.now();
+        velSamples = [{ t: performance.now(), y: t.clientY }];
+        if (glideRAF || Math.abs(glideV) > 0) {
+          // Catching a live glide: stop it where it is. This touch is part of
+          // the SCROLL, full stop — no long-press timer (a caught scroll must
+          // never sprout a selection), no focus click, and the finger can pull
+          // straight into more scrolling.
+          stopGlide();
+          scrolling = true; scrollLastY = t.clientY; scrollAcc = 0;
+          lpStart = { x: t.clientX, y: t.clientY, cell: null, wasActive: active };
+          suppressFocusClick = true;
+          cancelLP();
+          return;
+        }
         scrolling = false; scrollLastY = t.clientY; scrollAcc = 0;
         lpStart = { x: t.clientX, y: t.clientY, cell: pointToCell(t.clientX, t.clientY), wasActive: active };
         cancelLP();
         lpTimer = setTimeout(() => {
           lpTimer = null; extending = true; extendMoved = false;
+          extendCommitted = false;
           enterSelection(lpStart.cell);
           dragWhich = 'end';                        // let the same finger extend the end
           suppressFocusClick = true;
         }, LP_MS);
       }
       function onTouchMove(e) {
+        if (seenGestureEvent(e)) return;
         // Track OUR finger by identifier — never touches[0]. With a resting
         // palm or an accidental second touch, touches[0] can silently become a
         // DIFFERENT finger; a delta computed across two fingers is a huge
@@ -5475,18 +5599,39 @@
         if (!t) return;
         if (extending) {                            // we own the gesture now — extend, don't scroll
           e.preventDefault();
-          const aimY = t.clientY - 6;
-          lastDragClient = { x: t.clientX, y: aimY };
-          // Edge autoscroll only after the long-press drag has actually MOVED.
-          // A finger that long-presses near the screen edge and stays put must
-          // not start a constant-rate scroll that ignores the finger entirely.
-          if (!extendMoved &&
-              (Math.abs(t.clientX - lpStart.x) > MOVE_CANCEL || Math.abs(t.clientY - lpStart.y) > MOVE_CANCEL)) {
-            extendMoved = true;
+          // Scroll-rescue (see RESCUE_RATIO above): classify the first
+          // decisive movement, judged on the CUMULATIVE drag from the press
+          // point — individual move events often carry only a few px.
+          if (!extendCommitted) {
+            const rdx = t.clientX - lpStart.x, rdy = t.clientY - lpStart.y;
+            const cellH = (cellDims().h || 16);
+            if (Math.abs(rdy) > cellH * 1.5 && Math.abs(rdy) > RESCUE_RATIO * Math.abs(rdx)) {
+              clearSelection();
+              extending = false; dragWhich = null;
+              stopAutoScroll();
+              scrolling = true;                     // hand the rest of the drag to the scroller
+              scrollLastY = lpStart.y; scrollAcc = 0;
+              // fall through into the scrolling branch below with THIS event's
+              // position, so the movement that triggered the rescue scrolls too
+            } else if (Math.abs(rdx) > EXTEND_COMMIT_PX && Math.abs(rdy) <= RESCUE_RATIO * Math.abs(rdx)) {
+              extendCommitted = true;               // horizontal lead — it's an extend for good
+            }
           }
-          if (extendMoved) startAutoScroll(edgeDir(t.clientY));
-          updateDragTo(t.clientX, aimY);
-          return;
+          if (extending) {
+            const aimY = t.clientY - 6;
+            lastDragClient = { x: t.clientX, y: aimY };
+            // Edge autoscroll only after the long-press drag has actually
+            // MOVED. A finger that long-presses near the screen edge and
+            // stays put must not start a constant-rate scroll that ignores
+            // the finger entirely.
+            if (!extendMoved &&
+                (Math.abs(t.clientX - lpStart.x) > MOVE_CANCEL || Math.abs(t.clientY - lpStart.y) > MOVE_CANCEL)) {
+              extendMoved = true;
+            }
+            if (extendMoved) startAutoScroll(edgeDir(t.clientY));
+            updateDragTo(t.clientX, aimY);
+            return;
+          }
         }
         if (lpTimer) {                              // still deciding: enough movement => it's a scroll
           if (Math.abs(t.clientX - lpStart.x) > MOVE_CANCEL || Math.abs(t.clientY - lpStart.y) > MOVE_CANCEL) {
@@ -5511,62 +5656,48 @@
         if (scrolling) {                            // one-finger swipe: scroll
           const dy = scrollLastY - t.clientY;       // finger up => positive => scroll toward newer
           scrollLastY = t.clientY;
-          // Two destinations, decided by scrollForwardToApp():
-          //  - NATIVE scrollback (normal screen — the common case, Claude
-          //    included): term.scrollLines per whole cell of travel, remainder
-          //    carried in scrollAcc. Pixel-glued to the finger at any speed.
-          //  - ALT-SCREEN app with mouse reporting (vim, less, htop): the
-          //    app's own scroll is the only one, and it scrolls a fixed
-          //    amount per wheel REPORT (~one notch = 3 lines), not per pixel.
-          //    So quantize to 3-cell notches and dispatch them as paced wheel
-          //    events (see queueNotches) — parity with a physical wheel, no
-          //    per-event over-scroll, no repaint-burst flicker.
-          if (scrollForwardToApp()) {
-            scrollAcc += dy;
-            const h = cellDims().h || 16;
-            const notch = 3 * h;
-            let notches = (scrollAcc / notch) | 0;  // whole notches only; keep remainder
-            if (notches) {
-              scrollAcc -= notches * notch;
-              queueNotches(notches, notch, t.clientX, t.clientY);
-            }
-          } else {
-            scrollAcc += dy;
-            const h = cellDims().h || 16;
-            let lines = (scrollAcc / h) | 0;        // whole lines; keep remainder for glue
-            if (lines) {
-              scrollAcc -= lines * h;
-              term.scrollLines(lines);              // direct: bypasses the app entirely
-            }
-          }
+          velSamples.push({ t: performance.now(), y: t.clientY });
+          if (velSamples.length > 8) velSamples.shift();
+          // routeScroll picks the destination (see its comment): native
+          // scrollback per whole cell, or paced 3-cell wheel notches to an
+          // alt-screen app with mouse reporting — pixel-glued either way.
+          routeScroll(dy, t.clientX, t.clientY);
           e.preventDefault();                       // we own the vertical drag now
         }
       }
       function onTouchEnd(e) {
+        if (seenGestureEvent(e)) return;
         // Only OUR gesture finger ends the drag. A palm or second touch lifting
         // mid-scroll must not kill the scroll state (that left the rest of the
-        // drag dead until the user lifted and re-swiped).
+        // drag dead until the user lifted and re-swiped) — and must not strip
+        // the gesture-target pin either, or the drag dies the moment the
+        // renderer recycles the pinned node.
         let ourTouch = null;
         for (let k = 0; k < e.changedTouches.length; k++)
           if (e.changedTouches[k].identifier === touchId) { ourTouch = e.changedTouches[k]; break; }
         if (!ourTouch && e.touches.length > 0) return;
+        unpinGestureTarget();
         cancelLP();
         if (scrolling) {
           scrolling = false;
           // Flush the tail: the travel between the last move event and the
-          // lift (large on fast flicks) plus any held remainder would
-          // otherwise be dropped — each fast swipe fell short of the finger.
-          if (ourTouch) scrollAcc += scrollLastY - ourTouch.clientY;
-          const h = cellDims().h || 16;
-          if (scrollForwardToApp()) {
-            const notch = 3 * h;
-            const notches = Math.round(scrollAcc / notch);
-            if (notches) queueNotches(notches, notch, ourTouch ? ourTouch.clientX : 200, ourTouch ? ourTouch.clientY : 200);
-          } else {
-            const lines = Math.round(scrollAcc / h);
-            if (lines) term.scrollLines(lines);
+          // lift (large on fast flicks) would otherwise be dropped.
+          const cx = ourTouch ? ourTouch.clientX : 200, cy = ourTouch ? ourTouch.clientY : 200;
+          if (ourTouch) {
+            routeScroll(scrollLastY - ourTouch.clientY, cx, cy);
+            velSamples.push({ t: performance.now(), y: ourTouch.clientY });
           }
-          scrollAcc = 0;
+          // Lift velocity over the drag's last ~100ms → inertia. Sampling a
+          // window (not just the final two events) rides out event jitter.
+          const nowT = performance.now();
+          const recent = velSamples.filter(s => nowT - s.t <= 100);
+          if (recent.length >= 2) {
+            const first = recent[0], last = recent[recent.length - 1];
+            const dt = last.t - first.t;
+            const v = dt > 0 ? (first.y - last.y) / dt : 0; // finger up ⇒ positive ⇒ toward newer
+            if (Math.abs(v) >= GLIDE_START_V) startGlide(v, cx, cy);
+          }
+          velSamples = [];
           return;
         }  // a swipe-scroll: not a tap/selection
         if (extending) {
@@ -5590,10 +5721,41 @@
       // Passive start/end; move is non-passive so we can preventDefault a scroll
       // once we've decided the gesture is a selection-extend.
       const wrap = document.getElementById('terminal-wrap');
+
+      // Fence xterm's built-in MOUSE selection off from touch. Phones follow
+      // every unprevented touch with synthesized compatibility mouse events —
+      // and xterm's selection engine happily acts on them: a double-tap's
+      // dblclick selects the word under the finger (no hold, no intent), and
+      // a touch-drag's mousedown+mousemove paints a range. That was the
+      // "touching text selects it" bug — none of the long-press machinery
+      // below was involved. Swallow mouse events that originate from touch
+      // (recent-touch timestamp, plus Chrome's explicit sourceCapabilities
+      // signal) BEFORE they reach xterm; `click` flows on untouched — the
+      // tap-to-focus handler above depends on it. Real mice are unaffected:
+      // they never have a recent touchstart.
+      let lastRealTouch = 0;
+      const stampTouch = () => { lastRealTouch = Date.now(); };
+      wrap.addEventListener('touchstart', stampTouch, { capture: true, passive: true });
+      wrap.addEventListener('touchend', stampTouch, { capture: true, passive: true });
+      for (const type of ['mousedown', 'mousemove', 'mouseup', 'dblclick']) {
+        wrap.addEventListener(type, (e) => {
+          const fromTouch = Date.now() - lastRealTouch < 1000 ||
+            (e.sourceCapabilities && e.sourceCapabilities.firesTouchEvents);
+          if (fromTouch) e.stopPropagation();
+        }, { capture: true });
+      }
+
       wrap.addEventListener('touchstart', onTouchStart, { passive: true });
       wrap.addEventListener('touchmove', onTouchMove, { passive: false });
       wrap.addEventListener('touchend', onTouchEnd, { passive: true });
-      wrap.addEventListener('touchcancel', () => { cancelLP(); scrolling = false; if (extending) { extending = false; dragWhich = null; stopAutoScroll(); } }, { passive: true });
+      function onTouchCancelShared() {
+        unpinGestureTarget();
+        cancelLP();
+        scrolling = false;
+        stopGlide();
+        if (extending) { extending = false; dragWhich = null; stopAutoScroll(); }
+      }
+      wrap.addEventListener('touchcancel', onTouchCancelShared, { passive: true });
 
       // Native-style dismiss: a tap or click ANYWHERE outside the selection's
       // own controls (the copy/select-all bar and the two grips) clears it —
