@@ -1,0 +1,217 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><style>
+  *{margin:0;padding:0;box-sizing:border-box;}
+  html,body{background:#000;}
+  #stage{position:relative;width:1120px;height:650px;overflow:hidden;
+    font-family:-apple-system,'SF Pro Display','Helvetica Neue',Helvetica,Arial,sans-serif;}
+
+  /* ---- realistic macOS desktop ---- */
+  .desk{position:absolute;inset:0;
+    background:
+      radial-gradient(900px 520px at 22% 0%, rgba(88,150,255,.42), transparent 60%),
+      radial-gradient(760px 620px at 92% 18%, rgba(196,92,220,.34), transparent 62%),
+      radial-gradient(900px 720px at 62% 108%, rgba(38,196,190,.30), transparent 60%),
+      linear-gradient(155deg, #16233f 0%, #241a44 44%, #0c1424 100%);}
+  .desk:after{content:"";position:absolute;inset:0;opacity:.5;mix-blend-mode:overlay;
+    background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='2'/%3E%3C/filter%3E%3Crect width='140' height='140' filter='url(%23n)' opacity='.5'/%3E%3C/svg%3E");}
+
+  /* menu bar */
+  .menubar{position:absolute;top:0;left:0;right:0;height:26px;z-index:40;
+    background:rgba(18,20,28,.42);backdrop-filter:blur(24px);-webkit-backdrop-filter:blur(24px);
+    display:flex;align-items:center;gap:20px;padding:0 15px;color:#e9edf5;font-size:13px;font-weight:500;
+    border-bottom:.5px solid rgba(255,255,255,.06);}
+  .menubar .apple{font-size:15px;margin-right:2px;opacity:.95;}
+  .menubar .app{font-weight:700;}
+  .menubar .mi{opacity:.86;font-weight:500;}
+  .menubar .right{margin-left:auto;display:flex;align-items:center;gap:15px;opacity:.92;}
+  .menubar .right svg{display:block;}
+  .menubar .clock{font-variant-numeric:tabular-nums;}
+
+  /* dock */
+  .dock{position:absolute;left:50%;bottom:10px;transform:translateX(-50%);z-index:40;
+    display:flex;align-items:flex-end;gap:11px;padding:8px 12px;border-radius:20px;
+    background:rgba(190,200,220,.14);backdrop-filter:blur(30px);-webkit-backdrop-filter:blur(30px);
+    border:.5px solid rgba(255,255,255,.14);box-shadow:0 12px 34px rgba(0,0,0,.42);}
+  .dock .ic{width:44px;height:44px;border-radius:11px;box-shadow:0 4px 9px rgba(0,0,0,.35);}
+  .dock .sep{width:1px;height:40px;background:rgba(255,255,255,.16);margin:0 3px;align-self:center;}
+  .dot{position:absolute;bottom:2px;left:50%;transform:translateX(-50%);width:3px;height:3px;border-radius:50%;background:rgba(255,255,255,.7);}
+
+  /* ---- the popped-out remote window (VS Code-style) ---- */
+  .win{position:absolute;left:150px;top:96px;width:816px;height:494px;border-radius:11px;overflow:hidden;
+    background:#1e1e1e;z-index:30;transform-origin:60% 40%;
+    box-shadow:0 44px 100px rgba(0,0,0,.62), 0 14px 34px rgba(0,0,0,.46), 0 0 0 .5px rgba(255,255,255,.09);}
+  .titlebar{height:38px;background:linear-gradient(#3a3a3c,#323234);display:flex;align-items:center;padding:0 13px;position:relative;border-bottom:.5px solid #000;}
+  .tl{display:flex;gap:8px;}
+  .tl i{width:12px;height:12px;border-radius:50%;box-shadow:inset 0 0 0 .5px rgba(0,0,0,.25);}
+  .tl .r{background:#ff5f57;} .tl .y{background:#febc2e;} .tl .g{background:#28c840;}
+  .title{position:absolute;left:0;right:0;text-align:center;color:#cfd2d6;font-size:12.5px;font-weight:600;pointer-events:none;}
+  .title .sub{color:#8a8f97;font-weight:500;}
+  .rbadge{margin-left:auto;display:flex;align-items:center;gap:6px;font-size:11px;color:#c7ccd4;
+    background:rgba(255,255,255,.06);border:.5px solid rgba(255,255,255,.10);border-radius:999px;padding:3px 9px;z-index:2;}
+  .rbadge .led{width:7px;height:7px;border-radius:50%;background:#30d158;box-shadow:0 0 8px rgba(48,209,88,.9);}
+
+  .body{display:flex;height:calc(100% - 38px);font-family:ui-monospace,'SF Mono','JetBrains Mono',Menlo,monospace;}
+  .activity{width:48px;background:#181818;display:flex;flex-direction:column;align-items:center;gap:20px;padding-top:14px;color:#7d828b;}
+  .activity svg{opacity:.7;} .activity .on{color:#e6e6e6;position:relative;} .activity .on:before{content:"";position:absolute;left:-14px;top:-3px;bottom:-3px;width:2px;background:#e6e6e6;border-radius:2px;}
+  .side{width:186px;background:#202124;border-right:1px solid #1a1a1a;padding:9px 0;color:#c3c6cc;font-size:12px;}
+  .side .h{padding:2px 14px 8px;color:#8a8f97;font-size:10.5px;letter-spacing:.6px;text-transform:uppercase;}
+  .side .f{padding:3px 14px 3px 22px;display:flex;align-items:center;gap:7px;color:#b7bcc4;}
+  .side .f.on{background:#2b2d31;color:#eaecef;}
+  .side .f .dotf{width:6px;height:6px;border-radius:1px;background:#4a4f57;} .side .f.on .dotf{background:#4aa3ff;}
+  .side .f.mod .dotf{background:#e2b341;}
+
+  .main{flex:1;display:flex;flex-direction:column;min-width:0;}
+  .tabs{height:35px;background:#252526;display:flex;align-items:stretch;border-bottom:1px solid #1a1a1a;}
+  .tab{display:flex;align-items:center;gap:8px;padding:0 14px;font-size:12px;color:#9aa0a8;border-right:1px solid #1a1a1a;}
+  .tab.on{background:#1e1e1e;color:#e6e6e6;border-top:1.5px solid #4aa3ff;}
+  .tab .x{color:#6b7078;}
+  .code{flex:1;padding:11px 0 11px 8px;font-size:12.5px;line-height:1.72;color:#d4d4d4;overflow:hidden;background:#1e1e1e;}
+  .ln{display:flex;white-space:pre;}
+  .ln .g{width:34px;text-align:right;padding-right:16px;color:#6a6f78;user-select:none;}
+  .kw{color:#569cd6;} .fn{color:#dcdcaa;} .st{color:#ce9178;} .ty{color:#4ec9b0;} .cm{color:#6a9955;} .nu{color:#b5cea8;} .pk{color:#c586c0;} .vr{color:#9cdcfe;}
+  .cur{display:inline-block;width:2px;height:15px;background:#aeafad;vertical-align:-3px;}
+
+  .term{height:150px;background:#181818;border-top:1px solid #2a2a2a;display:flex;flex-direction:column;}
+  .term .tbar{height:30px;display:flex;align-items:center;gap:16px;padding:0 14px;color:#9aa0a8;font-size:11px;border-bottom:1px solid #242424;}
+  .term .tbar .on{color:#e6e6e6;border-bottom:1.5px solid #4aa3ff;height:30px;display:flex;align-items:center;}
+  .term .out{padding:8px 14px;font-size:12px;line-height:1.62;color:#cfd3d9;overflow:hidden;}
+  .term .p{color:#4aa3ff;} .term .ok{color:#4ec98a;} .term .d{color:#7f858f;} .term .w{color:#e6e6e6;}
+
+  /* small reminal viewer tab the window pops out of (fades away) */
+  .browser{position:absolute;left:150px;top:96px;width:300px;height:200px;border-radius:9px;overflow:hidden;z-index:20;
+    background:#0d1220;border:1px solid #26304a;box-shadow:0 20px 50px rgba(0,0,0,.5);}
+  .bchrome{height:30px;background:#111725;display:flex;align-items:center;gap:8px;padding:0 10px;}
+  .bchrome i{width:8px;height:8px;border-radius:50%;background:#2b3446;}
+  .bchrome .u{flex:1;height:16px;border-radius:8px;background:#0b101b;border:1px solid #1c2434;font-size:9px;color:#69768f;display:flex;align-items:center;padding:0 8px;font-family:ui-monospace,monospace;}
+  .bhint{position:absolute;right:9px;top:8px;font-size:9px;color:#8fb4ff;background:rgba(91,157,255,.12);border:1px solid rgba(91,157,255,.3);border-radius:5px;padding:2px 6px;z-index:2;}
+</style></head>
+<body>
+<div id="stage">
+  <div class="desk"></div>
+
+  <div class="menubar">
+    <span class="apple"></span><span class="app">Code</span>
+    <span class="mi">File</span><span class="mi">Edit</span><span class="mi">Selection</span><span class="mi">View</span><span class="mi">Go</span><span class="mi">Terminal</span>
+    <span class="right">
+      <svg width="16" height="12" viewBox="0 0 24 18" fill="#e9edf5"><rect x="0" y="6" width="4" height="12" rx="1"/><rect x="6" y="3" width="4" height="15" rx="1"/><rect x="12" y="0" width="4" height="18" rx="1" opacity=".45"/><rect x="18" y="0" width="4" height="18" rx="1" opacity=".45"/></svg>
+      <svg width="17" height="12" viewBox="0 0 24 16" fill="none" stroke="#e9edf5" stroke-width="1.6"><path d="M2 6 A14 14 0 0 1 22 6"/><path d="M6 9.5 A8 8 0 0 1 18 9.5"/><circle cx="12" cy="13" r="1.4" fill="#e9edf5"/></svg>
+      <svg width="26" height="12" viewBox="0 0 34 16" fill="none"><rect x="1" y="2" width="28" height="12" rx="3" stroke="#e9edf5" stroke-width="1.4" opacity=".8"/><rect x="3" y="4" width="21" height="8" rx="1.5" fill="#e9edf5"/><rect x="30.5" y="5.5" width="2" height="5" rx="1" fill="#e9edf5" opacity=".8"/></svg>
+      <span class="clock">Thu&nbsp;&nbsp;9:41&nbsp;AM</span>
+    </span>
+  </div>
+
+  <!-- the reminal browser tab it pops out of -->
+  <div class="browser" id="browser">
+    <div class="bchrome"><i></i><i></i><i></i><span class="u">reminal.app/?s=3e91c7a2</span></div>
+    <div class="bhint" id="bhint">⤢ Pop out</div>
+    <div style="height:170px;background:#1e1e1e;"></div>
+  </div>
+
+  <!-- the popped-out native window (a remote dev session) -->
+  <div class="win" id="win">
+    <div class="titlebar">
+      <span class="tl"><i class="r"></i><i class="y"></i><i class="g"></i></span>
+      <span class="title">relay.go — <span class="sub">reminal · studio-mac</span></span>
+      <span class="rbadge"><span class="led"></span>studio-mac · live</span>
+    </div>
+    <div class="body">
+      <div class="activity">
+        <svg class="on" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M3 5h18M3 12h18M3 19h18"/></svg>
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4-4"/></svg>
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M6 3v12a3 3 0 0 0 3 3h9M6 3a3 3 0 0 0 0 6h12"/></svg>
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
+      </div>
+      <div class="side">
+        <div class="h">Explorer — reminal</div>
+        <div class="f"><span class="dotf"></span>agent.go</div>
+        <div class="f on"><span class="dotf"></span>relay.go</div>
+        <div class="f mod"><span class="dotf"></span>crypto.go</div>
+        <div class="f"><span class="dotf"></span>session.go</div>
+        <div class="f"><span class="dotf"></span>main.go</div>
+      </div>
+      <div class="main">
+        <div class="tabs">
+          <div class="tab on">relay.go <span class="x">×</span></div>
+          <div class="tab">crypto.go</div>
+        </div>
+        <div class="code" id="code"></div>
+        <div class="term">
+          <div class="tbar"><span class="on">TERMINAL</span><span>PROBLEMS</span><span>OUTPUT</span></div>
+          <div class="out" id="term"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="dock">
+    <div class="ic" style="background:linear-gradient(150deg,#5ea0ff,#2b6fe0)"></div>
+    <div class="ic" style="background:linear-gradient(150deg,#3ec6a0,#1f8f6e)"></div>
+    <div class="ic" style="background:linear-gradient(150deg,#ff7a7a,#e0473f)"></div>
+    <div class="ic" style="background:linear-gradient(150deg,#c58cff,#8b46e0);position:relative"><span class="dot"></span></div>
+    <div class="sep"></div>
+    <div class="ic" style="background:linear-gradient(150deg,#2b2f37,#15181e)"></div>
+    <div class="ic" style="background:linear-gradient(150deg,#f5c04a,#e0932a)"></div>
+  </div>
+</div>
+
+<script>
+const win=document.getElementById('win'), browser=document.getElementById('browser'), bhint=document.getElementById('bhint');
+const code=document.getElementById('code'), term=document.getElementById('term');
+const led=document.querySelector('.rbadge .led');
+
+// realistic file content (Go) + a live `go test` run
+const CODE=[
+ ['1',[['cm','// relay routes ciphertext between the host and its viewers.']]],
+ ['2',[]],
+ ['3',[['kw','package '],['vr','relay']]],
+ ['4',[]],
+ ['5',[['kw','func '],['fn','Route'],['t','(c '],['ty','*Conn'],['t',') '],['ty','error'],['t',' {']]],
+ ['6',[['t','    for msg := '],['kw','range'],['t',' c.'],['fn','Read'],['t','() {']]],
+ ['7',[['t','        c.peers.'],['fn','Broadcast'],['t','(msg) '],['cm','// opaque — never decrypted']]],
+ ['8',[['t','    }']]],
+ ['9',[['kw','    return '],['vr','nil']]],
+ ['10',[['t','}'],['cur','']]],
+];
+const LOG=[
+ ['p','studio-mac:reminal $ go test ./internal/relay -run Route'],
+ ['d','=== RUN   TestRouteForwardsCiphertext'],
+ ['ok','--- PASS: TestRouteForwardsCiphertext (0.02s)'],
+ ['d','=== RUN   TestRelayNeverDecrypts'],
+ ['ok','--- PASS: TestRelayNeverDecrypts (0.01s)'],
+ ['ok','PASS'],
+ ['w','ok   github.com/reminal/reminal/internal/relay   0.214s'],
+];
+
+function esc(s){return s;}
+window.TOTAL = 52;
+window.render=function(t){
+  // 1) pop-out: window scales/fades out of the browser tab onto the desktop
+  const p=Math.max(0,Math.min(1,t/9));
+  const e=1-Math.pow(1-p,3);              // ease-out
+  win.style.opacity=e;
+  win.style.transform='translate(' + (-118*(1-e)) + 'px,' + (-104*(1-e)) + 'px) scale(' + (0.34+0.66*e) + ')';
+  browser.style.opacity=(1-Math.min(1,t/6));
+  bhint.style.opacity=(t<3?1:0);
+
+  // 2) code cursor blink
+  const codeHtml=CODE.map(([g,segs])=>{
+    let inner=segs.map(([c,x])=> c==='cur' ? '<span class="cur"></span>' : '<span class="'+c+'">'+esc(x)+'</span>').join('');
+    return '<div class="ln"><span class="g">'+g+'</span>'+inner+'</div>';
+  }).join('');
+  code.innerHTML=codeHtml;
+  const curEl=code.querySelector('.cur'); if(curEl) curEl.style.opacity=(t%2===0)?1:0.15;
+
+  // 3) live terminal — go test streams in during the hold
+  const start=11;
+  const shown=Math.max(0,Math.min(LOG.length, Math.floor((t-start)/2)+1));
+  let out='';
+  for(let i=0;i<shown;i++){ const [c,x]=LOG[i]; out+='<div class="'+c+'">'+esc(x)+'</div>'; }
+  if(shown<LOG.length && t>=start) out+='<div class="w">'+((t%2===0)?'▋':' ')+'</div>';
+  term.innerHTML=out;
+
+  // 4) live badge pulse
+  led.style.opacity=0.55+0.45*Math.abs(Math.sin(t*0.2));
+};
+window.render(0);
+</script>
+</body></html>
