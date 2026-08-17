@@ -1,0 +1,145 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Privacy Policy — reminal</title>
+<meta name="description" content="What reminal collects, which is almost nothing, and how to check that claim yourself.">
+<link rel="canonical" href="https://reminal.app/privacy">
+<link rel="icon" href="/assets/icon.png" type="image/png">
+<style>
+:root{--bg:#0d1117;--surface:#161b22;--line:#30363d;--soft:#21262d;
+--fg:#e6edf3;--muted:#8b949e;--dim:#6e7681;--accent:#58a6ff}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);
+font:16px/1.7 -apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;-webkit-font-smoothing:antialiased}
+.wrap{max-width:760px;margin:0 auto;padding:26px 22px 90px}
+nav{border-bottom:1px solid var(--soft);margin-bottom:44px}
+nav .inner{max-width:760px;margin:0 auto;padding:0 22px;height:60px;display:flex;align-items:center;gap:10px}
+nav a{display:flex;align-items:center;gap:10px;color:var(--fg);text-decoration:none;font-weight:650}
+nav img{width:26px;height:26px;border-radius:7px}
+h1{font-size:31px;letter-spacing:-.025em;margin:0 0 8px}
+.updated{color:var(--dim);font-size:14px;margin:0 0 34px}
+h2{font-size:19px;letter-spacing:-.015em;margin:38px 0 12px;padding-bottom:8px;border-bottom:1px solid var(--soft)}
+p{margin:0 0 15px;color:var(--muted)}
+strong{color:var(--fg);font-weight:620}
+ul{margin:0 0 15px;padding-left:22px;color:var(--muted)}
+li{margin-bottom:7px}
+a{color:var(--accent)}
+code,pre{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:13.5px}
+pre{background:#0b0f14;border:1px solid var(--line);border-radius:9px;padding:14px 16px;overflow-x:auto;color:#c9d1d9;margin:0 0 15px}
+code{background:rgba(110,118,129,.2);padding:.15em .4em;border-radius:5px}
+pre code{background:none;padding:0}
+.lede{font-size:18px;color:var(--fg);border-left:2px solid var(--accent);padding-left:16px;margin:0 0 32px}
+table{border-collapse:collapse;width:100%;margin:0 0 15px;font-size:14.5px}
+th,td{border:1px solid var(--soft);padding:9px 12px;text-align:left;vertical-align:top;color:var(--muted)}
+th{color:var(--fg);font-weight:620}
+footer{border-top:1px solid var(--soft);margin-top:52px;padding-top:22px;font-size:14px;color:var(--dim)}
+footer a{color:var(--muted)}
+</style>
+</head>
+<body>
+<nav><div class="inner"><a href="/"><img src="/assets/icon.png" alt="">reminal</a></div></nav>
+<div class="wrap">
+
+<h1>Privacy Policy</h1>
+<p class="updated">Last updated 17 August 2026</p>
+
+<p class="lede">reminal is built so that there is very little to collect. This page describes
+the little there is, and — where possible — how to verify each claim yourself rather
+than take it on trust.</p>
+
+<h2>This website</h2>
+<p>reminal.app sets <strong>no cookies</strong>, uses <strong>no analytics</strong>, and loads
+<strong>no third-party scripts, fonts, or tracking pixels</strong>. There is no advertising
+network, no session recording, and no fingerprinting. You can confirm this by opening
+your browser's developer tools: the only network requests the page makes to anything other
+than reminal.app are to Loops, and only at the moment you submit the waitlist form.</p>
+<p>The site is served by <strong>Cloudflare</strong>, which acts as our hosting provider. Like
+any host, Cloudflare processes the connection data required to deliver a web page — including
+your IP address — under its own policies. We do not receive, store, or query that data.</p>
+<p>The page measures your round-trip time to the nearest Cloudflare edge by requesting
+<code>/ping</code>, an endpoint that returns an empty response and stores nothing. The
+resulting number is displayed to you and never leaves your browser.</p>
+
+<h2>The waitlist</h2>
+<p>If — and only if — you submit the waitlist form, we receive:</p>
+<ul>
+  <li>your <strong>email address</strong>;</li>
+  <li>whether you selected <strong>"just me"</strong> or <strong>"my team"</strong>;</li>
+  <li>if you selected "my team", the <strong>size range</strong> you chose.</li>
+</ul>
+<p>That's the whole record. We use it for one purpose: to email you when the hosted
+version is available, and to understand whether the people waiting are individuals or
+companies, which affects how it gets built and priced. We do not sell it, rent it, or
+share it for anyone else's marketing.</p>
+<p>This data is stored by <strong>Loops</strong> (loops.so), our email provider, acting as a
+processor on our behalf. Every email includes an unsubscribe link. To have your record
+deleted outright, email the address at the bottom of this page and it will be removed.</p>
+
+<h2>The software</h2>
+<p>The reminal client and relay contain <strong>no telemetry or analytics of any kind</strong>.
+No usage reporting, no crash reporting, no third-party SDK. This is a claim you can check,
+and the checks are published in
+<a href="https://github.com/harshalgajjar/Reminal/blob/main/docs/security/architecture.md">the
+security architecture</a>:</p>
+<pre><code>grep -rIn "analytics\|telemetry\|posthog\|sentry\|mixpanel" internal/ cmd/   # no output
+grep -rn  "console\." cloudflare/src                                        # no output</code></pre>
+<p>Two things do involve a network connection, and you should know about both:</p>
+<ul>
+  <li><strong>Update checks.</strong> At most once every 24 hours the client asks GitHub for the
+      latest release and the relay for a minimum-version floor. GitHub sees your IP address and
+      user agent, as it would for any download.</li>
+  <li><strong>Sessions.</strong> Your terminal and window data is encrypted end to end with
+      AES-256-GCM. The relay routes ciphertext it cannot read, and holds routing metadata for no
+      more than ten minutes after an agent disconnects. Session content is never stored.</li>
+</ul>
+<p><strong>One deliberate exception:</strong> <code>reminal expose</code> forwards a local port to
+a public URL for visitors who hold no reminal key, so that traffic is <em>not</em> end-to-end
+encrypted and is readable by the relay in transit. It is PIN-gated by default. If that matters
+for what you are exposing, self-host the relay.</p>
+
+<h2>Who else is involved</h2>
+<table>
+  <tr><th>Provider</th><th>Role</th><th>What it handles</th></tr>
+  <tr><td>Cloudflare</td><td>Website and relay hosting</td><td>Connection data for delivery; ciphertext in transit. Routing metadata ≤10 minutes past disconnect.</td></tr>
+  <tr><td>Loops</td><td>Waitlist email</td><td>Only the waitlist record described above, and only if you submit the form.</td></tr>
+  <tr><td>GitHub</td><td>Source and release downloads</td><td>IP and user agent on update checks and downloads.</td></tr>
+  <tr><td>TURN provider</td><td>Optional NAT traversal</td><td>IP addresses of both peers when a direct path can't be negotiated. Relayed media stays encrypted.</td></tr>
+</table>
+<p>There are no others. No analytics vendor, no error-reporting service, no CRM, no payment
+processor, no advertising network. The fuller version of this table lives in
+<a href="https://github.com/harshalgajjar/Reminal/blob/main/docs/security/subprocessors.md">docs/security/subprocessors.md</a>.</p>
+
+<h2>Your choices</h2>
+<ul>
+  <li><strong>Self-host the relay</strong> and no third party is in your session path at all. It runs
+      on Cloudflare's free tier; the instructions are in the repository.</li>
+  <li><strong>Don't submit the form</strong> and we hold nothing about you whatsoever.</li>
+  <li><strong>Ask for deletion.</strong> Email us and your waitlist record is removed. You don't need
+      to give a reason.</li>
+</ul>
+<p>Depending on where you live you may have statutory rights to access, correct, export, or
+erase personal data we hold. Given that the only thing we hold is a waitlist record, exercising
+any of them is a single email.</p>
+
+<h2>Children</h2>
+<p>reminal is a developer tool and is not directed at children under 13, and we do not knowingly
+collect their personal data.</p>
+
+<h2>Changes</h2>
+<p>If this policy changes materially, the date at the top changes with it, and the previous
+version remains visible in the
+<a href="https://github.com/harshalgajjar/Reminal/commits/main/site/public/privacy/index.html">page's
+git history</a> — this policy is versioned in public alongside the code it describes.</p>
+
+<h2>Contact</h2>
+<p>Harshal Gajjar — <a href="mailto:mail@harshalgajjar.com">mail@harshalgajjar.com</a></p>
+
+<footer>
+  <a href="/">reminal.app</a> · <a href="/terms">Terms of Service</a> ·
+  <a href="https://github.com/harshalgajjar/Reminal">GitHub</a>
+</footer>
+</div>
+</body>
+</html>

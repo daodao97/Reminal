@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Terms of Service — reminal</title>
+<meta name="description" content="Terms for reminal.app and the shared relay. The software itself is governed by its licence, not by these terms.">
+<link rel="canonical" href="https://reminal.app/terms">
+<link rel="icon" href="/assets/icon.png" type="image/png">
+<style>
+:root{--bg:#0d1117;--surface:#161b22;--line:#30363d;--soft:#21262d;
+--fg:#e6edf3;--muted:#8b949e;--dim:#6e7681;--accent:#58a6ff}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);
+font:16px/1.7 -apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;-webkit-font-smoothing:antialiased}
+.wrap{max-width:760px;margin:0 auto;padding:26px 22px 90px}
+nav{border-bottom:1px solid var(--soft);margin-bottom:44px}
+nav .inner{max-width:760px;margin:0 auto;padding:0 22px;height:60px;display:flex;align-items:center;gap:10px}
+nav a{display:flex;align-items:center;gap:10px;color:var(--fg);text-decoration:none;font-weight:650}
+nav img{width:26px;height:26px;border-radius:7px}
+h1{font-size:31px;letter-spacing:-.025em;margin:0 0 8px}
+.updated{color:var(--dim);font-size:14px;margin:0 0 34px}
+h2{font-size:19px;letter-spacing:-.015em;margin:38px 0 12px;padding-bottom:8px;border-bottom:1px solid var(--soft)}
+p{margin:0 0 15px;color:var(--muted)}
+strong{color:var(--fg);font-weight:620}
+ul{margin:0 0 15px;padding-left:22px;color:var(--muted)}
+li{margin-bottom:7px}
+a{color:var(--accent)}
+code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:13.5px;background:rgba(110,118,129,.2);padding:.15em .4em;border-radius:5px}
+.lede{font-size:18px;color:var(--fg);border-left:2px solid var(--accent);padding-left:16px;margin:0 0 32px}
+footer{border-top:1px solid var(--soft);margin-top:52px;padding-top:22px;font-size:14px;color:var(--dim)}
+footer a{color:var(--muted)}
+</style>
+</head>
+<body>
+<nav><div class="inner"><a href="/"><img src="/assets/icon.png" alt="">reminal</a></div></nav>
+<div class="wrap">
+
+<h1>Terms of Service</h1>
+<p class="updated">Last updated 17 August 2026</p>
+
+<p class="lede">These terms cover this website and the shared relay we operate. They do not
+govern the reminal software itself — that is covered by its licence, and nothing here
+adds restrictions to it.</p>
+
+<h2>1. What these terms apply to</h2>
+<p>They apply to <strong>reminal.app</strong> and to the <strong>shared relay</strong> that reminal
+clients connect to by default.</p>
+<p>The software is licensed separately under
+<a href="https://github.com/harshalgajjar/Reminal/blob/main/LICENSE">AGPL-3.0</a>, or under a
+commercial licence as described in
+<a href="https://github.com/harshalgajjar/Reminal/blob/main/LICENSING.md">LICENSING.md</a>. Where
+these terms and that licence disagree about the software, <strong>the licence wins</strong>. You
+may run reminal, including its relay, entirely on your own infrastructure and never accept these
+terms at all.</p>
+
+<h2>2. The shared relay</h2>
+<p>The relay is provided free of charge, as a convenience, on a <strong>best-effort basis</strong>.
+There is no service level agreement, no uptime guarantee, and no support commitment. It may be
+changed, rate-limited, or discontinued at any time. It is not intended for anything where an
+outage would cause you real harm.</p>
+<p>If continuity matters to you, <strong>self-host it</strong>. That path exists specifically so
+that you never have to depend on us, and the instructions are in the repository.</p>
+<p>The relay carries end-to-end encrypted traffic it cannot read. We do not inspect session
+content, because we cannot. The one exception is <code>reminal expose</code>, which forwards a
+local port for visitors holding no key and therefore passes through the relay in plaintext.</p>
+
+<h2>3. Acceptable use</h2>
+<p>Don't use the relay to:</p>
+<ul>
+  <li>access machines you are not authorised to access;</li>
+  <li>break the law of any jurisdiction that applies to you, or infringe anyone's rights;</li>
+  <li>distribute malware, or host material that is illegal where it is served;</li>
+  <li>attack, overload, or attempt to degrade the relay or the machines of others using it;</li>
+  <li>resell relay capacity as a service of your own.</li>
+</ul>
+<p>We may block traffic or decline service where we reasonably believe this clause is being
+broken. Because the relay cannot read session contents, enforcement is necessarily limited to
+what is visible at the network level.</p>
+
+<h2>4. Your responsibility for what you connect</h2>
+<p>reminal gives access to your own machines. <strong>You are responsible for what you expose and
+to whom.</strong> Sharing a session ID and PIN gives the holder the access those credentials carry;
+enrolling an owner device grants that device PIN-free access until you revoke it. Treat both as you
+would any other credential.</p>
+
+<h2>5. No warranty</h2>
+<p>The website, the relay, and the software are provided <strong>"as is", without warranty of any
+kind</strong>, express or implied, including merchantability, fitness for a particular purpose, and
+non-infringement. This mirrors the disclaimer in the AGPL and is not an attempt to add to it.</p>
+
+<h2>6. Limitation of liability</h2>
+<p>To the maximum extent permitted by law, we are not liable for any indirect, incidental, special,
+consequential, or exemplary damages, nor for any loss of data, profits, or business, arising from
+your use of the website, the relay, or the software — including where a session is unavailable,
+interrupted, or degraded.</p>
+<p>Nothing in these terms limits liability that cannot lawfully be limited, including for death or
+personal injury caused by negligence, or for fraud.</p>
+
+<h2>7. Changes</h2>
+<p>These terms may change. The date at the top changes with them, and previous versions remain
+visible in the
+<a href="https://github.com/harshalgajjar/Reminal/commits/main/site/public/terms/index.html">page's
+git history</a>, which is public. Continuing to use the relay after a change means you accept it.</p>
+
+<h2>8. Governing law</h2>
+<p>These terms are governed by the laws of <strong>England and Wales</strong>, and the courts of
+England and Wales have exclusive jurisdiction, except where mandatory consumer-protection law in
+your country of residence gives you the right to bring proceedings locally.</p>
+
+<h2>9. Contact</h2>
+<p>Harshal Gajjar — <a href="mailto:mail@harshalgajjar.com">mail@harshalgajjar.com</a></p>
+
+<footer>
+  <a href="/">reminal.app</a> · <a href="/privacy">Privacy Policy</a> ·
+  <a href="https://github.com/harshalgajjar/Reminal">GitHub</a>
+</footer>
+</div>
+</body>
+</html>

@@ -26,9 +26,14 @@ addresses, no passwords, no payment details, no IP address logs of its own.
 | **Cloudflare, Inc.** | Relay — Workers + Durable Objects, at `*.workers.dev` | Session routing metadata and ciphertext in transit. Plaintext for `reminal expose` only (see below) | Routing metadata ≤10 min past agent disconnect; content never stored | **Yes** — self-host the relay |
 | **GitHub, Inc. (Microsoft)** | Release distribution, source hosting, security advisory intake | Client IP and User-Agent on update checks and downloads. Vulnerability reports you choose to submit | Per GitHub's policy | Partly — install from source and disable update checks |
 | **STUN/TURN provider** | WebRTC NAT traversal, when a direct path is negotiated | IP addresses of both peers. TURN relays DTLS-encrypted media it cannot read | Per provider | Yes — sessions fall back to the relay path |
+| **Loops** | Waitlist email for the announced hosted tier, at `reminal.app` only | Email address, and whether the signup identified as an individual or a team with a size range. Nothing else, and only if the form is submitted | Until unsubscribe or deletion on request | **Yes** — the software never contacts it; do not submit the form |
 
 There are **no other subprocessors**. No analytics vendor, no error-reporting
-service, no CDN for client assets, no email provider, no CRM, no payment processor.
+service, no CDN for client assets, no CRM, no payment processor.
+
+Loops is listed above for completeness and is **not in the software's path at all**: it
+receives a waitlist address only when someone submits a form on the marketing site, and no
+reminal client or relay ever contacts it. Running reminal touches none of it.
 The absence of a client-side telemetry SDK is verifiable:
 
 ```bash
