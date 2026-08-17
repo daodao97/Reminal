@@ -1128,11 +1128,16 @@ if (FEATURES.lidStage && matchMedia("(min-width:821px)").matches) {
     const ease = t => t < .5 ? 4*t*t*t : 1 - Math.pow(-2*t + 2, 3) / 2;
     const mix  = (a, b, t) => a + (b - a) * t;
 
+    // Depth matters as much as position here: perspective magnifies by
+    // 1600/(1600−z), so relay.ts parked at z=190 was drawn 13.5% larger and
+    // its left edge landed outside the browser it was meant to sit inside.
+    // Keeping it at z=110 puts it back on the monitor.
+    //
     // Three stops per window: on the laptop screen, on the remote desktop,
     // then stacked in the phone. No rotation anywhere — a tilted window reads
     // as a graphic; a straight one reads as a window.
     const PLAN = [
-      { on: [-150,-104, 10], desk: [-176,-30, 190], ph: [0,-150, 210], phs: 0.60 },
+      { on: [-150,-104, 10], desk: [-150,-46, 110], ph: [0,-150, 210], phs: 0.60 },
       { on: [  36,-120, 30], desk: [ 150,-62, 150], ph: [0,  -8, 170], phs: 0.60 },
       { on: [ -34,  16, 20], desk: [ 140, 86, 120], ph: [0, 132, 130], phs: 0.60 },
     ];
