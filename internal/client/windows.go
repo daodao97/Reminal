@@ -412,8 +412,9 @@ func (a *Agent) handleWindowInput(encData string) {
 		// Raise the target window once at the start of a scroll gesture so the
 		// scroll lands on IT (not whatever was focused). Skip the ~100ms raise on
 		// subsequent events of the same gesture (a new gesture = a different
-		// window, or a >400ms gap) so continuous scrolling stays smooth.
-		if ev.ID != a.winScrollID || time.Since(a.winScrollAt) > 400*time.Millisecond {
+		// window, or a gap past winScrollGestureGap) so continuous scrolling
+		// stays smooth.
+		if ev.ID != a.winScrollID || time.Since(a.winScrollAt) > winScrollGestureGap {
 			_ = b.focus(w)
 		}
 		a.winScrollID = ev.ID
@@ -601,6 +602,20 @@ func (a *Agent) setStayUnlocked(on bool) {
 		a.stayAwake = nil
 	}
 }
+
+// winScrollGestureGap separates one scroll gesture from the next. Within a
+// gesture the target window is raised ONCE; every later event skips the raise,
+// which on macOS is a ~100ms osascript spawn. That matters because the viewer
+// emits a scroll roughly every 50ms while a finger moves: paying the raise per
+// event puts the host at half the rate input arrives, so the lag ACCUMULATES
+// for the length of the gesture and then drains after the finger stops — which
+// reads as "I scrolled too far", not as a constant delay.
+//
+// Lives here, shared, because this logic exists twice: once for the in-process
+// backend below, and once in the daemon (mirrorServeInput), which is the path
+// macOS actually takes. The daemon copy was missing entirely — the debounce
+// below has never run on a Mac.
+const winScrollGestureGap = 400 * time.Millisecond
 
 // windowFrameInterval is a floor on the frame period — a cheap-to-capture window
 // with instant acks could otherwise spin a core respawning the capture tool. The

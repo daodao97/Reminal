@@ -33,7 +33,14 @@ import (
 
 // mirrorSockPath is the fixed (non-PID) socket the daemon serves capture + input
 // on, so any local session can find it. ~/.reminal/mirror.sock.
+// REMINAL_MIRROR_SOCK overrides it so a development daemon can be run beside
+// the installed one instead of seizing its socket — testing a change to this
+// service otherwise means every live session's capture and input abruptly
+// routes through an unsigned build.
 func mirrorSockPath() (string, error) {
+	if p := strings.TrimSpace(os.Getenv("REMINAL_MIRROR_SOCK")); p != "" {
+		return p, nil
+	}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", err
@@ -337,6 +344,79 @@ type mirrorInputEvent struct {
 	Count   int          `json:"count"`
 }
 
+// Scroll-gesture tracking for the daemon. Each input arrives on its own
+// short-lived connection, so "am I still in the same gesture" can't live on the
+// connection — it has to be daemon-wide state. Guarded because connections are
+// served concurrently (go handleMirrorConn).
+var (
+	mirrorScrollMu sync.Mutex
+	mirrorScrollID string
+	mirrorScrollAt time.Time
+)
+
+// mirrorScrollStartsGesture reports whether this scroll event begins a new
+// gesture — a different window, or a long enough pause since the last one — and
+// records it either way. Only the first event of a gesture pays the ~100ms
+// window raise; see winScrollGestureGap for why paying it per event is what
+// made scrolling feel like it ran away from you.
+func mirrorScrollStartsGesture(id string) bool {
+	mirrorScrollMu.Lock()
+	defer mirrorScrollMu.Unlock()
+	fresh := id != mirrorScrollID || time.Since(mirrorScrollAt) > winScrollGestureGap
+	mirrorScrollID, mirrorScrollAt = id, time.Now()
+	return fresh
+}
+
+// Resolved-window cache. findWindow enumerates EVERY window on the system
+// through an osascript — measured at ~114ms on an idle machine — and
+// mirrorServeInput ran it for every single event. The viewer emits a scroll
+// roughly every 50ms while a finger moves, so the lookup ALONE put the host
+// more than twice behind the input rate: the backlog grew for as long as the
+// gesture lasted and kept draining after the finger stopped, which is what
+// made scrolling overshoot rather than merely lag.
+type mirrorWinEntry struct {
+	w  winInfo
+	at time.Time
+}
+
+var (
+	mirrorWinMu    sync.Mutex
+	mirrorWinCache = map[string]mirrorWinEntry{}
+)
+
+// mirrorFindWindow resolves a window id for an input event. The repeating
+// event kinds reuse a recent lookup; anything that depends on exact, current
+// geometry re-resolves. Entries expire with winScrollGestureGap, so a window
+// that moves, resizes or closes is picked up within one gesture's worth of
+// time — the same bound that already governs re-raising.
+func mirrorFindWindow(b windowBackend, id string, reuse bool) (winInfo, error) {
+	now := time.Now()
+	if reuse {
+		mirrorWinMu.Lock()
+		e, ok := mirrorWinCache[id]
+		mirrorWinMu.Unlock()
+		if ok && now.Sub(e.at) < winScrollGestureGap {
+			return e.w, nil
+		}
+	}
+	w, err := findWindow(b, id)
+	if err != nil {
+		mirrorWinMu.Lock()
+		delete(mirrorWinCache, id) // gone — don't let a stale entry outlive it
+		mirrorWinMu.Unlock()
+		return w, err
+	}
+	mirrorWinMu.Lock()
+	for k, e := range mirrorWinCache { // opportunistic sweep; the map stays tiny
+		if now.Sub(e.at) > winScrollGestureGap {
+			delete(mirrorWinCache, k)
+		}
+	}
+	mirrorWinCache[id] = mirrorWinEntry{w: w, at: now}
+	mirrorWinMu.Unlock()
+	return w, nil
+}
+
 // mirrorServeInput injects one forwarded viewer event using the daemon's granted
 // backend, then replies ok/error.
 func mirrorServeInput(conn net.Conn, payload string) {
@@ -346,7 +426,12 @@ func mirrorServeInput(conn net.Conn, payload string) {
 		return
 	}
 	b := darwinWindows{}
-	w, err := findWindow(b, ev.ID)
+	// Scroll repeats many times a second and moves nothing but the content
+	// under a fixed pointer; keys don't use geometry at all. Both can reuse a
+	// recent lookup. A click or drag places the pointer at an exact spot, so
+	// those always re-resolve — landing one on a stale rect is a wrong click.
+	reuse := ev.Kind == "scroll" || ev.Kind == "key"
+	w, err := mirrorFindWindow(b, ev.ID, reuse)
 	if err != nil {
 		fmt.Fprintln(conn, "error: window gone")
 		return
@@ -363,7 +448,9 @@ func mirrorServeInput(conn net.Conn, payload string) {
 		_ = b.focus(w)
 		_ = b.drag(w, ev.Path)
 	case "scroll":
-		_ = b.focus(w)
+		if mirrorScrollStartsGesture(ev.ID) {
+			_ = b.focus(w)
+		}
 		_ = b.scroll(w, ev.X, ev.Y, ev.Dx, ev.Dy)
 	case "key":
 		if ev.Special != "" {
