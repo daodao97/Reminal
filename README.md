@@ -408,10 +408,12 @@ Scan the QR — you're in. No signup, no port-forwarding, no keys on disk. About
 
 ### License
 
-reminal is **dual-licensed**: [AGPL-3.0](LICENSE) for open-source use, or a
-[commercial license](LICENSING.md) for proprietary/closed-source use. See
-[`LICENSING.md`](LICENSING.md) for details, and [`CLA.md`](CLA.md) if you'd
-like to contribute.
+reminal is **dual-licensed** under [AGPL-3.0](LICENSE). Using it — personally or
+inside a company, unmodified — needs nothing from us. A
+[commercial license](LICENSING.md) covers embedding reminal in a product you
+distribute, or running a modified copy as a service. See
+[`LICENSING.md`](LICENSING.md) for where that line sits, and [`CLA.md`](CLA.md)
+if you'd like to contribute.
 
 <sub>Built by <a href="https://github.com/harshalgajjar">@harshalgajjar</a>. Stars are appreciated. Issues even more so.</sub>
 

@@ -1,47 +1,65 @@
 # Licensing
 
-reminal is **dual-licensed**.
+reminal is **dual-licensed**: [AGPL-3.0](LICENSE) for open-source use, or a
+commercial license when the AGPL doesn't work for you.
 
-## 1. Open-source license — AGPL-3.0
+Most people — including most companies — need nothing from this page beyond the
+first section.
 
-By default, reminal is licensed under the **GNU Affero General Public License,
-version 3.0 or later** (see [`LICENSE`](LICENSE)).
+## Do you need a commercial license?
 
-In short, the AGPL lets you use, study, modify, and redistribute reminal freely,
-**provided that**:
+**Almost certainly not**, if you are:
 
-- if you distribute reminal (modified or not), you make the complete
-  corresponding source available under the same license; and
-- **if you run a modified version to provide a network service** (e.g. host it
-  as a service that others interact with over a network), you must offer those
-  users the complete corresponding source of your modified version.
+- an individual using reminal, for anything, including paid work;
+- a company **running reminal internally**, unmodified — on laptops, servers,
+  build machines, a fleet of Macs;
+- evaluating it, or running it in production, without changing the source.
 
-The network-use clause (AGPL §13) is the key difference from the GPL and is the
-reason the AGPL was chosen: it keeps the open version genuinely open even when
-reminal is offered as a hosted service.
+The AGPL's much-discussed §13 obligation attaches to **modified** versions made
+available to others over a network. Running the released binaries inside your
+company is not that. Keep the copyright notices intact and you are done — no
+license to buy, no email to send.
 
-If the AGPL works for you, you don't need to do anything else — just comply with
-[`LICENSE`](LICENSE).
+**You do need one** if you want to:
 
-## 2. Commercial license
+- **embed reminal in a product you distribute** without releasing that product's
+  source under the AGPL;
+- **run a modified reminal as a service** for other people, without publishing
+  your modifications;
+- receive it under **different warranty, indemnity, or support terms** than the
+  AGPL's "as is".
 
-If you **cannot or do not want to comply with the AGPL** — for example you want
-to:
+A commercial license removes the copyleft obligations for these cases.
 
-- embed reminal in a proprietary/closed-source product,
-- offer a hosted service built on a modified reminal without releasing your
-  source, or
-- receive it under different warranty/indemnity/support terms,
+## What a commercial license costs
 
-then a separate **commercial license** is available. Under a commercial license
-the AGPL's copyleft obligations do not apply.
+There are two, because two quite different things get asked for.
 
-The commercial license is offered by the copyright holder and is not part of
-this repository.
+### Policy license — $3,000/year
 
-**To obtain a commercial/enterprise license, contact:**
+For companies that only **run reminal internally** but whose policy forbids
+AGPL dependencies outright, regardless of how they are used. Nothing is being
+embedded or redistributed; what's needed is a license that isn't the AGPL, so
+the tool your engineers already want stops being blocked.
+
+Covers unlimited machines within one company. Deliberately priced to be a
+signature rather than a procurement exercise.
+
+### Embedding & hosted-service license — from $25,000/year
+
+For shipping reminal inside a product you distribute, or running a modified
+reminal as a service for others. Scaled to the deployment, and to the warranty,
+indemnity and support terms you need attached.
+
+A floor rather than a quote: the terms that matter here differ enough per
+company that a fixed price list would be wrong for nearly everyone.
+
+## Getting one
 
 > Harshal Gajjar — `mail@harshalgajjar.com`
+
+Tell me what you are building and how reminal fits into it. A one-paragraph
+description is usually enough to quote against.
 
 ## Why we can offer both
 
@@ -55,4 +73,5 @@ possible.
 
 *This document is an informational summary, not legal advice, and the summary of
 the AGPL above does not replace or modify the actual [`LICENSE`](LICENSE) text,
-which governs.*
+which governs. If your situation is close to the line, read §13 and talk to your
+own counsel.*
