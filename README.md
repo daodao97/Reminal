@@ -83,7 +83,7 @@ And nothing about those windows says *stream*. Drag it, scrub a video inside it,
 
 ## Interact with your machines like they're right here
 
-Pop any remote window out onto your desktop and it sits there like a native app — except it's running on another machine entirely. Line up an editor from your MacBook, a terminal on a cloud box, and a dashboard from the Mac mini at home, and work across all of them as if they were local.
+Pop any remote window out onto your desktop and it sits there like its own app window — except it's running on another machine entirely. Line up an editor from your MacBook, a terminal on a cloud box, and a dashboard from the Mac mini at home, and work across all of them as if they were local.
 
 <div align="center">
 <img src="docs/machines.gif" alt="Three native windows in front — an editor, a terminal, and a dashboard — each linked by a dotted line to the machine behind it: a MacBook (studio-mac), a cloud VM (aws-eu-1), and a Mac mini (mini-01)" width="900">

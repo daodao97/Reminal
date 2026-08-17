@@ -772,6 +772,7 @@ footer a{color:var(--muted)}
         <li class="beat"><b>Nothing open yet?</b> Launch any installed app on the host straight from the Apps menu, then drive it.</li>
         <li class="beat"><b>Or take the whole desktop.</b> One tap on Host &rarr; View full desktop and the entire machine is yours.</li>
         <li class="beat"><b>On a phone, the screen becomes a trackpad.</b> Your Mac, fully hands-on, from your pocket.</li>
+        <li class="beat"><b>Or pop it out.</b> The window leaves the tab and sits on your desktop like its own app window &mdash; an editor from your MacBook beside a terminal on a cloud box.</li>
       </ol>
     </div>
   </div>
@@ -1207,12 +1208,25 @@ if (FEATURES.lidStage && matchMedia("(min-width:821px)").matches) {
       }
 
       if (cap) {
-        const show = span(p, 0.58, 0.76);
+        // Three phases, each naming what is on screen at that moment. The
+        // first exists because the windows spend ~30-55% detached and drifting
+        // with nothing holding them — that IS the pop-out idea, and it used to
+        // scroll past unnarrated while the caption waited until 58%.
+        const phase = pocket > 0.55 ? 2 : land > 0.55 ? 1 : 0;
+        const show = phase === 0
+          ? Math.min(span(p, 0.26, 0.34), 1 - span(p, 0.50, 0.56))
+          : span(p, 0.58, 0.72);
         cap.style.opacity = String(show);
         cap.style.transform = `translateY(${mix(14, 0, show)}px)`;
-        cap.innerHTML = pocket > 0.55
-          ? "<b>Same machine. Same windows.</b> Now in your pocket."
-          : "<b>Lid shut. Nothing plugged in.</b> The windows never stopped.";
+        const lines = [
+          "<b>One window, one pane.</b> Pop any of them onto your own desktop.",
+          "<b>Lid shut. Nothing plugged in.</b> The windows never stopped.",
+          "<b>Same machine. Same windows.</b> Now in your pocket.",
+        ];
+        if (cap.dataset.phase !== String(phase)) {
+          cap.dataset.phase = String(phase);
+          cap.innerHTML = lines[phase];
+        }
       }
       if (hint) hint.style.opacity = String(1 - span(p, 0.02, 0.14));
     }
