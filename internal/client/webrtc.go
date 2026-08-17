@@ -147,11 +147,20 @@ func cloudflareICE() ([]iceServerJSON, bool) {
 	return cfCache, true
 }
 
-// rtcPeer is one viewer's peer connection and its frame DataChannel.
+// rtcPeer is one viewer's peer connection and its DataChannels.
 type rtcPeer struct {
-	id        string
-	pc        *webrtc.PeerConnection
-	dc        *webrtc.DataChannel
+	id string
+	pc *webrtc.PeerConnection
+	dc *webrtc.DataChannel
+	// ctl is the v2 out-of-band channel: acks, keyframe requests and
+	// heartbeats. Separate from dc because SCTP orders and (on v1) reliably
+	// retransmits per stream — an ack sharing the frame stream queues BEHIND
+	// every buffered frame, so a bitrate spike delayed acks, which the pacing
+	// loop read as a dead viewer and answered by demoting the transport and
+	// then killing the stream ("screen may be locked or asleep" on a host that
+	// was never away). Nil for a v1 viewer, which still acks over dc.
+	ctl       *webrtc.DataChannel
+	v2        bool        // viewer speaks the split-channel protocol
 	h264      bool        // viewer declared WebCodecs H.264 decode in its hello
 	open      atomic.Bool // true once the DataChannel is ready to carry frames
 	confirmed atomic.Bool // true once the viewer acked a frame OVER this channel
@@ -161,6 +170,42 @@ type rtcPeer struct {
 	openedAt   time.Time                 // when probing started (guarded by mu)
 	haveRemote bool                      // remote description applied yet?
 	pendingICE []webrtc.ICECandidateInit // candidates that arrived early
+}
+
+// rtcSendBudget bounds how many bytes may sit unsent in one peer's SCTP send
+// queue before we stop handing it frames. This is the congestion signal the
+// stream had none of: the encoder's bitrate is fixed at startup, dc.Send never
+// blocks and never fails on a slow link, so pion buffered without limit and
+// latency grew without bound until the ack loop declared the viewer dead.
+// Dropping instead is what a video call does — the viewer sees a sequence gap
+// and asks for a keyframe (submitAU → requestH264Key), which it already did for
+// packets lost in flight. Sized at roughly a quarter-second of the encoder's
+// 6 Mbps ceiling: deep enough to ride out a burst, shallow enough that the
+// picture stays current rather than replaying the past.
+const rtcSendBudget = 192 << 10
+
+// sendFrame hands one frame message to this peer, unless its send queue is
+// already over budget. Best effort by design: the viewer's gap detection is
+// what turns a skipped frame back into a picture, so there is nothing useful
+// for a caller to do about one that didn't go.
+func (p *rtcPeer) sendFrame(raw []byte) {
+	if p.dc == nil || p.dc.BufferedAmount() > rtcSendBudget {
+		return
+	}
+	_ = p.dc.Send(raw)
+}
+
+// sendCtl delivers a small out-of-band message (currently only heartbeats;
+// acks travel the other way). Falls back to the frame channel for a v1 viewer,
+// which has no separate one.
+func (p *rtcPeer) sendCtl(raw []byte) {
+	if p.ctl != nil {
+		_ = p.ctl.Send(raw)
+		return
+	}
+	if p.dc != nil {
+		_ = p.dc.Send(raw)
+	}
 }
 
 func (p *rtcPeer) startProbe() {
@@ -174,6 +219,51 @@ func (p *rtcPeer) probeAge() time.Duration {
 	return time.Since(p.openedAt)
 }
 
+// rtcFrameLifetimeMS is how long SCTP may keep trying to deliver one frame
+// message on a v2 channel before abandoning it. Long enough for a fast
+// retransmit or two on a typical link (a 50ms RTT gets ~3 attempts), short
+// enough that a link which genuinely can't carry the bitrate sheds frames
+// instead of building a queue the viewer would have to watch its way through.
+const rtcFrameLifetimeMS = 150
+
+// onRTCViewerMsg handles one viewer→agent DataChannel message: a frame ack,
+// optionally carrying a keyframe request. viaFrames says it arrived on the
+// frame channel, which is the only thing that can CONFIRM that channel — the
+// point of confirmation is proof that full-size frames traverse it, and a
+// small message on the separate ctl channel proves nothing about the other.
+// A v2 viewer therefore stamps Frames on the acks it sends over ctl for a
+// frame that arrived peer-to-peer, which is the same evidence by another road.
+func (a *Agent) onRTCViewerMsg(peer *rtcPeer, data []byte, viaFrames bool) {
+	// Runs in pion's read goroutine, outside every other recover, on
+	// viewer-supplied data. Contain any panic so a crafted DataChannel message
+	// can't crash the agent.
+	defer func() {
+		if r := recover(); r != nil {
+			recoverLog("dc.OnMessage", r)
+		}
+	}()
+	var ack struct {
+		ID  string `json:"id"`
+		Seq uint64 `json:"seq"`
+		Key bool   `json:"key"` // viewer lost sync — send an IDR now
+		DC  bool   `json:"dc"`  // v2: the acked frame arrived peer-to-peer
+	}
+	if json.Unmarshal(data, &ack) != nil || ack.ID == "" {
+		return
+	}
+	if viaFrames || ack.DC {
+		peer.confirmed.Store(true)
+	}
+	// A keyframe request over P2P used to be parsed into a struct that had no
+	// Key field and silently dropped, so a viewer that lost sync on the
+	// DataChannel waited out the encoder's periodic IDR instead of getting the
+	// one it asked for. It matters far more now that frames are droppable.
+	if ack.Key {
+		a.requestWindowKey(ack.ID)
+	}
+	a.deliverWindowAck(ack.ID, ack.Seq)
+}
+
 // signal payloads (the JSON inside each webrtc_* message's encrypted Data).
 type rtcHelloMsg struct {
 	Peer string `json:"peer"`
@@ -181,6 +271,14 @@ type rtcHelloMsg struct {
 	// this peer's DataChannel may be compressed video instead of JPEGs (7-10×
 	// less bandwidth at the same quality). Old viewers omit it → JPEG forever.
 	H264 bool `json:"h264,omitempty"`
+	// V2 declares the viewer understands the split-channel transport: a
+	// separate "ctl" channel for acks/keyframe requests, and a time-limited
+	// unordered "frames" channel carrying the chunk-indexed winBinMagicV2
+	// framing. The agent is the offerer, so it must not create a channel an
+	// old viewer would mistake for the frame channel — hence the flag rather
+	// than always offering both. Old viewers omit it and get exactly the
+	// reliable ordered single channel they have always had.
+	V2 bool `json:"v2,omitempty"`
 }
 type rtcSDPMsg struct {
 	Peer string          `json:"peer"`
@@ -223,11 +321,24 @@ func (a *Agent) handleWebRTCHello(conn *websocket.Conn, encData string) {
 	if err != nil {
 		return // frames stay on the WS fallback
 	}
-	peer := &rtcPeer{id: hello.Peer, pc: pc, h264: hello.H264}
+	peer := &rtcPeer{id: hello.Peer, pc: pc, h264: hello.H264, v2: hello.V2}
 
-	// Reliable, ordered channel — same delivery guarantees as the WS path, so
-	// the viewer's render/ack loop is unchanged.
-	dc, err := pc.CreateDataChannel("frames", nil)
+	// The frame channel. A v1 viewer gets the reliable ordered channel it has
+	// always had. A v2 viewer gets PARTIAL reliability instead: an access unit
+	// that can't be delivered within rtcFrameLifetime is abandoned rather than
+	// retransmitted forever, and delivery is unordered so a straggler never
+	// holds up the frames behind it. Fully reliable ordered delivery is the
+	// wrong contract for video — one lost packet stalled every subsequent
+	// frame until SCTP's retransmit timer fired, which is exactly the
+	// stutter-then-catch-up-burst a video call avoids by dropping instead.
+	// Loss is already handled downstream: the viewer sees the sequence gap and
+	// asks for a fresh IDR.
+	dcInit := (*webrtc.DataChannelInit)(nil)
+	if hello.V2 {
+		ordered, lifetime := false, uint16(rtcFrameLifetimeMS)
+		dcInit = &webrtc.DataChannelInit{Ordered: &ordered, MaxPacketLifeTime: &lifetime}
+	}
+	dc, err := pc.CreateDataChannel("frames", dcInit)
 	if err != nil {
 		_ = pc.Close()
 		return
@@ -235,28 +346,23 @@ func (a *Agent) handleWebRTCHello(conn *websocket.Conn, encData string) {
 	peer.dc = dc
 	dc.OnOpen(func() { peer.startProbe(); peer.open.Store(true) })
 	dc.OnClose(func() { peer.open.Store(false) })
-	dc.OnMessage(func(m webrtc.DataChannelMessage) {
-		// Runs in pion's read goroutine, outside every other recover, on
-		// viewer-supplied data. Contain any panic so a crafted DataChannel message
-		// can't crash the agent.
-		defer func() {
-			if r := recover(); r != nil {
-				recoverLog("dc.OnMessage", r)
-			}
-		}()
-		// The only viewer→agent traffic on this channel is frame acks. Because
-		// the viewer acks a frame over the SAME transport it arrived on, an ack
-		// here proves a full frame really traversed this channel — so it's now
-		// safe to send frames over it exclusively.
-		peer.confirmed.Store(true)
-		var ack struct {
-			ID  string `json:"id"`
-			Seq uint64 `json:"seq"`
+	// A v1 viewer acks on the frame channel; a v2 viewer acks on ctl but may
+	// still be probing, so accept acks here either way.
+	dc.OnMessage(func(m webrtc.DataChannelMessage) { a.onRTCViewerMsg(peer, m.Data, true) })
+
+	// The v2 control channel: acks, keyframe requests, heartbeats. Unreliable
+	// and unordered — every message on it is either idempotent (an ack folds in
+	// as a high-water mark) or self-coalescing (a keyframe request is a flag),
+	// so retransmitting a stale one buys nothing and queueing it behind video
+	// is what caused the problem this channel exists to fix.
+	if hello.V2 {
+		ordered, retransmits := false, uint16(0)
+		ctl, cerr := pc.CreateDataChannel("ctl", &webrtc.DataChannelInit{Ordered: &ordered, MaxRetransmits: &retransmits})
+		if cerr == nil {
+			peer.ctl = ctl
+			ctl.OnMessage(func(m webrtc.DataChannelMessage) { a.onRTCViewerMsg(peer, m.Data, false) })
 		}
-		if json.Unmarshal(m.Data, &ack) == nil && ack.ID != "" {
-			a.deliverWindowAck(ack.ID, ack.Seq)
-		}
-	})
+	}
 
 	pc.OnICECandidate(func(c *webrtc.ICECandidate) {
 		if c == nil {
@@ -419,7 +525,7 @@ func (a *Agent) closeAllRTCPeers() {
 // let the viewer re-negotiate later. allH264 reports whether every CONFIRMED
 // peer declared WebCodecs H.264 decode (vacuously true with none confirmed) —
 // the gate for switching a stream from JPEG to compressed video.
-func (a *Agent) rtcSinks() (confirmed, probing []*webrtc.DataChannel, allH264 bool) {
+func (a *Agent) rtcSinks() (confirmed, probing []*rtcPeer, allH264 bool) {
 	allH264 = true
 	a.rtcMu.Lock()
 	var stale []*rtcPeer
@@ -428,12 +534,12 @@ func (a *Agent) rtcSinks() (confirmed, probing []*webrtc.DataChannel, allH264 bo
 		case !p.open.Load():
 			// not ready yet
 		case p.confirmed.Load():
-			confirmed = append(confirmed, p.dc)
+			confirmed = append(confirmed, p)
 			if !p.h264 {
 				allH264 = false
 			}
 		case p.probeAge() < rtcProbeWindow:
-			probing = append(probing, p.dc)
+			probing = append(probing, p)
 		default:
 			stale = append(stale, p)
 			delete(a.rtcPeers, id)

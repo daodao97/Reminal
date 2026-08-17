@@ -6556,6 +6556,7 @@
       p.lastSeq = null;
       p.h264NextSeq = null;
       p.h264Synced = false;
+      p.h264Hold = null; // a new stream renumbers from zero; held units are orphans
     }
 
     function resumeWinStreams() {
@@ -6592,6 +6593,15 @@
     // forms we transparently stay on the WS path — nothing else changes.
     const RTC_ICE = [{ urls: 'stun:stun.l.google.com:19302' }];
     let rtcPc = null, rtcDc = null, rtcPeerId = null, rtcPendingIce = [];
+    // The "ctl" channel: acks, keyframe requests and heartbeats, on their own
+    // unreliable+unordered stream. They used to ride the frame channel, where
+    // SCTP queued them behind every buffered access unit — so the moment a
+    // bitrate spike backed the channel up, the acks that tell the host we're
+    // alive were stuck behind exactly the backlog they needed to report. The
+    // host read that as a departed viewer, demoted the transport, then killed
+    // the stream, and the pane said the host was asleep. Kept separate so a
+    // congested picture can never mute the conversation about it.
+    let rtcCtl = null;
     let rtcRetryAt = 0;  // don't (re)attempt P2P before this time (ms epoch)
     let rtcHelloAt = 0;  // when the current webrtc_hello was sent (to time out silence)
     let rtcRelayed = false; // is the P2P path going through a TURN relay (vs direct)?
@@ -6619,9 +6629,11 @@
     function rtcActive() { return !!(rtcDc && rtcDc.readyState === 'open'); }
     function teardownWebRTC() {
       try { if (rtcDc) rtcDc.close(); } catch (_) {}
+      try { if (rtcCtl) rtcCtl.close(); } catch (_) {}
       try { if (rtcPc) rtcPc.close(); } catch (_) {}
-      rtcPc = null; rtcDc = null; rtcPeerId = null; rtcPendingIce = []; rtcRelayed = false;
+      rtcPc = null; rtcDc = null; rtcCtl = null; rtcPeerId = null; rtcPendingIce = []; rtcRelayed = false;
     }
+    function rtcCtlOpen() { return !!(rtcCtl && rtcCtl.readyState === 'open'); }
     // Inspect the live ICE candidate pair to tell a direct P2P path from a TURN
     // relay — a 'relay' candidate on either end means we're going through TURN.
     async function refreshRtcRoute() {
@@ -6659,7 +6671,12 @@
       rtcPeerId = ((crypto.randomUUID && crypto.randomUUID()) || String(Math.random()).slice(2)).slice(0, 12);
       rtcHelloAt = Date.now();
       if (DEBUG) dbg('▶ webrtc_hello ' + rtcPeerId + (h264Decode ? ' +h264' : ''));
-      try { await sendWin('webrtc_hello', { peer: rtcPeerId, h264: h264Decode }); } catch (_) { rtcPeerId = null; }
+      // v2 asks the host for the split-channel transport: a separate ctl
+      // channel, and time-limited unordered frame delivery. Declared rather
+      // than assumed because the host is the offerer — an older viewer must
+      // keep getting exactly one reliable ordered channel, or it would bind
+      // its frame handler to whichever channel happened to open last.
+      try { await sendWin('webrtc_hello', { peer: rtcPeerId, h264: h264Decode, v2: true }); } catch (_) { rtcPeerId = null; }
     }
     // Capability announcement for viewers that will never open a DataChannel
     // (P2P disabled, or blocked by the network). The agent tracks decode
@@ -6694,14 +6711,26 @@
       };
       pc.ondatachannel = (e) => {
         const ch = e.channel;
+        // Two channels now arrive, so route by label rather than by whichever
+        // opened last. 'ctl' carries only small JSON (heartbeats in this
+        // direction); everything else is the frame channel.
+        if (ch.label === 'ctl') {
+          rtcCtl = ch;
+          ch.onmessage = (ev) => {
+            try { onWindowFrame(JSON.parse(typeof ev.data === 'string' ? ev.data : new TextDecoder().decode(ev.data)), true); } catch (_) {}
+          };
+          ch.onopen = () => { if (DEBUG) dbg('rtc ctl channel open'); };
+          ch.onclose = () => { if (rtcCtl === ch) rtcCtl = null; };
+          return;
+        }
         rtcDc = ch;
         ch.binaryType = 'arraybuffer';
         ch.onmessage = (ev) => {
-          // Binary messages starting with 0xF2 are H.264 frames (see
+          // Binary messages starting with 0xF2/0xF3 are H.264 frames (see
           // onWindowFrameH264); everything else on the channel is JSON.
           if (typeof ev.data !== 'string') {
             const u = new Uint8Array(ev.data);
-            if (u.length > 2 && u[0] === 0xF2) { try { onWindowFrameH264(u); } catch (_) {} return; }
+            if (u.length > 2 && (u[0] === 0xF2 || u[0] === 0xF3)) { try { onWindowFrameH264(u); } catch (_) {} return; }
           }
           try { onWindowFrame(JSON.parse(typeof ev.data === 'string' ? ev.data : new TextDecoder().decode(ev.data)), true); } catch (_) {}
         };
@@ -6728,6 +6757,11 @@
     // traverse it (small acks alone can't fake it) — so it only then switches
     // frames onto P2P. A WS frame is acked over WS.
     function sendWindowAck(id, seq, viaDC) {
+      // Preferred road: the ctl channel. It carries the `dc` flag so the host
+      // still learns that a full frame traversed the FRAME channel — that is
+      // what confirmation has always meant, and an ack arriving on a channel
+      // of its own proves nothing about the other one on its own.
+      if (viaDC && rtcCtlOpen()) { try { rtcCtl.send(JSON.stringify({ id, seq, dc: true })); return; } catch (_) {} }
       if (viaDC && rtcActive()) { try { rtcDc.send(JSON.stringify({ id, seq })); return; } catch (_) {} }
       sendWin('window_ack', { id, seq });
     }
@@ -6834,6 +6868,9 @@
       if (!panes.size) return;
       for (const p of panes.values()) {
         updatePaneOverlay(p);
+        // Resolve a reorder hold whose stream went quiet mid-hole: arrivals
+        // normally drive this, and there are none to drive it with.
+        sweepHeldAUs(p);
         // Self-heal a stream the host gave up on. It ends one whose acks dried
         // up (streamAckIdleTimeout) and sends nothing to say so — the comment
         // there assumes "a returning viewer re-sends window_ctl start", which
@@ -6952,37 +6989,72 @@
     // canvas the JPEG path paints; acks ride the channel per AU after the
     // decoded frame is drawn, so the host's pacing loop is codec-agnostic.
     function onWindowFrameH264(u) {
-      const flags = u[1], idLen = u[2];
-      const hdrLen = 3 + idLen + 8 + 4 + 4;
+      const v2 = u[0] === 0xF3;
+      const flags = u[1];
+      // v2 inserts a chunk index and count between the flags and the id.
+      const chunkIdx = v2 ? u[2] : 0, chunkCount = v2 ? u[3] : 0;
+      const base = v2 ? 5 : 3;
+      const idLen = u[base - 1];
+      const hdrLen = base + idLen + 8 + 4 + 4;
       if (u.length < hdrLen) return;
       let id = '';
-      for (let i = 0; i < idLen; i++) id += String.fromCharCode(u[3 + i]);
-      const dv = new DataView(u.buffer, u.byteOffset + 3 + idLen, 16);
+      for (let i = 0; i < idLen; i++) id += String.fromCharCode(u[base + i]);
+      const dv = new DataView(u.buffer, u.byteOffset + base + idLen, 16);
       const seq = Number(dv.getBigUint64(0));
       const w = dv.getUint32(8), h = dv.getUint32(12);
       const p = panes.get(id);
       if (!p) return;
       const chunk = u.subarray(hdrLen);
 
-      // Reassemble chunked AUs (rare: only when an AU tops the DC size budget).
-      if (flags & 2) { // more chunks of this AU follow
-        if (!p.h264Parts || p.h264PartsSeq !== seq) { p.h264Parts = []; p.h264PartsSeq = seq; }
-        p.h264Parts.push(chunk);
-        return;
-      }
       let au = chunk;
-      if (p.h264Parts && p.h264PartsSeq === seq && p.h264Parts.length) {
-        let total = 0;
-        for (const c of p.h264Parts) total += c.length;
-        au = new Uint8Array(total + chunk.length);
-        let off = 0;
-        for (const c of p.h264Parts) { au.set(c, off); off += c.length; }
-        au.set(chunk, off);
+      if (v2) {
+        // The v2 channel is unordered and drops what it can't deliver in time,
+        // so chunks of one access unit may arrive in any order and some may
+        // never arrive at all. Slot each by its stated index and only decode
+        // once the set is complete; an incomplete one is simply abandoned when
+        // a newer AU supersedes it, and the resulting sequence gap makes
+        // submitAU ask for a keyframe — the same recovery a lost single-message
+        // AU already gets.
+        if (chunkCount > 1) {
+          if (!p.h264Parts || p.h264PartsSeq !== seq) {
+            // Only ever hold one AU's worth: a partial set for an older seq is
+            // already useless, because decoding cannot skip it and resume.
+            p.h264Parts = new Array(chunkCount);
+            p.h264PartsSeq = seq;
+            p.h264PartsHave = 0;
+          }
+          if (p.h264Parts[chunkIdx] === undefined) { p.h264Parts[chunkIdx] = chunk; p.h264PartsHave++; }
+          if (p.h264PartsHave < chunkCount) return; // still waiting on the rest
+          let total = 0;
+          for (const c of p.h264Parts) total += c.length;
+          au = new Uint8Array(total);
+          let off = 0;
+          for (const c of p.h264Parts) { au.set(c, off); off += c.length; }
+          p.h264Parts = null;
+        }
+      } else {
+        // v1: a reliable ordered channel, so arrival position IS the index.
+        if (flags & 2) { // more chunks of this AU follow
+          if (!p.h264Parts || p.h264PartsSeq !== seq) { p.h264Parts = []; p.h264PartsSeq = seq; }
+          p.h264Parts.push(chunk);
+          return;
+        }
+        if (p.h264Parts && p.h264PartsSeq === seq && p.h264Parts.length) {
+          let total = 0;
+          for (const c of p.h264Parts) total += c.length;
+          au = new Uint8Array(total + chunk.length);
+          let off = 0;
+          for (const c of p.h264Parts) { au.set(c, off); off += c.length; }
+          au.set(chunk, off);
+        }
+        p.h264Parts = null;
       }
-      p.h264Parts = null;
 
       const key = !!(flags & 1);
-      p.lastSeq = seq; // shared counter with the JPEG path
+      // Shared counter with the JPEG path. Kept monotonic because an unordered
+      // channel can deliver an older unit after a newer one, and letting this
+      // walk backwards would make the dedup guard discard live frames.
+      if (p.lastSeq == null || seq > p.lastSeq) p.lastSeq = seq;
       noteVideoFrame(p, w, h, true);
       markFrameTime(p);
       updatePaneOverlay(p);
@@ -7053,25 +7125,95 @@
       if (p.h264BatchAck != null) sendWindowAck(p.w.id, p.h264BatchAck, viaDC);
     }
 
-    // submitAU feeds one access unit to the pane's decoder, applying the gap
-    // and resync rules. ackSeq is null when the caller acks for a whole batch.
+    // Reorder tolerance for the v2 frame channel, which delivers unordered and
+    // abandons what it can't get through in time. A sequence number running
+    // ahead of what we expect no longer means the missing unit is lost — most
+    // often it is a retransmit still in flight, arriving just behind the frames
+    // that overtook it. Hold early arrivals this long before calling it a gap.
+    // The relay path and v1 channels deliver in order, match the expected
+    // sequence every time and never enter the buffer, so they pay nothing for
+    // this. H264_REORDER_MAX is the parallel bound: a hole that far behind the
+    // newest arrival is not coming back, whatever the clock says.
+    const H264_REORDER_MS = 80;
+    const H264_REORDER_MAX = 12;
+
+    // submitAU feeds one access unit to the pane's decoder, applying the
+    // ordering, gap and resync rules. ackSeq is undefined when the caller acks
+    // for a whole batch.
     function submitAU(p, au, key, seq, ackSeq) {
       if (!ensureH264Decoder(p)) return;
       // While a DataChannel is proving itself the agent feeds BOTH paths, so
-      // the same access unit can arrive twice. A repeat is harmless — drop it
-      // silently. Only a seq running AHEAD of what we expect means units went
-      // missing, and only that warrants tearing the decoder down to resync.
+      // the same access unit can arrive twice — and an unordered channel can
+      // deliver one we have already moved past. Either way it is spent.
       if (p.h264NextSeq != null && seq < p.h264NextSeq) return;
-      if (!key && p.h264NextSeq != null && seq > p.h264NextSeq) {
-        p.h264Gaps = (p.h264Gaps || 0) + 1;
-        p.h264Synced = false;
-        requestH264Key(p);
-      }
-      p.h264NextSeq = seq + 1;
-      if (!p.h264Synced) {
-        if (!key) return;
+      if (key) {
+        // A keyframe depends on nothing before it, so it is always a valid
+        // entry point: take it now, and discard only what it supersedes.
+        // Units held BEYOND it are still wanted — dropping those too would
+        // manufacture the very gap this keyframe just closed.
         p.h264Synced = true;
+        p.h264NextSeq = seq;
+        pruneHeldAUs(p, seq);
+      } else if (!p.h264Synced) {
+        return; // no entry point yet — a delta on its own is undecodable
+      } else if (p.h264NextSeq == null) {
+        p.h264NextSeq = seq;
       }
+      if (seq > p.h264NextSeq) { holdAU(p, au, key, seq, ackSeq); return; }
+      decodeAU(p, au, key, seq, ackSeq);
+      p.h264NextSeq = seq + 1;
+      drainHeldAUs(p);
+    }
+
+    // holdAU parks an access unit that arrived ahead of the one still missing.
+    function holdAU(p, au, key, seq, ackSeq) {
+      const hold = p.h264Hold || (p.h264Hold = { at: performance.now(), items: new Map() });
+      if (!hold.items.has(seq)) hold.items.set(seq, { au, key, seq, ackSeq });
+      if (hold.items.size > H264_REORDER_MAX) { giveUpOnGap(p); return; }
+      sweepHeldAUs(p);
+    }
+
+    // drainHeldAUs decodes whatever the just-decoded unit unblocked.
+    function drainHeldAUs(p) {
+      const hold = p.h264Hold;
+      if (!hold) return;
+      for (;;) {
+        const it = hold.items.get(p.h264NextSeq);
+        if (!it) break;
+        hold.items.delete(it.seq);
+        decodeAU(p, it.au, it.key, it.seq, it.ackSeq);
+        p.h264NextSeq = it.seq + 1;
+      }
+      if (!hold.items.size) p.h264Hold = null;
+      else hold.at = performance.now(); // progress made — restart the patience
+    }
+
+    // pruneHeldAUs forgets held units the decoder can no longer use.
+    function pruneHeldAUs(p, below) {
+      const hold = p.h264Hold;
+      if (!hold) return;
+      for (const s of [...hold.items.keys()]) if (s < below) hold.items.delete(s);
+      if (!hold.items.size) p.h264Hold = null;
+    }
+
+    // sweepHeldAUs converts a hole we have waited long enough on into a real
+    // gap. Driven by arrivals (fine-grained at 30-60fps) and by viewerTick, so
+    // a pane whose frames stop entirely mid-hold still resolves.
+    function sweepHeldAUs(p) {
+      if (p.h264Hold && performance.now() - p.h264Hold.at > H264_REORDER_MS) giveUpOnGap(p);
+    }
+
+    // giveUpOnGap declares the missing unit lost: drop what was waiting on it
+    // and ask the host for a self-contained frame to restart from.
+    function giveUpOnGap(p) {
+      p.h264Hold = null;
+      p.h264Gaps = (p.h264Gaps || 0) + 1;
+      p.h264Synced = false;
+      requestH264Key(p);
+    }
+
+    // decodeAU hands one in-order access unit to the decoder.
+    function decodeAU(p, au, key, seq, ackSeq) {
       p.h264AUs = (p.h264AUs || 0) + 1;
       // ackSeq is set only on the per-message path; a batch is acked once by
       // its caller, and its frames are the ones that need paced playout.
@@ -7173,6 +7315,7 @@
       if (typeof VideoDecoder === 'undefined') return false;
       p.h264Synced = false;
       p.h264Seqs = [];
+      p.h264Hold = null;
       try {
         p.vdec = new VideoDecoder({
           output: (frame) => {
@@ -7209,6 +7352,9 @@
       const now = performance.now();
       if (p.h264KeyAskAt && now - p.h264KeyAskAt < 250) return;
       p.h264KeyAskAt = now;
+      // Out-of-band by preference: a resync request is the one message that
+      // must NOT wait behind the undecodable backlog that prompted it.
+      if (rtcCtlOpen()) { try { rtcCtl.send(JSON.stringify({ id: p.w.id, seq: p.lastSeq || 0, key: true, dc: true })); return; } catch (_) {} }
       if (rtcActive()) { try { rtcDc.send(JSON.stringify({ id: p.w.id, seq: p.lastSeq || 0, key: true })); return; } catch (_) {} }
       sendWin('window_ack', { id: p.w.id, seq: p.lastSeq || 0, key: true });
     }
@@ -7220,6 +7366,7 @@
       p.vdec = null;
       p.h264Synced = false;
       p.h264Seqs = [];
+      p.h264Hold = null;
       if (h264Decode) {
         h264Decode = false;
         retryWebRTC('h264 decode error', 0);

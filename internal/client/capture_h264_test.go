@@ -184,7 +184,7 @@ func TestWinHelperJpegKeepsNewest(t *testing.T) {
 
 func TestBuildWinBinMsgsSingle(t *testing.T) {
 	au := bytes.Repeat([]byte{0xAB}, 1000)
-	msgs := buildWinBinMsgs("6112", 42, 800, 600, true, au, winDCMaxMsg)
+	msgs := buildWinBinMsgs("6112", 42, 800, 600, true, au, winDCMaxMsg, false)
 	if len(msgs) != 1 {
 		t.Fatalf("msgs = %d, want 1", len(msgs))
 	}
@@ -217,7 +217,7 @@ func TestBuildWinBinMsgsChunked(t *testing.T) {
 	for i := range au {
 		au[i] = byte(i)
 	}
-	msgs := buildWinBinMsgs(id, 7, 100, 50, false, au, maxMsg)
+	msgs := buildWinBinMsgs(id, 7, 100, 50, false, au, maxMsg, false)
 	if len(msgs) != 3 {
 		t.Fatalf("msgs = %d, want 3", len(msgs))
 	}
@@ -240,6 +240,71 @@ func TestBuildWinBinMsgsChunked(t *testing.T) {
 	}
 	if !bytes.Equal(got, au) {
 		t.Fatal("reassembled AU differs from input")
+	}
+}
+
+// The v2 framing carries a chunk index and count so a viewer on an UNORDERED
+// channel can rebuild an access unit from messages that arrived in any order —
+// the v1 framing can only be reassembled by arrival position, which is exactly
+// the assumption that stops holding once delivery is unordered.
+func TestBuildWinBinMsgsV2ChunksReassembleOutOfOrder(t *testing.T) {
+	const maxMsg = 256
+	id := "w1"
+	hdrLen := 5 + len(id) + 8 + 4 + 4 // v2 adds index+count
+	au := make([]byte, (maxMsg-hdrLen)*3+7)
+	for i := range au {
+		au[i] = byte(i * 7)
+	}
+	msgs := buildWinBinMsgs(id, 9, 100, 50, true, au, maxMsg, true)
+	if len(msgs) != 4 {
+		t.Fatalf("msgs = %d, want 4", len(msgs))
+	}
+	// Shuffle into an order the wire could plausibly deliver, then rebuild
+	// using only what each message says about itself.
+	parts := make([][]byte, len(msgs))
+	for _, i := range []int{2, 0, 3, 1} {
+		m := msgs[i]
+		if len(m) > maxMsg {
+			t.Fatalf("chunk %d = %d bytes > maxMsg", i, len(m))
+		}
+		if m[0] != winBinMagicV2 || m[1]&winBinFlagKey == 0 {
+			t.Fatalf("chunk %d header = % x", i, m[:2])
+		}
+		if int(m[3]) != len(msgs) {
+			t.Fatalf("chunk %d count = %d, want %d", i, m[3], len(msgs))
+		}
+		if int(m[4]) != len(id) || string(m[5:5+len(id)]) != id {
+			t.Fatalf("chunk %d id = %q", i, m[5:5+len(id)])
+		}
+		if seq := binary.BigEndian.Uint64(m[5+len(id):]); seq != 9 {
+			t.Fatalf("chunk %d seq = %d", i, seq)
+		}
+		parts[m[2]] = m[hdrLen:]
+	}
+	var got []byte
+	for i, p := range parts {
+		if p == nil {
+			t.Fatalf("chunk index %d never arrived", i)
+		}
+		got = append(got, p...)
+	}
+	if !bytes.Equal(got, au) {
+		t.Fatal("reassembled AU differs from input")
+	}
+}
+
+// An AU that would need more chunks than the index byte can address is
+// refused outright rather than framed with indices that wrap — a wrapped
+// index would silently corrupt reassembly instead of failing visibly.
+func TestBuildWinBinMsgsV2RefusesUnindexableAU(t *testing.T) {
+	const maxMsg = 64
+	au := make([]byte, maxMsg*300)
+	if msgs := buildWinBinMsgs("w", 1, 10, 10, true, au, maxMsg, true); msgs != nil {
+		t.Fatalf("msgs = %d, want nil for an AU needing >255 chunks", len(msgs))
+	}
+	// v1 has no index byte, so the same AU is still framable there.
+	if msgs := buildWinBinMsgs("w", 1, 10, 10, true, au, maxMsg, false); len(msgs) == 0 {
+		t.Fatal("v1 framing refused an AU it can represent")
 	}
 }
 

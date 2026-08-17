@@ -22,7 +22,6 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
-	"github.com/pion/webrtc/v4"
 	"github.com/reminal/reminal/internal/keepawake"
 	"github.com/reminal/reminal/internal/protocol"
 )
@@ -804,9 +803,9 @@ const helperRetryCooldown = 10 * time.Second
 // seq inflated ~30/s with nothing delivered, the viewer's acks fell permanently
 // behind, and the in-flight gate degraded a healthy stream to a few fps.
 type winSinks struct {
-	confirmed []*webrtc.DataChannel // proven channels — get every frame
-	probe     []*webrtc.DataChannel // unproven — at most one frame per winProbeFrame
-	ws        bool                  // billed relay — at most one frame per wsFrameMinInterval
+	confirmed []*rtcPeer // proven peers — get every frame
+	probe     []*rtcPeer // unproven — at most one frame per winProbeFrame
+	ws        bool       // billed relay — at most one frame per wsFrameMinInterval
 }
 
 func (s winSinks) any() bool { return len(s.confirmed) > 0 || len(s.probe) > 0 || s.ws }
@@ -1433,16 +1432,16 @@ func (s *winStream) sendFrame(conn *websocket.Conn, sinks winSinks) {
 		}
 	}
 	s.seq++
-	for _, dc := range sinks.confirmed {
-		_ = dc.Send(raw)
+	for _, p := range sinks.confirmed {
+		p.sendFrame(raw)
 	}
 	if sinks.ws {
 		s.a.sendWindowMsg(conn, protocol.TypeWindowFrame, frame)
 		s.lastWSFrame = time.Now()
 	}
 	if len(sinks.probe) > 0 {
-		for _, dc := range sinks.probe {
-			_ = dc.Send(raw)
+		for _, p := range sinks.probe {
+			p.sendFrame(raw)
 		}
 		s.lastProbe = time.Now()
 	}
@@ -1456,9 +1455,11 @@ func (s *winStream) sendFrame(conn *websocket.Conn, sinks winSinks) {
 }
 
 // Binary DataChannel frame framing (agent→viewer). Every other DC message is
-// JSON (first byte '{'); a binary h264 frame starts with winBinMagic instead:
+// JSON (first byte '{'); a binary h264 frame starts with a magic byte instead.
 //
-//	[0]      winBinMagic (0xF2)
+// v1 (winBinMagic, 0xF2) — for a reliable ordered channel:
+//
+//	[0]      winBinMagic
 //	[1]      flags: bit0 = key AU, bit1 = more chunks of this AU follow
 //	[2]      id length L
 //	[3:3+L]  window id
@@ -1467,11 +1468,21 @@ func (s *winStream) sendFrame(conn *websocket.Conn, sinks winSinks) {
 //	[+4]     h     (BE uint32)
 //	[rest]   Annex-B H.264 access unit (or one chunk of it)
 //
+// v2 (winBinMagicV2, 0xF3) — identical but with two extra header bytes after
+// the flags, carrying the chunk's index and the chunk count for this AU:
+//
+//	[2]      chunk index
+//	[3]      chunk count
+//	[4]      id length L … then as above
+//
 // Chunking keeps every message under winDCMaxMsg (an oversized message KILLS
-// the channel per spec). Chunks of one AU share a seq and are reassembled in
-// order — the channel is reliable+ordered, so no gaps and no interleaving.
+// the channel per spec). v1 reassembles by arrival order, which only holds
+// because its channel is ordered; a v2 channel is unordered and lossy, so
+// position tells you nothing and the index is what lets the viewer put an AU
+// back together — or know that it can't, and ask for a keyframe.
 const (
 	winBinMagic    = 0xF2
+	winBinMagicV2  = 0xF3
 	winBinFlagKey  = 1 << 0
 	winBinFlagMore = 1 << 1
 )
@@ -1492,7 +1503,7 @@ func (s *winStream) dispatchH264(conn *websocket.Conn, f winFrame) {
 	// Probing channels get the video too: an AU acked over a channel is exactly
 	// the proof that channel can carry frames, so video confirms P2P just as
 	// JPEG probe frames used to.
-	dcSinks := append(append([]*webrtc.DataChannel{}, confirmed...), probing...)
+	dcSinks := append(append([]*rtcPeer{}, confirmed...), probing...)
 	if !allH264 || (len(dcSinks) == 0 && !s.wsVideo) {
 		// Nowhere to put it. Drop and re-key so whatever attaches next starts
 		// from a clean entry point rather than mid-GOP.
@@ -1575,14 +1586,34 @@ func (s *winStream) flushWSBatch(conn *websocket.Conn) {
 // sendFrameH264 frames one AU as binary DC messages (chunked under winDCMaxMsg)
 // and sends it to every sink. One seq per AU regardless of chunk count — the
 // viewer acks per AU after decode, same pacing loop as JPEG.
-func (s *winStream) sendFrameH264(f winFrame, sinks []*webrtc.DataChannel) {
+func (s *winStream) sendFrameH264(f winFrame, sinks []*rtcPeer) {
 	if len(f.Data) == 0 {
 		return
 	}
-	msgs := buildWinBinMsgs(s.w.ID, s.seq, s.w.W, s.w.H, f.Key, f.Data, winDCMaxMsg)
-	for _, msg := range msgs {
-		for _, dc := range sinks {
-			_ = dc.Send(msg)
+	// Two framings on the wire at once: a v2 peer gets chunk-indexed messages
+	// it can reassemble out of order, a v1 peer the positional framing that
+	// assumes ordered delivery. Built at most once each, and only if somebody
+	// wants that shape.
+	var v1, v2 [][]byte
+	for _, p := range sinks {
+		msgs := &v1
+		if p.v2 {
+			msgs = &v2
+		}
+		if *msgs == nil {
+			*msgs = buildWinBinMsgs(s.w.ID, s.seq, s.w.W, s.w.H, f.Key, f.Data, winDCMaxMsg, p.v2)
+			if *msgs == nil {
+				continue
+			}
+		}
+		// All-or-nothing per peer: half an access unit is undecodable, so a
+		// peer over its send budget skips the whole thing and resyncs on the
+		// keyframe its gap detection will ask for.
+		if p.dc == nil || p.dc.BufferedAmount() > rtcSendBudget {
+			continue
+		}
+		for _, msg := range *msgs {
+			_ = p.dc.Send(msg)
 		}
 	}
 }
@@ -1591,15 +1622,24 @@ func (s *winStream) sendFrameH264(f winFrame, sinks []*webrtc.DataChannel) {
 // most maxMsg bytes (an oversized DataChannel message kills the channel, so
 // this bound is hard). All chunks of an AU share seq; every chunk except the
 // last carries winBinFlagMore.
-func buildWinBinMsgs(id string, seq uint64, w, h int, key bool, data []byte, maxMsg int) [][]byte {
+func buildWinBinMsgs(id string, seq uint64, w, h int, key bool, data []byte, maxMsg int, v2 bool) [][]byte {
 	idb := []byte(id)
 	hdrLen := 3 + len(idb) + 8 + 4 + 4
+	if v2 {
+		hdrLen += 2 // chunk index + chunk count
+	}
 	if len(idb) > 255 || len(data) == 0 || maxMsg <= hdrLen {
 		return nil
 	}
 	maxData := maxMsg - hdrLen
+	// v2 numbers its chunks, so the count has to be known before the first one
+	// goes out — and must fit the byte that carries it.
+	total := (len(data) + maxData - 1) / maxData
+	if v2 && total > 255 {
+		return nil
+	}
 	var msgs [][]byte
-	for len(data) > 0 {
+	for idx := 0; len(data) > 0; idx++ {
 		n := min(len(data), maxData)
 		chunk := data[:n]
 		data = data[n:]
@@ -1611,7 +1651,12 @@ func buildWinBinMsgs(id string, seq uint64, w, h int, key bool, data []byte, max
 			flags |= winBinFlagMore
 		}
 		msg := make([]byte, 0, hdrLen+n)
-		msg = append(msg, winBinMagic, flags, byte(len(idb)))
+		if v2 {
+			msg = append(msg, winBinMagicV2, flags, byte(idx), byte(total))
+		} else {
+			msg = append(msg, winBinMagic, flags)
+		}
+		msg = append(msg, byte(len(idb)))
 		msg = append(msg, idb...)
 		msg = binary.BigEndian.AppendUint64(msg, seq)
 		msg = binary.BigEndian.AppendUint32(msg, uint32(w))
@@ -1624,7 +1669,13 @@ func buildWinBinMsgs(id string, seq uint64, w, h int, key bool, data []byte, max
 
 // sendHeartbeat pings viewers over every live path so an idle (0 fps) window
 // doesn't read as a dead host. Not acked, and can't confirm a channel.
-func (s *winStream) sendHeartbeat(conn *websocket.Conn, confirmed, probing []*webrtc.DataChannel, vc int) {
+// sendHeartbeat pings viewers over every live path so an idle (0 fps) window
+// doesn't read as a dead host. Not acked, and can't confirm a channel. Rides
+// the ctl channel where there is one: a heartbeat is a liveness claim, and
+// sending it down the same queue as the video meant that during exactly the
+// congestion that delays frames it ALSO stopped arriving — so the pane
+// announced the host was asleep at the one moment it was busiest.
+func (s *winStream) sendHeartbeat(conn *websocket.Conn, confirmed, probing []*rtcPeer, vc int) {
 	hb := struct {
 		ID string `json:"id"`
 		HB bool   `json:"hb"`
@@ -1633,14 +1684,14 @@ func (s *winStream) sendHeartbeat(conn *websocket.Conn, confirmed, probing []*we
 	if err != nil {
 		return
 	}
-	for _, dc := range confirmed {
-		_ = dc.Send(raw)
+	for _, p := range confirmed {
+		p.sendCtl(raw)
 	}
 	if wsSinkNeeded(vc, len(confirmed)) {
 		s.a.sendWindowMsg(conn, protocol.TypeWindowFrame, hb)
 	}
-	for _, dc := range probing {
-		_ = dc.Send(raw)
+	for _, p := range probing {
+		p.sendCtl(raw)
 	}
 	s.lastSent = time.Now()
 }
