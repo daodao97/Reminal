@@ -1,0 +1,4 @@
+# Generated from ../docs/*.gif by build.sh — the gifs are the source of truth.
+public/assets/
+node_modules/
+.wrangler/

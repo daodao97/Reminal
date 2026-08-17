@@ -1,0 +1,40 @@
+name = "reminal-site"
+main = "src/index.js"
+compatibility_date = "2025-08-01"
+
+# Pinned for the same reason the relay's is: `wrangler deploy` should error out
+# rather than quietly ship to whichever Cloudflare account happens to be logged
+# in. Belongs to harshalg98@gmail.com (the everything-account).
+account_id = "0cd85a1166e44b17571b7457040d18ae"
+
+# Keep the workers.dev URL alive as a staging target. Wrangler disables it by
+# default when the key is absent, which silently takes the only reachable URL
+# offline the moment a custom-domain binding fails.
+workers_dev = true
+
+# Custom domains, declared here rather than clicked in the dashboard so the
+# binding is reviewable and reproducible. Cloudflare issues the certificates
+# and writes the DNS records on deploy. reminal.app is canonical; the other
+# three fold into it in src/index.js.
+#
+# Keep this ABOVE [assets]: these are top-level keys, and TOML binds every key
+# after a table header to that table — put it below and wrangler parses it as
+# assets.routes, warns once, and silently binds nothing.
+routes = [
+  { pattern = "reminal.dev", custom_domain = true },
+  { pattern = "www.reminal.dev", custom_domain = true },
+
+  { pattern = "reminal.app", custom_domain = true },
+  { pattern = "www.reminal.app", custom_domain = true },
+]
+
+[assets]
+directory = "./public"
+binding = "ASSETS"
+
+# Without this, a request matching a file in ./public is served straight from
+# the edge and the Worker never runs — so the alias redirects in src/index.js
+# silently do nothing for "/" (it matches index.html) while still working for
+# /install.sh (which matches no asset). Run the Worker first; it falls through
+# to env.ASSETS itself.
+run_worker_first = true

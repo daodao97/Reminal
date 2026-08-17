@@ -1,0 +1,1536 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>reminal — every window, desktop and terminal on your machines, in any browser</title>
+<meta name="description" content="Close the laptop lid and walk away. reminal serves every window, desktop and terminal on your machines into any browser — no open ports, no keys on disk, nothing to install on the device you're holding.">
+<link rel="canonical" href="https://reminal.app/">
+<link rel="icon" href="/assets/icon.png" type="image/png">
+<link rel="apple-touch-icon" href="/assets/icon.png">
+
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://reminal.app/">
+<meta property="og:title" content="reminal — your machines, in any browser">
+<meta property="og:description" content="Every window, desktop and terminal on your machines — live in any browser. Lid closed, nothing plugged in, no open ports.">
+<meta property="og:image" content="https://reminal.app/assets/lid.jpg">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="theme-color" content="#0d1117">
+
+<style>
+:root{
+  --bg:#0d1117; --surface:#161b22; --surface-2:#1c2129;
+  --line:#30363d; --line-soft:#21262d;
+  --fg:#e6edf3; --muted:#8b949e; --dim:#6e7681;
+  --accent:#58a6ff; --accent-strong:#388bfd; --accent-deep:#1f6feb;
+  --radius:12px;
+  --max:1080px;
+  --ease:cubic-bezier(.2,.7,.2,1);
+}
+*{box-sizing:border-box}
+html{-webkit-text-size-adjust:100%; scroll-behavior:smooth}
+body{
+  margin:0; background:var(--bg); color:var(--fg);
+  font:16px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Helvetica,Arial,sans-serif;
+  -webkit-font-smoothing:antialiased; overflow-x:hidden;
+}
+a{color:var(--accent); text-decoration:none}
+a:hover{text-decoration:underline}
+/* Longhand, not `padding:0 24px`. Sections carry .wrap themselves, and the
+   shorthand would zero out the vertical padding `section` sets — a class beats
+   an element selector, so every section collapsed to no breathing room. */
+.wrap{max-width:var(--max); margin:0 auto; padding-left:24px; padding-right:24px; position:relative}
+code,kbd,pre{font-family:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace}
+
+/* ── atmosphere ────────────────────────────────────── */
+/* Scoped to the hero rather than fixed to the viewport: a page-wide glow
+   washes out the section rhythm further down and costs a compositor layer
+   on every scroll frame. */
+.sky{position:absolute; inset:-200px 0 auto 0; height:1100px; z-index:0; pointer-events:none; overflow:hidden}
+.sky i{position:absolute; display:block; border-radius:50%; filter:blur(90px); will-change:transform}
+.sky i:nth-child(1){
+  width:820px; height:820px; top:-300px; left:50%; margin-left:-410px;
+  background:radial-gradient(circle,rgba(31,111,235,.42) 0%,transparent 62%);
+  animation:drift-a 26s var(--ease) infinite alternate;
+}
+.sky i:nth-child(2){
+  width:620px; height:620px; top:-140px; left:12%;
+  background:radial-gradient(circle,rgba(88,166,255,.26) 0%,transparent 62%);
+  animation:drift-b 34s var(--ease) infinite alternate;
+}
+.sky i:nth-child(3){
+  width:560px; height:560px; top:60px; right:6%;
+  background:radial-gradient(circle,rgba(120,90,255,.20) 0%,transparent 62%);
+  animation:drift-c 30s var(--ease) infinite alternate;
+}
+@keyframes drift-a{to{transform:translate3d(-70px,60px,0) scale(1.12)}}
+@keyframes drift-b{to{transform:translate3d(90px,40px,0) scale(1.08)}}
+@keyframes drift-c{to{transform:translate3d(-60px,80px,0) scale(1.15)}}
+
+/* Faint engineering grid, faded out with a mask so it never reaches the copy. */
+.mesh{
+  position:absolute; inset:0; z-index:0; pointer-events:none;
+  background-image:
+    linear-gradient(rgba(139,148,158,.07) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(139,148,158,.07) 1px, transparent 1px);
+  background-size:56px 56px;
+  -webkit-mask-image:radial-gradient(ellipse 80% 55% at 50% 12%, #000 20%, transparent 78%);
+  mask-image:radial-gradient(ellipse 80% 55% at 50% 12%, #000 20%, transparent 78%);
+}
+
+/* ── nav ───────────────────────────────────────────── */
+nav{
+  position:sticky; top:0; z-index:50;
+  background:rgba(13,17,23,.6); backdrop-filter:blur(14px) saturate(150%);
+  border-bottom:1px solid transparent; transition:background .3s, border-color .3s;
+}
+nav.scrolled{background:rgba(13,17,23,.88); border-bottom-color:var(--line-soft)}
+nav .wrap{display:flex; align-items:center; justify-content:space-between; height:62px; gap:16px}
+.brand{display:flex; align-items:center; gap:10px; color:var(--fg); font-weight:650; letter-spacing:-.01em}
+.brand:hover{text-decoration:none}
+.brand img{width:26px; height:26px; border-radius:7px; display:block; transition:transform .3s var(--ease)}
+.brand:hover img{transform:rotate(-8deg) scale(1.06)}
+.navlinks{display:flex; align-items:center; gap:22px; font-size:14.5px}
+.navlinks a{color:var(--muted); transition:color .2s}
+.navlinks a:hover{color:var(--fg); text-decoration:none}
+.ghlink{display:inline-flex; align-items:center; gap:7px}
+.ghlink .gh{flex:none; opacity:.9}
+.ghlink:hover .gh{opacity:1}
+@media (max-width:640px){ .navlinks .hide-sm{display:none} }
+
+/* ── hero ──────────────────────────────────────────── */
+header{padding:74px 0 8px; text-align:center; position:relative}
+header .wrap{z-index:1}
+h1{
+  margin:0 auto 20px; max-width:20ch;
+  font-size:clamp(34px,5.4vw,58px); line-height:1.07;
+  letter-spacing:-.035em; font-weight:700;
+}
+h1 .em{
+  background:linear-gradient(110deg,#79b8ff 0%,#58a6ff 35%,#a371f7 100%);
+  -webkit-background-clip:text; background-clip:text; color:transparent;
+}
+.lede{
+  margin:0 auto; max-width:60ch; font-size:clamp(16.5px,2.1vw,19px);
+  color:var(--muted); line-height:1.65;
+}
+.lede strong{color:var(--fg); font-weight:600}
+
+/* ── install ───────────────────────────────────────── */
+.cta{margin:32px auto 0; max-width:660px}
+.tabs{display:flex; gap:4px; justify-content:center; margin-bottom:10px}
+.tab{
+  background:none; border:1px solid transparent; color:var(--dim);
+  font:inherit; font-size:13px; padding:5px 12px; border-radius:99px; cursor:pointer;
+  transition:color .2s, background .2s, border-color .2s;
+}
+.tab:hover{color:var(--muted)}
+.tab[aria-selected="true"]{color:var(--fg); background:var(--surface); border-color:var(--line)}
+.cmd{
+  display:flex; align-items:center; gap:12px; text-align:left;
+  background:linear-gradient(180deg,rgba(28,33,41,.9),rgba(22,27,34,.9));
+  border:1px solid var(--line); border-radius:var(--radius);
+  padding:14px 14px 14px 18px; backdrop-filter:blur(8px);
+  box-shadow:0 8px 30px -12px rgba(0,0,0,.8), inset 0 1px 0 rgba(255,255,255,.04);
+  transition:border-color .25s, box-shadow .25s;
+}
+.cmd:hover{border-color:#3d444d; box-shadow:0 10px 36px -12px rgba(31,111,235,.35), inset 0 1px 0 rgba(255,255,255,.06)}
+.cmd pre{margin:0; flex:1; overflow-x:auto; font-size:13.5px; color:var(--fg); scrollbar-width:none}
+.cmd pre::-webkit-scrollbar{display:none}
+.cmd .sigil{color:var(--accent); user-select:none; font-weight:600}
+.copy{
+  flex:none; background:var(--surface-2); border:1px solid var(--line); color:var(--muted);
+  font:inherit; font-size:13px; padding:7px 13px; border-radius:8px; cursor:pointer;
+  transition:color .15s, border-color .15s, background .15s;
+}
+.copy:hover{color:var(--fg); border-color:var(--dim); background:#252b34}
+.copy.done{color:#3fb950; border-color:#238636}
+.sub-cta{margin-top:14px; font-size:14.5px; color:var(--dim)}
+.sub-cta a{color:var(--muted)}
+.sub-cta a:hover{color:var(--accent)}
+
+/* ── stat band ─────────────────────────────────────── */
+.stats{
+  display:flex; flex-wrap:wrap; justify-content:center; gap:0;
+  margin:42px auto 0; max-width:760px;
+  border:1px solid var(--line-soft); border-radius:14px;
+  background:rgba(22,27,34,.55); backdrop-filter:blur(8px); overflow:hidden;
+}
+.stats div{
+  flex:1 1 25%; min-width:140px; padding:18px 14px;
+  border-left:1px solid var(--line-soft);
+}
+.stats div:first-child{border-left:none}
+.stats b{
+  display:block; font-size:30px; font-weight:700; letter-spacing:-.03em; line-height:1;
+  font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
+  background:linear-gradient(180deg,#fff,#8b949e);
+  -webkit-background-clip:text; background-clip:text; color:transparent;
+}
+.stats b span{font-size:15px; color:var(--accent); -webkit-text-fill-color:var(--accent); margin-left:2px}
+.stats em{display:block; margin-top:7px; font-style:normal; font-size:12.5px; color:var(--dim); letter-spacing:.02em}
+@media (max-width:640px){
+  .stats div{flex:1 1 50%; min-width:0; padding:14px 10px}
+  .stats div:nth-child(3){border-left:none}
+  .stats div:nth-child(n+3){border-top:1px solid var(--line-soft)}
+  .stats b{font-size:24px}
+}
+
+/* ── trust chips ───────────────────────────────────── */
+.chips{display:flex; flex-wrap:wrap; gap:8px; justify-content:center; margin:26px auto 0; max-width:860px}
+.chip{
+  font-size:12.5px; color:var(--muted); background:rgba(22,27,34,.7);
+  border:1px solid var(--line-soft); border-radius:99px; padding:5px 12px; white-space:nowrap;
+}
+.chip b{color:var(--fg); font-weight:600}
+@media (max-width:640px){ .chip .more{display:none} .chips{gap:6px} }
+
+/* ── media, in a browser frame ─────────────────────── */
+figure{margin:0}
+.frame{
+  margin:0 auto; border:1px solid var(--line); border-radius:14px; overflow:hidden;
+  background:var(--surface); line-height:0;
+  box-shadow:0 30px 80px -40px rgba(0,0,0,.95), 0 0 0 1px rgba(255,255,255,.02) inset;
+  transition:box-shadow .4s var(--ease), transform .4s var(--ease);
+}
+.frame:hover{
+  transform:translateY(-3px);
+  box-shadow:0 40px 90px -40px rgba(0,0,0,.95), 0 0 60px -20px rgba(31,111,235,.35);
+}
+.bar{
+  display:flex; align-items:center; gap:10px; padding:9px 13px; line-height:1;
+  background:linear-gradient(180deg,#1c2129,#171c23); border-bottom:1px solid var(--line-soft);
+}
+.dots{display:flex; gap:6px; flex:none}
+.dots i{width:10px; height:10px; border-radius:50%; display:block}
+.dots i:nth-child(1){background:#ff5f57} .dots i:nth-child(2){background:#febc2e} .dots i:nth-child(3){background:#28c840}
+.bar .url{
+  flex:1; text-align:center; font-family:ui-monospace,Menlo,monospace;
+  font-size:11.5px; color:var(--dim); background:#0f141a;
+  border:1px solid var(--line-soft); border-radius:6px; padding:4px 10px;
+  overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:320px; margin:0 auto;
+}
+.bar .live{
+  flex:none; font-size:11px; color:#3fb950; display:inline-flex; align-items:center; gap:5px;
+  font-weight:600; letter-spacing:.02em;
+}
+.bar .live::before{
+  content:""; width:6px; height:6px; border-radius:50%; background:#3fb950;
+  box-shadow:0 0 0 0 rgba(63,185,80,.7); animation:pulse 2s infinite;
+}
+@keyframes pulse{
+  70%{box-shadow:0 0 0 7px rgba(63,185,80,0)}
+  100%{box-shadow:0 0 0 0 rgba(63,185,80,0)}
+}
+.frame video, .frame img{width:100%; height:auto; display:block}
+figcaption{margin-top:14px; font-size:13px; color:var(--dim); text-align:center; line-height:1.55}
+.hero-shot{margin-top:48px; max-width:920px; position:relative; z-index:1}
+@media (max-width:640px){ .bar .url{font-size:10px; max-width:none} .bar .live span{display:none} }
+
+/* ── hero terminal  [FEATURES.liveTerminal] ────────── */
+.term-wrap{position:relative; max-width:700px; margin:44px auto 0}
+.hero-shot{margin:0; max-width:none}
+.term{
+  margin:0; padding:16px 18px 18px; background:#0b0f14; color:#c9d1d9;
+  font-size:12.5px; line-height:1.55; white-space:pre; overflow-x:auto;
+  min-height:392px; text-align:left; scrollbar-width:thin;
+}
+.term::-webkit-scrollbar{height:6px}
+.term::-webkit-scrollbar-thumb{background:var(--line); border-radius:3px}
+.term .g{color:#3fb950; font-weight:600}
+.term .b{color:#58a6ff}
+.term .d{color:#6e7681}
+/* Dark-on-light and line-height:1 so the half-blocks tile without seams —
+   a QR that doesn't scan is worse than no QR. */
+.term .qr{
+  display:inline-block; background:#fff; border-radius:4px;
+  padding:9px; margin:4px 0 2px; line-height:0;
+}
+.term .qr svg{display:block; width:168px; height:168px}
+@media (max-width:700px){ .term .qr svg{width:140px; height:140px} }
+.caret{
+  display:inline-block; width:7px; height:1em; background:var(--accent);
+  vertical-align:text-bottom; animation:blink 1.05s steps(1) infinite;
+}
+@keyframes blink{50%{opacity:0}}
+.term-replay{
+  margin-left:8px; background:none; border:1px solid var(--line); color:var(--dim);
+  font:inherit; font-size:12px; padding:4px 11px; border-radius:7px; cursor:pointer;
+  transition:color .15s, border-color .15s;
+}
+.term-replay:hover{color:var(--fg); border-color:var(--dim)}
+.nowrap{white-space:nowrap}
+@media (max-width:700px){ .term{font-size:10px; min-height:330px; padding:12px 12px 14px} }
+@media (max-width:400px){ .term{font-size:8.6px; min-height:290px} }
+
+/* ── draggable pop-out  [FEATURES.dragWindow] ──────── */
+.popout{
+  position:absolute; z-index:4; width:206px; top:56px; right:-238px;
+  border:1px solid var(--line); border-radius:10px; overflow:hidden;
+  background:var(--surface); box-shadow:0 22px 50px -22px rgba(0,0,0,.95);
+  cursor:grab; touch-action:none; user-select:none; will-change:transform;
+  transition:box-shadow .25s var(--ease);
+}
+.popout:hover{box-shadow:0 26px 60px -22px rgba(31,111,235,.6)}
+.popout.dragging{cursor:grabbing; box-shadow:0 32px 70px -20px rgba(31,111,235,.8)}
+.popout .bar{padding:7px 9px}
+.popout .bar .url{font-size:9.5px; padding:2px 6px; max-width:none}
+.popout img{width:100%; display:block}
+.popout .hint{
+  position:absolute; left:0; right:0; bottom:9px; text-align:center;
+  font-size:10.5px; letter-spacing:.04em; color:#fff; pointer-events:none;
+  text-shadow:0 1px 6px rgba(0,0,0,.95); transition:opacity .4s;
+}
+/* No room to throw it around below this, and it would overlap the copy. */
+@media (max-width:1200px){ .popout{display:none !important} }
+
+/* ── sections ──────────────────────────────────────── */
+section{padding:96px 0; border-top:1px solid var(--line-soft); position:relative}
+section:first-of-type{border-top:none}
+.eyebrow{
+  display:inline-flex; align-items:center; gap:9px;
+  font-size:12px; letter-spacing:.09em; text-transform:uppercase;
+  color:var(--accent); font-weight:650; margin:0 0 14px;
+}
+.eyebrow::before{content:""; width:22px; height:1px; background:linear-gradient(90deg,transparent,var(--accent))}
+.center .eyebrow::before{display:none}
+h2{
+  margin:0 0 16px; font-size:clamp(26px,3.8vw,38px);
+  letter-spacing:-.025em; line-height:1.16; font-weight:680; max-width:20ch;
+}
+.body{color:var(--muted); max-width:62ch; margin:0; font-size:16.5px}
+.body + .shot, .body + .frame{margin-top:36px}
+.body strong{color:var(--fg); font-weight:600}
+.center{text-align:center}
+.center h2, .center .body{margin-left:auto; margin-right:auto}
+
+/* ── reading progress  [FEATURES.scrollFX] ─────────── */
+.progress{
+  position:absolute; left:0; right:0; bottom:-1px; height:2px;
+  background:linear-gradient(90deg,var(--accent-deep),var(--accent),#a371f7);
+  transform:scaleX(0); transform-origin:0 50%; will-change:transform;
+}
+
+/* ── pinned section  [FEATURES.pinnedSection] ──────── */
+.pinned{padding:96px 0}
+.pin-grid{display:grid; grid-template-columns:1fr 1fr; gap:56px}
+.pin-media{position:relative}
+.pin-sticky{position:sticky; top:96px}
+.pin-copy{padding:20px 0 24px}
+.beats{list-style:none; margin:30px 0 0; padding:0; counter-reset:beat}
+.beat{
+  position:relative; padding:0 0 0 42px; margin:0 0 76px;
+  color:var(--dim); font-size:16px; line-height:1.6;
+  opacity:.38; transition:opacity .45s var(--ease), color .45s var(--ease);
+}
+.beat b{color:var(--muted); font-weight:640; transition:color .45s var(--ease)}
+.beat::before{
+  counter-increment:beat; content:counter(beat);
+  position:absolute; left:0; top:1px; width:26px; height:26px; border-radius:50%;
+  display:grid; place-items:center; font-size:12px; font-weight:650;
+  color:var(--dim); background:var(--surface); border:1px solid var(--line-soft);
+  transition:color .45s, background .45s, border-color .45s, box-shadow .45s;
+}
+.beat.lit{opacity:1; color:var(--muted)}
+.beat.lit b{color:var(--fg)}
+.beat.lit::before{
+  color:#fff; background:var(--accent-deep); border-color:var(--accent);
+  box-shadow:0 0 0 4px rgba(31,111,235,.16);
+}
+@media (max-width:900px){
+  .pinned{padding:56px 0}
+  .pin-grid{grid-template-columns:1fr; gap:26px}
+  .pin-media{position:static}
+  .pin-sticky{position:static}
+  .pin-copy{padding:0}
+  .beat{opacity:1; color:var(--muted); padding-left:38px; margin-bottom:22px; font-size:15.5px}
+  .beat b{color:var(--fg)}
+  .beats{margin-top:22px}
+}
+
+
+/* ── the lid stage  [FEATURES.lidStage] ────────────── */
+/* A pinned 3D set piece: the MacBook shuts while its windows escape into a
+   browser. Scroll drives one progress value; every transform below is a pure
+   function of it, so scrubbing backwards is exact. */
+.stagewrap{height:420vh; position:relative; border-top:1px solid var(--line-soft)}
+.stage-pin{position:sticky; top:0; height:100vh; display:grid; place-items:center; overflow:hidden}
+.scene{
+  position:relative; width:min(940px,92vw); height:min(560px,64vh);
+  perspective:1600px; perspective-origin:50% 42%;
+}
+.scene *{transform-style:preserve-3d}
+
+.mac{position:absolute; left:50%; top:50%; width:540px; height:324px; margin:-215px 0 0 -270px}
+.mac-lid{
+  position:absolute; inset:0; border-radius:14px 14px 3px 3px;
+  background:linear-gradient(170deg,#2b3240,#171c24);
+  border:1px solid #3a4250; box-shadow:0 30px 60px -30px rgba(0,0,0,.9);
+  transform-origin:50% 100%; will-change:transform;
+}
+.mac-screen{
+  position:absolute; inset:9px 9px 13px; border-radius:8px; overflow:hidden;
+  background:linear-gradient(160deg,#0e1420,#080b12);
+  border:1px solid #10151f;
+}
+.mac-glow{
+  position:absolute; inset:0; pointer-events:none;
+  background:radial-gradient(120% 80% at 50% 0%, rgba(88,166,255,.20), transparent 60%);
+}
+.mac-base{
+  position:absolute; left:-22px; right:-22px; top:100%; height:22px;
+  background:linear-gradient(180deg,#39414f,#222834); border-radius:4px 4px 10px 10px;
+  transform-origin:50% 0; transform:rotateX(72deg);
+  box-shadow:0 40px 60px -20px rgba(0,0,0,.9);
+}
+.mac-notch{
+  position:absolute; left:50%; bottom:2px; width:96px; height:5px; margin-left:-48px;
+  border-radius:0 0 6px 6px; background:#131820;
+}
+
+/* Windows that live on the screen, then fly out of it. */
+.flyer{
+  position:absolute; left:50%; top:50%; border-radius:9px; overflow:hidden;
+  will-change:transform,opacity;
+  background:var(--surface); border:1px solid var(--line);
+  box-shadow:0 26px 60px -26px rgba(0,0,0,.95);
+}
+.flyer .bar{padding:6px 8px}
+.flyer .bar .url{font-size:9px; padding:2px 6px; max-width:none}
+.win{padding:8px 9px; font-size:8px; line-height:1.5; font-family:ui-monospace,Menlo,monospace}
+
+/* code editor */
+.win.code{display:grid; grid-template-columns:14px 1fr; gap:0 7px; color:#8b949e}
+.win.code u{color:#39414d; text-decoration:none; text-align:right}
+.win.code s{text-decoration:none; white-space:nowrap; overflow:hidden}
+.kw{color:#ff7b72} .fn{color:#d2a8ff} .st{color:#a5d6ff} .cm{color:#6e7681} .nm{color:#79c0ff}
+
+/* slide deck */
+.win.deckwin{padding:10px 11px}
+.win.deckwin h4{margin:0 0 7px; font:600 10px/1.3 -apple-system,sans-serif; color:#e6edf3}
+.win.deckwin .li{display:flex; align-items:center; gap:5px; margin-bottom:4px; color:#8b949e; font-size:7.5px}
+.win.deckwin .li::before{content:""; width:3px; height:3px; border-radius:50%; background:#58a6ff; flex:none}
+.chartrow{display:flex; align-items:flex-end; gap:3px; height:26px; margin-top:7px}
+.chartrow i{flex:1; background:linear-gradient(180deg,#388bfd,#1f6feb); border-radius:1px}
+
+/* mail list */
+.win.mail{padding:6px 7px}
+.mrow{display:flex; gap:5px; align-items:center; padding:4px 3px; border-bottom:1px solid #1c222b}
+.mrow:last-child{border-bottom:none}
+.mrow .av{width:12px; height:12px; border-radius:50%; flex:none; background:linear-gradient(135deg,#388bfd,#a371f7)}
+.mrow .mt{flex:1; min-width:0}
+.mrow .mt b{display:block; font:600 7.5px/1.3 -apple-system,sans-serif; color:#e6edf3; white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
+.mrow .mt span{display:block; font-size:7px; color:#6e7681; white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
+
+/* terminal */
+.win.term-mini{color:#c9d1d9; white-space:pre; font-size:7.5px; line-height:1.6}
+.win.term-mini .g{color:#3fb950} .win.term-mini .d{color:#6e7681}
+
+/* dashboard */
+.win.dash{padding:9px 10px}
+.spark{display:flex; align-items:flex-end; gap:2px; height:30px}
+.spark i{flex:1; background:#238636; border-radius:1px; opacity:.85}
+.dashrow{display:flex; justify-content:space-between; font-size:7.5px; color:#8b949e; margin-bottom:6px}
+.dashrow b{color:#3fb950}
+
+/* The browser they land in. */
+.catcher{
+  position:absolute; left:50%; top:50%; width:660px; height:400px; margin:-200px 0 0 -330px;
+  border-radius:13px; overflow:hidden; background:rgba(13,17,23,.72);
+  border:1px solid var(--line); backdrop-filter:blur(6px);
+  box-shadow:0 40px 90px -40px rgba(0,0,0,.95), 0 0 70px -30px rgba(31,111,235,.5);
+  will-change:transform,opacity;
+}
+.catcher .bar{padding:8px 11px}
+.deck{position:absolute; inset:0; will-change:transform}
+.phone{
+  position:absolute; left:50%; top:50%; width:262px; height:534px; margin:-267px 0 0 -131px;
+  border-radius:34px; background:linear-gradient(165deg,#2a313d,#171c24);
+  border:1px solid #3a4250; padding:9px;
+  box-shadow:0 40px 90px -40px rgba(0,0,0,.95), 0 0 60px -26px rgba(31,111,235,.45);
+  will-change:transform,opacity; opacity:0;
+}
+.phone-screen{
+  position:absolute; inset:9px; border-radius:26px; overflow:hidden;
+  background:linear-gradient(170deg,#0d1219,#080b11); border:1px solid #10151f;
+}
+.phone-notch{
+  position:absolute; left:50%; top:11px; width:82px; height:17px; margin-left:-41px;
+  background:#0a0e14; border-radius:11px; z-index:2;
+}
+.stage-cap{
+  position:absolute; left:0; right:0; bottom:6%; text-align:center; z-index:5;
+  font-size:14.5px; color:var(--muted); will-change:opacity,transform;
+}
+.stage-cap b{color:var(--fg); font-weight:640}
+.stage-hint{
+  position:absolute; left:0; right:0; top:3%; text-align:center;
+  font-size:12px; letter-spacing:.08em; text-transform:uppercase; color:var(--dim);
+}
+
+/* No 3D on phones: not enough room, and it costs a lot of compositing.
+   The static section below carries the same story. */
+@media (max-width:820px){ .stagewrap{display:none} }
+
+/* ── security bento ────────────────────────────────── */
+.grid{display:grid; grid-template-columns:repeat(6,1fr); gap:12px; margin-top:40px; text-align:left}
+.card{
+  background:linear-gradient(180deg,rgba(28,33,41,.7),rgba(22,27,34,.7));
+  border:1px solid var(--line-soft); border-radius:var(--radius); padding:20px 22px;
+  grid-column:span 2; position:relative; overflow:hidden;
+  transition:border-color .3s, transform .3s var(--ease);
+}
+.card:hover{border-color:#3d444d; transform:translateY(-2px)}
+.card::after{
+  content:""; position:absolute; inset:0 0 auto 0; height:1px;
+  background:linear-gradient(90deg,transparent,rgba(88,166,255,.5),transparent);
+  opacity:0; transition:opacity .3s;
+}
+.card:hover::after{opacity:1}
+.card.wide{grid-column:span 3}
+.card h3{margin:0 0 7px; font-size:15px; font-weight:640; letter-spacing:-.01em}
+.card p{margin:0; font-size:13.5px; color:var(--muted); line-height:1.6}
+@media (max-width:820px){ .grid{grid-template-columns:repeat(2,1fr)} .card,.card.wide{grid-column:span 1} }
+@media (max-width:520px){ .grid{grid-template-columns:1fr} }
+
+/* ── waitlist ──────────────────────────────────────── */
+.waitlist{
+  border-top:1px solid var(--line);
+  background:
+    radial-gradient(ellipse 60% 100% at 50% 0%, rgba(31,111,235,.16), transparent 70%),
+    linear-gradient(180deg,var(--surface),rgba(22,27,34,0));
+}
+form.signup{display:flex; gap:8px; margin:28px auto 0; max-width:460px}
+form.signup input{
+  flex:1; min-width:0; background:rgba(13,17,23,.8); color:var(--fg);
+  border:1px solid var(--line); border-radius:9px; padding:13px 15px;
+  font:inherit; font-size:15px; transition:border-color .2s, box-shadow .2s;
+}
+form.signup input::placeholder{color:var(--dim)}
+form.signup input:focus{outline:none; border-color:var(--accent); box-shadow:0 0 0 3px rgba(88,166,255,.16)}
+form.signup button{
+  flex:none; background:linear-gradient(180deg,var(--accent),var(--accent-deep)); color:#fff;
+  border:1px solid rgba(255,255,255,.14);
+  border-radius:9px; padding:13px 22px; font:inherit; font-weight:600; font-size:15px; cursor:pointer;
+  box-shadow:0 6px 20px -8px rgba(31,111,235,.9);
+  transition:filter .15s, transform .15s var(--ease), box-shadow .2s;
+}
+form.signup button:hover{filter:brightness(1.08); transform:translateY(-1px); box-shadow:0 10px 26px -8px rgba(31,111,235,1)}
+form.signup button:active{transform:translateY(0)}
+form.signup button:disabled{opacity:.55; cursor:default; transform:none}
+.formnote{margin:16px auto 0; font-size:13px; color:var(--dim); max-width:52ch}
+.formmsg{margin:14px auto 0; font-size:14px; min-height:1.4em}
+.formmsg.ok{color:#3fb950}
+.formmsg.err{color:#f85149}
+@media (max-width:520px){ form.signup{flex-direction:column} }
+
+/* ── footer ────────────────────────────────────────── */
+footer{border-top:1px solid var(--line-soft); padding:44px 0 60px; color:var(--dim); font-size:14px}
+footer .wrap{display:flex; flex-wrap:wrap; gap:14px 28px; align-items:center; justify-content:space-between}
+footer a{color:var(--muted)}
+.footlinks{display:flex; flex-wrap:wrap; gap:20px}
+
+/* ── scroll reveal ─────────────────────────────────── */
+.reveal{opacity:0; transform:translateY(16px); transition:opacity .75s var(--ease), transform .75s var(--ease)}
+.reveal.in{opacity:1; transform:none}
+
+/* ── phones ────────────────────────────────────────── */
+/* Desktop rhythm is built on ~96px gutters between sections; at 390px wide that
+   reads as dead space between unrelated blocks. Scale the whole vertical
+   system down together so the proportions survive. */
+@media (max-width:640px){
+  .wrap{padding-left:20px; padding-right:20px}
+  header{padding:38px 0 4px}
+  section{padding:56px 0}
+  h1{margin-bottom:16px}
+  h2{max-width:none}
+  .lede{font-size:16.5px}
+  .cta{margin-top:26px}
+  .stats{margin-top:32px}
+  .hero-shot{margin-top:32px}
+  .body{font-size:16px}
+  .body + .shot, .body + .frame{margin-top:24px}
+  .grid{margin-top:26px; gap:10px}
+  .card{padding:17px 18px}
+  form.signup{margin-top:22px}
+  figcaption{margin-top:11px}
+  footer{padding:32px 0 44px}
+  footer .wrap{gap:12px 20px}
+  .footlinks{gap:16px}
+  .sky i{filter:blur(70px); opacity:.75}
+}
+
+@media (prefers-reduced-motion:reduce){
+  html{scroll-behavior:auto}
+  *{animation:none !important; transition:none !important}
+  .reveal{opacity:1; transform:none}
+}
+</style>
+<noscript><style>.reveal{opacity:1 !important; transform:none !important}</style></noscript>
+</head>
+<body>
+
+<nav id="nav">
+  <div class="wrap">
+    <a class="brand" href="/">
+      <img src="/assets/icon.png" alt="" width="26" height="26">
+      <span>reminal</span>
+    </a>
+    <div class="navlinks">
+      <a href="#security" class="hide-sm">Security</a>
+      <a href="#pro" class="hide-sm">What's coming</a>
+      <a href="https://github.com/harshalgajjar/Reminal" class="ghlink"><svg class="gh" viewBox="0 0 16 16" width="16" height="16" aria-hidden="true" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.012 8.012 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg><span>GitHub</span></a>
+    </div>
+  </div>
+  <div class="progress" id="progress" aria-hidden="true"></div>
+</nav>
+
+<header>
+  <div class="sky" aria-hidden="true"><i></i><i></i><i></i></div>
+  <div class="mesh" aria-hidden="true"></div>
+
+  <div class="wrap">
+    <h1>Every window, desktop and terminal on your machines — <span class="em">live in any browser</span>.</h1>
+    <p class="lede">
+      <strong>Close the laptop lid and walk away.</strong> reminal keeps the machine serving — and hands you
+      its actual apps, not just a shell — in any browser, from anywhere. No open ports, no keys on disk,
+      nothing to install on the device you're holding.
+    </p>
+
+    <div class="cta">
+      <div class="tabs" role="tablist" aria-label="Install command">
+        <button class="tab" role="tab" aria-selected="true"  data-os="unix">macOS · Linux</button>
+        <button class="tab" role="tab" aria-selected="false" data-os="win">Windows</button>
+      </div>
+      <div class="cmd">
+        <span class="sigil" aria-hidden="true">$</span>
+        <pre id="install"><code>curl -fsSL https://reminal.app/install.sh | sh</code></pre>
+        <button class="copy" id="copy" type="button">Copy</button>
+      </div>
+      <p class="sub-cta">
+        Then run <code>reminal</code>. · <a href="https://github.com/harshalgajjar/Reminal" class="ghlink"><svg class="gh" viewBox="0 0 16 16" width="16" height="16" aria-hidden="true" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.012 8.012 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg><span>Read the source on GitHub →</span></a>
+      </p>
+    </div>
+
+    <div class="stats">
+      <div><b>60<span>fps</span></b><em>of a live window</em></div>
+      <div><b>17<span>ms</span></b><em>its screen to yours</em></div>
+      <div><b id="rtt">&mdash;<span>ms</span></b><em>your browser &rarr; the edge</em></div>
+      <div><b>0</b><em>open ports</em></div>
+    </div>
+
+    <div class="chips">
+      <span class="chip"><b>No open ports</b><span class="more"> — nothing to scan</span></span>
+      <span class="chip"><b>End-to-end encrypted</b><span class="more"> — the relay routes ciphertext</span></span>
+      <span class="chip"><b>No client</b><span class="more"> — the browser is the client</span></span>
+      <span class="chip">macOS · Linux · Windows</span>
+      <span class="chip">Open source, AGPL-3.0</span>
+    </div>
+
+    <div class="term-wrap">
+      <figure class="frame hero-shot" id="demo">
+        <div class="bar"><span class="dots"><i></i><i></i><i></i></span><span class="url">zsh &mdash; studio-mac</span><span class="live">HOST</span></div>
+        <pre class="term" id="term" aria-label="A recorded reminal session: running reminal prints a session ID, a PIN and a scannable QR code"></pre>
+      </figure>
+
+      <div class="popout" id="popout" hidden>
+        <div class="bar"><span class="dots"><i></i><i></i><i></i></span><span class="url">mini-01</span></div>
+        <img src="/assets/own.jpg" alt="A window from another machine, popped out onto this desktop">
+        <span class="hint" id="pophint">drag me</span>
+      </div>
+    </div>
+    <figcaption>
+      Real output from <code>reminal</code> &mdash; and that QR is live.
+      <span class="nowrap">Scan it and you&rsquo;ll land right back here.</span>
+      <button class="term-replay" id="replay" type="button" hidden>Replay</button>
+    </figcaption>
+  </div>
+</header>
+
+<main>
+
+
+<section class="stagewrap" id="lidstage" aria-label="Closing the lid: the windows keep streaming into a browser, then onto a phone">
+  <div class="stage-pin">
+    <p class="stage-hint" id="stagehint">Scroll &mdash; close the lid</p>
+    <div class="scene">
+      <div class="mac">
+        <div class="mac-lid" id="maclid">
+          <div class="mac-screen"><div class="mac-glow"></div></div>
+          <div class="mac-notch"></div>
+        </div>
+        <div class="mac-base"></div>
+      </div>
+
+      <div class="phone" id="phone">
+        <div class="phone-notch"></div>
+        <div class="phone-screen"></div>
+      </div>
+      <div class="deck" id="deck">
+        <div class="catcher" id="catcher">
+          <div class="bar"><span class="dots"><i></i><i></i><i></i></span><span class="url">reminal.app/?s=7f3a2c9e</span><span class="live">live</span></div>
+        </div>
+
+        <!-- Already on the remote desktop, so the arrivals join a populated
+             machine rather than an empty frame. -->
+        <div class="flyer resident" id="res0" style="width:196px;height:112px">
+          <div class="bar"><span class="dots"><i></i><i></i><i></i></span><span class="url">zsh &mdash; api-prod</span></div>
+          <div class="win term-mini"><span class="g">~</span> tail -f api.log
+<span class="d">14:22:07</span> 200 GET /v1/sessions
+<span class="d">14:22:07</span> 200 POST /v1/relay
+<span class="d">14:22:08</span> <span class="g">ok</span> 412 rps</div>
+        </div>
+        <div class="flyer resident" id="res1" style="width:182px;height:104px">
+          <div class="bar"><span class="dots"><i></i><i></i><i></i></span><span class="url">grafana</span></div>
+          <div class="win dash">
+            <div class="dashrow"><span>relay throughput</span><b>+18%</b></div>
+            <div class="spark"><i style="height:38%"></i><i style="height:52%"></i><i style="height:44%"></i><i style="height:66%"></i><i style="height:58%"></i><i style="height:78%"></i><i style="height:71%"></i><i style="height:92%"></i><i style="height:84%"></i><i style="height:100%"></i></div>
+          </div>
+        </div>
+
+        <div class="flyer" id="fly0" style="width:254px;height:152px">
+          <div class="bar"><span class="dots"><i></i><i></i><i></i></span><span class="url">relay.ts</span></div>
+          <div class="win code">
+            <u>18</u><s><span class="kw">export</span> <span class="kw">async</span> <span class="fn">fetch</span>(req) {</s>
+            <u>19</u><s>  <span class="kw">const</span> <span class="nm">url</span> = <span class="kw">new</span> <span class="fn">URL</span>(req.url)</s>
+            <u>20</u><s>  <span class="cm">// relay only routes ciphertext</span></s>
+            <u>21</u><s>  <span class="kw">if</span> (<span class="nm">url</span>.pathname === <span class="st">"/ws"</span>)</s>
+            <u>22</u><s>    <span class="kw">return</span> <span class="fn">upgrade</span>(req)</s>
+            <u>23</u><s>}</s>
+          </div>
+        </div>
+
+        <div class="flyer" id="fly1" style="width:214px;height:134px">
+          <div class="bar"><span class="dots"><i></i><i></i><i></i></span><span class="url">Q3-review.key</span></div>
+          <div class="win deckwin">
+            <h4>Relay uptime, Q3</h4>
+            <div class="li">99.98% across 3 regions</div>
+            <div class="li">p50 handshake 41 ms</div>
+            <div class="chartrow"><i style="height:44%"></i><i style="height:61%"></i><i style="height:52%"></i><i style="height:78%"></i><i style="height:88%"></i><i style="height:100%"></i></div>
+          </div>
+        </div>
+
+        <div class="flyer" id="fly2" style="width:198px;height:122px">
+          <div class="bar"><span class="dots"><i></i><i></i><i></i></span><span class="url">Inbox</span></div>
+          <div class="win mail">
+            <div class="mrow"><span class="av"></span><span class="mt"><b>Deploy finished</b><span>studio-mac &middot; 2 min ago</span></span></div>
+            <div class="mrow"><span class="av"></span><span class="mt"><b>CVE patched on aws-eu-1</b><span>reminal &middot; 14 min ago</span></span></div>
+            <div class="mrow"><span class="av"></span><span class="mt"><b>Backup rotated</b><span>mini-01 &middot; 1 hr ago</span></span></div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+    <p class="stage-cap" id="stagecap"><b>Lid shut. Nothing plugged in.</b> The windows never stopped.</p>
+  </div>
+</section>
+
+<section class="wrap" id="headless">
+  <p class="eyebrow reveal">Closed-lid mode</p>
+  <h2 class="reveal">No monitor. No dummy plug. No dongle.</h2>
+  <p class="body reveal">
+    Close a MacBook's lid and macOS puts it to sleep — unless it's on power with a monitor <em>and</em>
+    keyboard attached. The usual fix is a hardware dummy HDMI plug that fakes a display, or leaving the
+    lid propped open on your desk forever.
+  </p>
+  <p class="body reveal" style="margin-top:14px">
+    <strong>reminal does it in software.</strong> Flip it on and leave. It disables clamshell sleep and —
+    because GUI apps need a screen to draw on — spins up a virtual display the moment the Mac goes
+    headless, so window mirroring keeps working with nothing plugged in. Toggle it off and everything
+    is undone.
+  </p>
+  <figure class="frame reveal" id="lidshot">
+    <div class="bar"><span class="dots"><i></i><i></i><i></i></span><span class="url">reminal.app/?s=7f3a2c9e</span><span class="live">live<span> &middot; studio-mac</span></span></div>
+    <video src="/assets/lid.mp4" poster="/assets/lid.jpg" muted loop playsinline autoplay
+           aria-label="A MacBook with VS Code, Keynote and Mail open folds its lid shut — and the same windows keep streaming, live and controllable, into a browser"></video>
+  </figure>
+  <figcaption class="reveal" id="lidcap">The lid shuts with no monitor and no dongle attached &mdash; and the windows keep streaming, live and controllable.</figcaption>
+</section>
+
+<section id="windows" class="pinned">
+  <div class="wrap pin-grid">
+    <div class="pin-media">
+      <div class="pin-sticky">
+      <figure class="frame">
+        <div class="bar"><span class="dots"><i></i><i></i><i></i></span><span class="url">TextEdit &mdash; studio-mac</span><span class="live">live</span></div>
+        <video src="/assets/hero.mp4" poster="/assets/hero.jpg" muted loop playsinline preload="none"
+               aria-label="A phone opens the Mac's TextEdit window and types into it — the words land in the real app on the Mac — then the phone mirrors the whole desktop"></video>
+      </figure>
+      <figcaption><b>Real capture, unedited.</b> Native capture, streamed peer-to-peer.</figcaption>
+      </div>
+    </div>
+
+    <div class="pin-copy">
+      <p class="eyebrow reveal">Windows &amp; desktops</p>
+      <h2 class="reveal">Reach in and drive the apps.</h2>
+      <p class="body reveal">
+        Any app window streams live into your browser &mdash; and you don't just watch it,
+        you <strong>drive</strong> it.
+      </p>
+      <ol class="beats">
+        <li class="beat"><b>Click, type, scroll, drag.</b> Right-click menus, pinch-zoom, text selection &mdash; the window answers exactly like it would under your own hand.</li>
+        <li class="beat"><b>Nothing open yet?</b> Launch any installed app on the host straight from the Apps menu, then drive it.</li>
+        <li class="beat"><b>Or take the whole desktop.</b> One tap on Host &rarr; View full desktop and the entire machine is yours.</li>
+        <li class="beat"><b>On a phone, the screen becomes a trackpad.</b> Your Mac, fully hands-on, from your pocket.</li>
+      </ol>
+    </div>
+  </div>
+</section>
+
+<section class="wrap" id="fps">
+  <p class="eyebrow reveal">60 fps</p>
+  <h2 class="reveal">Nothing about it says <em>stream</em>.</h2>
+  <p class="body reveal">
+    Drag a window, scrub a video inside it, watch a build scroll past — it stays fluid the whole way, on
+    hotel Wi-Fi or a phone on cellular. <strong>Sixty frames a second, 17 ms from its screen to yours.</strong>
+    H.264 down the session's own DataChannel, peer-to-peer, about 2.6 Mbps.
+  </p>
+  <figure class="frame reveal">
+    <div class="bar"><span class="dots"><i></i><i></i><i></i></span><span class="url">mac-studio — window mirror</span><span class="live">60 fps</span></div>
+    <video src="/assets/video.mp4" poster="/assets/video.jpg" muted loop playsinline preload="none"
+           aria-label="A window from a Mac Studio streaming live into a browser at 60 frames per second"></video>
+  </figure>
+</section>
+
+<section class="wrap" id="terminal">
+  <p class="eyebrow reveal">Terminal</p>
+  <h2 class="reveal">And a full terminal, too. Scan a QR and you're in.</h2>
+  <p class="body reveal">
+    <code>reminal</code> prints a session ID, a PIN and a QR code. Scan it and your phone is a real terminal
+    on your machine — true colour, touch text-selection, on-screen modifier keys, find-in-scrollback.
+    Close the laptop, switch device, reconnect from another city: the shell is where you left it, and the
+    screen paints instantly.
+  </p>
+  <figure class="frame reveal">
+    <div class="bar"><span class="dots"><i></i><i></i><i></i></span><span class="url">zsh — 2 viewers attached</span><span class="live">live</span></div>
+    <video src="/assets/setup.mp4" poster="/assets/setup.jpg" muted loop playsinline preload="none"
+           aria-label="A terminal runs reminal and prints a QR code; a phone scans it and joins the same session"></video>
+  </figure>
+  <figcaption class="reveal">The fastest SSH you'll ever configure — because there's nothing to configure.</figcaption>
+</section>
+
+<section class="wrap" id="fleet">
+  <p class="eyebrow reveal">Your fleet</p>
+  <h2 class="reveal">Own your machines. Watch them all.</h2>
+  <p class="body reveal">
+    The moment your work spans more than one machine, the hard part isn't starting it — it's
+    <em>seeing</em> it. One live view of everything you own: every machine, every terminal on it, what's
+    running, who's watching, how long it's been idle. Attach, rename, spawn or kill a session on any box,
+    from the CLI or the browser. Enroll a device as an owner once and it connects with no PIN — per-device
+    trust, revocable one at a time.
+  </p>
+  <figure class="frame reveal">
+    <div class="bar"><span class="dots"><i></i><i></i><i></i></span><span class="url">reminal machines — 3 online</span><span class="live">live</span></div>
+    <video src="/assets/own.mp4" poster="/assets/own.jpg" muted loop playsinline preload="none"
+           aria-label="A live view of a fleet — three machines online, each showing its running sessions with live indicators and viewer counts"></video>
+  </figure>
+</section>
+
+<section class="wrap center" id="security">
+  <p class="eyebrow reveal">Security</p>
+  <h2 class="reveal">As secure as a properly configured SSH — and safer by default.</h2>
+  <p class="body reveal">
+    SSH leaves port 22 open, stores long-lived keys on disk, and trusts you to configure everything
+    correctly. reminal takes the opposite approach: nothing to expose, nothing permanent to steal.
+  </p>
+  <div class="grid">
+    <div class="card wide reveal">
+      <h3>No open ports</h3>
+      <p>Your machine only dials out. There is nothing on the network to scan, brute-force or zero-day — the single biggest difference from exposing SSH to the internet.</p>
+    </div>
+    <div class="card wide reveal">
+      <h3>Ephemeral credentials</h3>
+      <p>The session ID and PIN exist only while reminal runs. Ctrl+C and they're gone forever — a stolen laptop grants nothing, because there is nothing left to steal.</p>
+    </div>
+    <div class="card reveal">
+      <h3>End-to-end encrypted</h3>
+      <p>AES-256-GCM under a fresh key per run, handed to each viewer through a PIN-authenticated X25519 handshake.</p>
+    </div>
+    <div class="card reveal">
+      <h3>Relay-blind</h3>
+      <p>The relay routes ciphertext it cannot read, and can't be used to brute-force the PIN offline.</p>
+    </div>
+    <div class="card reveal">
+      <h3>Forward secret</h3>
+      <p>Every connection runs its own ephemeral exchange, so recorded traffic stays unreadable.</p>
+    </div>
+    <div class="card wide reveal">
+      <h3>Auditable, and yours</h3>
+      <p>Every line is open source under AGPL-3.0 — including the relay, which you can host yourself on Cloudflare in a few minutes.</p>
+    </div>
+    <div class="card wide reveal">
+      <h3>Rate-limited at the source</h3>
+      <p>Every PIN guess costs a full online handshake with your machine, answered at roughly six a minute. Exhausting a 6-digit PIN takes months; a session lives for hours.</p>
+    </div>
+  </div>
+  <p class="sub-cta reveal" style="margin-top:28px">
+    <a href="https://github.com/harshalgajjar/Reminal/blob/main/docs/security/architecture.md">Architecture</a> ·
+    <a href="https://github.com/harshalgajjar/Reminal/blob/main/docs/security/threat-model.md">Threat model</a> ·
+    <a href="https://github.com/harshalgajjar/Reminal/blob/main/SECURITY.md">Report a vulnerability</a>
+  </p>
+</section>
+
+<section class="waitlist" id="pro">
+  <div class="wrap center">
+    <p class="eyebrow reveal">What's coming</p>
+    <h2 class="reveal">The CLI is free and open source. Forever.</h2>
+    <p class="body reveal">
+      What's coming is the hosted half: a managed relay, permanent names for your machines instead of a
+      fresh ID every run, custom domains for <code>expose</code>, and TURN for networks that refuse to be
+      punched through. Tell me where to send it.
+    </p>
+    <form class="signup reveal" id="signup" novalidate>
+      <input type="email" id="email" name="email" placeholder="you@example.com"
+             autocomplete="email" required aria-label="Email address">
+      <button type="submit" id="submit">Join the waitlist</button>
+    </form>
+    <p class="formmsg" id="msg" role="status" aria-live="polite"></p>
+    <p class="formnote reveal">
+      One email when it's ready. No drip sequence, no sharing your address, unsubscribe in a click.
+      Running reminal at work? <a href="mailto:mail@harshalgajjar.com?subject=reminal%20commercial%20licence">Commercial licences</a> are available.
+    </p>
+  </div>
+</section>
+
+</main>
+
+<footer>
+  <div class="wrap">
+    <span>© <span id="year">2026</span> Harshal Gajjar · AGPL-3.0</span>
+    <span class="footlinks">
+      <a href="https://github.com/harshalgajjar/Reminal" class="ghlink"><svg class="gh" viewBox="0 0 16 16" width="16" height="16" aria-hidden="true" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.012 8.012 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg><span>GitHub</span></a>
+      <a href="https://github.com/harshalgajjar/Reminal/blob/main/LICENSING.md">Licensing</a>
+      <a href="https://github.com/harshalgajjar/Reminal/blob/main/SECURITY.md">Security</a>
+      <a href="mailto:mail@harshalgajjar.com">Contact</a>
+    </span>
+  </div>
+</footer>
+
+<script>
+// ── Loops form endpoint ────────────────────────────────────────────────
+// Create the form in Loops (Forms → Create → "Use my own form") and paste
+// its endpoint here. Public by design: it only accepts subscribes, so
+// there is no secret to leak. Until it's set, the form says so out loud
+// rather than silently swallowing addresses.
+const LOOPS_ENDPOINT = "https://app.loops.so/api/newsletter-form/REPLACE_WITH_FORM_ID";
+
+const INSTALL = {
+  unix: "curl -fsSL https://reminal.app/install.sh | sh",
+  win:  "irm https://reminal.app/install.ps1 | iex",
+};
+
+// ── feature switchboard ────────────────────────────────────────────────
+// Flip any of these to false and the feature is gone — no other edit needed.
+// Each is self-contained below under a matching heading.
+const FEATURES = {
+  liveTerminal: true,   // hero: types `reminal`, prints the banner + a real QR
+  edgeLatency:  true,   // stat band: the visitor's own round-trip to the edge
+  scrollScrub:  true,   // closed-lid section: scroll drives the video playhead
+  osDetect:     true,   // install box: preselect the visitor's actual OS
+  dragWindow:   true,   // hero: a pop-out window card you can throw around
+  scrollFX:     true,   // parallax, reading progress, counters — one rAF loop
+  pinnedSection:true,   // "drive the apps": media pins while the beats scroll
+  lidStage:     true,   // 3D set piece: the lid shuts, the windows fly to a browser
+};
+
+const reduced = matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+// ── scroll reveal ──────────────────────────────────────────────────────
+// Staggered within a section so a block arrives as one gesture rather than
+// seven independent twitches.
+const revealables = document.querySelectorAll(".reveal");
+if (reduced || !("IntersectionObserver" in window)) {
+  revealables.forEach(el => el.classList.add("in"));
+} else {
+  const groups = new Map();
+  const show = el => {
+    if (el.classList.contains("in")) return;
+    el.classList.add("in");
+  };
+  const ro = new IntersectionObserver((entries, obs) => {
+    for (const e of entries) {
+      if (!e.isIntersecting) continue;
+      const parent = e.target.closest("section") || document.body;
+      const n = groups.get(parent) || 0;
+      groups.set(parent, n + 1);
+      e.target.style.transitionDelay = Math.min(n * 70, 350) + "ms";
+      show(e.target);
+      obs.unobserve(e.target);
+    }
+    // threshold 0 + a generous margin: a fast flick can otherwise carry an
+    // element in and out between callbacks, and a missed callback would leave
+    // it invisible for good.
+  }, { rootMargin: "0px 0px -4% 0px", threshold: 0 });
+  revealables.forEach(el => ro.observe(el));
+
+  // Failsafe. The animation is decoration; the text is the product. If
+  // anything at all goes wrong — a flick past the observer, a browser quirk,
+  // a restore from bfcache — everything becomes visible regardless.
+  const revealAll = () => revealables.forEach(el => { el.style.transitionDelay = "0ms"; show(el); });
+  setTimeout(revealAll, 4000);
+  addEventListener("pageshow", e => { if (e.persisted) revealAll(); });
+}
+
+
+// ── install command tabs + copy ────────────────────────────────────────
+const installEl = document.querySelector("#install code");
+const copyBtn = document.getElementById("copy");
+
+document.querySelectorAll(".tab").forEach(tab => {
+  tab.addEventListener("click", () => {
+    document.querySelectorAll(".tab").forEach(t => t.setAttribute("aria-selected", String(t === tab)));
+    installEl.textContent = INSTALL[tab.dataset.os];
+    copyBtn.textContent = "Copy";
+    copyBtn.classList.remove("done");
+  });
+});
+
+copyBtn.addEventListener("click", async () => {
+  try {
+    await navigator.clipboard.writeText(installEl.textContent);
+    copyBtn.textContent = "Copied";
+    copyBtn.classList.add("done");
+    setTimeout(() => { copyBtn.textContent = "Copy"; copyBtn.classList.remove("done"); }, 1800);
+  } catch {
+    // Clipboard blocked (insecure context, or the user said no) — select it
+    // instead so ⌘C still works.
+    const r = document.createRange();
+    r.selectNodeContents(installEl);
+    const sel = getSelection();
+    sel.removeAllRanges();
+    sel.addRange(r);
+  }
+});
+
+// ── nav gains its border once you leave the hero ───────────────────────
+const nav = document.getElementById("nav");
+const onScroll = () => nav.classList.toggle("scrolled", scrollY > 12);
+addEventListener("scroll", onScroll, { passive: true });
+onScroll();
+
+// ── play videos only while they're on screen ───────────────────────────
+// Five looping videos decoding at once cooks a phone battery for no reason.
+const videos = document.querySelectorAll("video");
+
+if (reduced) {
+  videos.forEach(v => { v.autoplay = false; v.controls = true; v.pause(); });
+} else if ("IntersectionObserver" in window) {
+  const io = new IntersectionObserver(entries => {
+    for (const e of entries) {
+      if (e.isIntersecting) {
+        e.target.preload = "auto";
+        e.target.play().catch(() => {}); // autoplay refusal is not an error worth surfacing
+      } else {
+        e.target.pause();
+      }
+    }
+  }, { rootMargin: "200px 0px", threshold: 0.15 });
+  videos.forEach(v => io.observe(v));
+} else {
+  videos.forEach(v => { v.preload = "auto"; v.play().catch(() => {}); });
+}
+
+// ── [FEATURES.scrollFX] one scroll loop for everything ─────────────────
+// Every scroll-linked effect reads layout in a single rAF pass and writes
+// only transforms/opacity. Separate listeners per effect would each force
+// their own layout flush and turn a smooth page into a stuttering one.
+if (FEATURES.scrollFX && !reduced) {
+  const bar    = document.getElementById("progress");
+  const sky    = document.querySelector(".sky");
+  const mesh   = document.querySelector(".mesh");
+  // The lead copy only — NOT header .wrap, which also holds the terminal.
+  // Fading the whole wrap dims the hero terminal to nothing at the exact
+  // moment you scroll down to read it.
+  const heroIn = [...document.querySelectorAll(
+    "header h1, header .lede, header .cta, header .stats, header .chips")];
+  const frames = [...document.querySelectorAll(".frame")].filter(f => !f.closest(".pin-media"));
+  const beats  = [...document.querySelectorAll(".beat")];
+
+  const clamp = (v, a, b) => v < a ? a : v > b ? b : v;
+  let queued = false;
+
+  function pass() {
+    queued = false;
+    const vh = innerHeight;
+    const y  = scrollY;
+
+    // Reading progress across the whole document.
+    if (bar) {
+      const max = document.documentElement.scrollHeight - vh;
+      bar.style.transform = `scaleX(${max > 0 ? clamp(y / max, 0, 1) : 0})`;
+    }
+
+    // Hero parallax: the glow lags behind, the grid runs ahead, and the copy
+    // drifts up and dims as you leave — depth from three different rates.
+    if (y < vh * 1.6) {
+      if (sky)  sky.style.transform  = `translate3d(0, ${y * 0.28}px, 0)`;
+      if (mesh) mesh.style.transform = `translate3d(0, ${y * -0.12}px, 0)`;
+      const fade = String(clamp(1 - y / (vh * 0.95), 0, 1));
+      for (const el of heroIn) {
+        el.style.transform = `translate3d(0, ${y * 0.06}px, 0)`;
+        el.style.opacity = fade;
+      }
+    }
+
+    // Media parallax: each frame drifts a little against the page as it
+    // crosses the viewport, so it reads as sitting on its own plane.
+    for (const f of frames) {
+      const r = f.getBoundingClientRect();
+      if (r.bottom < -200 || r.top > vh + 200) continue;
+      const centred = (r.top + r.height / 2 - vh / 2) / vh;   // -1 … 1
+      f.style.transform = `translate3d(0, ${clamp(centred, -1, 1) * -18}px, 0)`;
+    }
+
+    // Only the beat nearest the reading line lights. A band test lights every
+    // beat at once on a tall window, which sequences nothing.
+    if (beats.length) {
+      const line = vh * 0.46;
+      let best = -1, bestDist = Infinity;
+      beats.forEach((b, i) => {
+        const r = b.getBoundingClientRect();
+        if (r.bottom < 0 || r.top > vh) return;
+        const d = Math.abs(r.top + r.height / 2 - line);
+        if (d < bestDist) { bestDist = d; best = i; }
+      });
+      beats.forEach((b, i) => b.classList.toggle("lit", i === best));
+    }
+  }
+
+  const onScroll = () => { if (!queued) { queued = true; requestAnimationFrame(pass); } };
+  addEventListener("scroll", onScroll, { passive: true });
+  addEventListener("resize", onScroll);
+  pass();
+
+  // The .frame hover lift sets its own transform; let the parallax own it
+  // instead of the two fighting each other mid-hover.
+  document.head.insertAdjacentHTML("beforeend",
+    "<style>.frame{transition:box-shadow .4s var(--ease)}.frame:hover{transform:none}</style>");
+}
+
+// ── [FEATURES.lidStage] lid shuts → browser → phone ────────────────────
+// One progress value 0→1 across the pinned section drives every transform.
+// Everything is a pure function of p, so scrubbing backwards is exact and
+// there is no animation state to fall out of sync.
+if (FEATURES.lidStage && matchMedia("(min-width:821px)").matches) {
+  const sec     = document.getElementById("lidstage");
+  const lid     = document.getElementById("maclid");
+  const mac     = document.querySelector("#lidstage .mac");
+  const catcher = document.getElementById("catcher");
+  const phone   = document.getElementById("phone");
+  const cap     = document.getElementById("stagecap");
+  const hint    = document.getElementById("stagehint");
+  const flyers    = ["fly0", "fly1", "fly2"].map(id => document.getElementById(id));
+  const residents = ["res0", "res1"].map(id => document.getElementById(id));
+
+  if (sec && lid && catcher) {
+    const clamp01 = v => v < 0 ? 0 : v > 1 ? 1 : v;
+    const span = (p, a, b) => clamp01((p - a) / (b - a));
+    const ease = t => t < .5 ? 4*t*t*t : 1 - Math.pow(-2*t + 2, 3) / 2;
+    const mix  = (a, b, t) => a + (b - a) * t;
+
+    // Three stops per window: on the laptop screen, on the remote desktop,
+    // then stacked in the phone. No rotation anywhere — a tilted window reads
+    // as a graphic; a straight one reads as a window.
+    const PLAN = [
+      { on: [-150,-104, 10], desk: [-176,-30, 190], ph: [0,-150, 210], phs: 0.60 },
+      { on: [  36,-120, 30], desk: [ 150,-62, 150], ph: [0,  -8, 170], phs: 0.60 },
+      { on: [ -34,  16, 20], desk: [ 140, 86, 120], ph: [0, 132, 130], phs: 0.60 },
+    ];
+    const RES = [
+      { desk: [-196, 112, 70] },
+      { desk: [ -58, 140, 60] },
+    ];
+
+    let ticking = false;
+    function draw() {
+      ticking = false;
+      const r  = sec.getBoundingClientRect();
+      const vh = innerHeight;
+      const p  = clamp01(-r.top / Math.max(1, r.height - vh));
+
+      const lift  = ease(span(p, 0.03, 0.34));   // windows leave the screen
+      const close = ease(span(p, 0.24, 0.54));   // lid folds shut
+      const land  = ease(span(p, 0.40, 0.66));   // browser materialises
+      const pocket= ease(span(p, 0.72, 0.96));   // it all fits in a phone
+
+      lid.style.transform = `rotateX(${mix(0, -88, close)}deg)`;
+      if (mac) {
+        // The shut machine settles below rather than disappearing — the point
+        // is that it is still there, lid down, still serving.
+        const away = Math.max(close, pocket);
+        mac.style.transform =
+          `translate3d(0, ${mix(0, 196, close)}px, ${mix(0, -120, close)}px) ` +
+          `scale(${mix(1, 0.52, close)})`;
+        mac.style.opacity = String(1 - pocket * 0.75);
+      }
+
+      flyers.forEach((el, i) => {
+        if (!el) return;
+        const q = PLAN[i];
+        const t = ease(clamp01((lift - i * 0.10) / (1 - i * 0.10)));
+        let x = mix(q.on[0], q.desk[0], t);
+        let y = mix(q.on[1], q.desk[1], t);
+        let z = mix(q.on[2], q.desk[2], t);
+        let sc = mix(0.62, 1, t);
+        if (pocket > 0) {
+          x = mix(x, q.ph[0], pocket);
+          y = mix(y, q.ph[1], pocket);
+          z = mix(z, q.ph[2], pocket);
+          sc = mix(sc, q.phs, pocket);
+        }
+        el.style.transform = `translate(-50%,-50%) translate3d(${x}px, ${y}px, ${z}px) scale(${sc})`;
+        el.style.opacity = String(mix(0.55, 1, Math.min(1, t * 2)));
+      });
+
+      // The remote desktop is already populated; those windows fade away when
+      // the composition folds into the phone, so the small screen stays legible.
+      residents.forEach((el, i) => {
+        if (!el) return;
+        const q = RES[i];
+        el.style.transform =
+          `translate(-50%,-50%) translate3d(${q.desk[0]}px, ${q.desk[1]}px, ${q.desk[2]}px) ` +
+          `scale(${mix(0.9, 1, land)})`;
+        el.style.opacity = String(land * (1 - pocket));
+      });
+
+      catcher.style.opacity = String(land * 0.96 * (1 - pocket));
+      catcher.style.transform = `translateZ(60px) scale(${mix(0.94, 1, land)})`;
+
+      if (phone) {
+        phone.style.opacity = String(pocket);
+        phone.style.transform = `translateZ(90px) scale(${mix(0.86, 1, pocket)})`;
+      }
+
+      if (cap) {
+        const show = span(p, 0.58, 0.76);
+        cap.style.opacity = String(show);
+        cap.style.transform = `translateY(${mix(14, 0, show)}px)`;
+        cap.innerHTML = pocket > 0.55
+          ? "<b>Same machine. Same windows.</b> Now in your pocket."
+          : "<b>Lid shut. Nothing plugged in.</b> The windows never stopped.";
+      }
+      if (hint) hint.style.opacity = String(1 - span(p, 0.02, 0.14));
+    }
+
+    const onScroll = () => { if (!ticking) { ticking = true; requestAnimationFrame(draw); } };
+
+    if (reduced) {
+      lid.style.transform = "rotateX(-88deg)";
+      if (mac) mac.style.transform = "translate3d(0,196px,-120px) scale(0.52)";
+      catcher.style.opacity = "0.96";
+      flyers.forEach((el, i) => {
+        const q = PLAN[i];
+        el.style.transform = `translate(-50%,-50%) translate3d(${q.desk[0]}px, ${q.desk[1]}px, ${q.desk[2]}px)`;
+      });
+      residents.forEach((el, i) => {
+        el.style.transform = `translate(-50%,-50%) translate3d(${RES[i].desk[0]}px, ${RES[i].desk[1]}px, ${RES[i].desk[2]}px)`;
+        el.style.opacity = "1";
+      });
+      if (hint) hint.style.display = "none";
+      if (phone) phone.style.display = "none";
+      sec.style.height = "100vh";
+    } else {
+      addEventListener("scroll", onScroll, { passive: true });
+      addEventListener("resize", onScroll);
+      draw();
+    }
+  }
+}
+
+// ── [FEATURES.scrollFX] stat counters ──────────────────────────────────
+// The numbers earn more attention if they arrive rather than just sit there.
+if (FEATURES.scrollFX && !reduced && "IntersectionObserver" in window) {
+  const band = document.querySelector(".stats");
+  if (band) {
+    const io = new IntersectionObserver((entries, obs) => {
+      if (!entries.some(e => e.isIntersecting)) return;
+      obs.disconnect();
+      for (const cell of band.querySelectorAll("b")) {
+        if (cell.id === "rtt") continue;                 // measured, not scripted
+        const unit = cell.querySelector("span");
+        const target = parseInt(cell.textContent, 10);
+        if (!Number.isFinite(target)) continue;
+        const suffix = unit ? unit.outerHTML : "";
+        const t0 = performance.now();
+        const step = now => {
+          const p = Math.min(1, (now - t0) / 900);
+          const eased = 1 - Math.pow(1 - p, 3);
+          cell.innerHTML = Math.round(target * eased) + suffix;
+          if (p < 1) requestAnimationFrame(step);
+        };
+        requestAnimationFrame(step);
+      }
+    }, { threshold: 0.5 });
+    io.observe(band);
+  }
+}
+
+// ── [FEATURES.osDetect] preselect the visitor's OS ─────────────────────
+// Everyone used to land on the macOS tab, including the Windows users the
+// 3.0 port was built for.
+if (FEATURES.osDetect) {
+  const plat = (navigator.userAgentData && navigator.userAgentData.platform) ||
+               navigator.platform || navigator.userAgent || "";
+  if (/win/i.test(plat)) {
+    const winTab = document.querySelector('.tab[data-os="win"]');
+    if (winTab) winTab.click();
+  }
+}
+
+// ── [FEATURES.edgeLatency] the visitor's own round-trip ────────────────
+// /ping is an empty 204 on this Worker, so the number is network time and
+// nothing else. Median of a few samples; the first is discarded because it
+// pays for connection setup.
+if (FEATURES.edgeLatency) {
+  const rttEl = document.getElementById("rtt");
+  (async () => {
+    const samples = [];
+    for (let i = 0; i < 5; i++) {
+      const t0 = performance.now();
+      try {
+        await fetch("/ping?" + i, { cache: "no-store" });
+      } catch { return; }               // offline or blocked — leave the dash
+      if (i > 0) samples.push(performance.now() - t0);
+    }
+    if (!samples.length || !rttEl) return;
+    samples.sort((a, b) => a - b);
+    const ms = Math.max(1, Math.round(samples[Math.floor(samples.length / 2)]));
+
+    if (reduced) { rttEl.innerHTML = ms + "<span>ms</span>"; return; }
+    const started = performance.now();
+    const tick = now => {
+      const p = Math.min(1, (now - started) / 700);
+      const eased = 1 - Math.pow(1 - p, 3);
+      rttEl.innerHTML = Math.round(ms * eased) + "<span>ms</span>";
+      if (p < 1) requestAnimationFrame(tick);
+    };
+    requestAnimationFrame(tick);
+  })();
+}
+
+// ── [FEATURES.scrollScrub] scroll closes the lid ───────────────────────
+// Pointer-driven scrubbing only where it feels good: a real pointer, a wide
+// window, motion allowed. Everywhere else the video just loops as before.
+const lidVideo = document.querySelector("#lidshot video");
+const scrubbing = FEATURES.scrollScrub && !reduced && lidVideo &&
+                  matchMedia("(min-width:900px) and (pointer:fine)").matches;
+
+if (scrubbing) {
+  lidVideo.autoplay = false;
+  lidVideo.preload = "auto";
+  lidVideo.pause();
+
+  let want = 0, have = 0, raf = 0;
+  const figure = document.getElementById("lidshot");
+
+  const measure = () => {
+    const r = figure.getBoundingClientRect();
+    // 0 as the figure enters from the bottom, 1 once it has risen past the
+    // middle of the viewport — the lid shuts exactly as you read the section.
+    const span = innerHeight * 0.9;
+    want = Math.max(0, Math.min(1, (span - r.top) / span));
+  };
+
+  const frame = () => {
+    have += (want - have) * 0.14;
+    if (lidVideo.readyState >= 2 && lidVideo.duration) {
+      const t = have * (lidVideo.duration - 0.05);
+      if (Math.abs(lidVideo.currentTime - t) > 0.02) lidVideo.currentTime = t;
+    }
+    raf = Math.abs(want - have) > 0.001 ? requestAnimationFrame(frame) : 0;
+  };
+
+  const onMove = () => { measure(); if (!raf) raf = requestAnimationFrame(frame); };
+  addEventListener("scroll", onMove, { passive: true });
+  addEventListener("resize", onMove);
+  lidVideo.addEventListener("loadedmetadata", onMove);
+  onMove();
+}
+
+// ── [FEATURES.dragWindow] throw a remote window around ─────────────────
+if (FEATURES.dragWindow && !reduced && matchMedia("(min-width:1200px)").matches) {
+  const card = document.getElementById("popout");
+  const hint = document.getElementById("pophint");
+  if (card) {
+    card.hidden = false;
+    let x = 0, y = 0, ox = 0, oy = 0, moved = false;
+
+    card.addEventListener("pointerdown", e => {
+      if (e.button) return;
+      card.setPointerCapture(e.pointerId);
+      card.classList.add("dragging");
+      ox = e.clientX - x; oy = e.clientY - y;
+    });
+
+    card.addEventListener("pointermove", e => {
+      if (!card.classList.contains("dragging")) return;
+      x = e.clientX - ox; y = e.clientY - oy;
+      card.style.transform = `translate(${x}px, ${y}px)`;
+      if (!moved && Math.hypot(x, y) > 24) {
+        moved = true;
+        if (hint) hint.style.opacity = "0";
+      }
+    });
+
+    const release = e => {
+      card.classList.remove("dragging");
+      if (card.hasPointerCapture?.(e.pointerId)) card.releasePointerCapture(e.pointerId);
+    };
+    card.addEventListener("pointerup", release);
+    card.addEventListener("pointercancel", release);
+  }
+}
+
+// ── [FEATURES.liveTerminal] the hero session ───────────────────────────
+// The real banner from internal/client/agent.go, typed out. The QR is
+// generated at build time by genqr.py and encodes https://reminal.app/ —
+// so scanning it genuinely works.
+if (FEATURES.liveTerminal) {
+  const term = document.getElementById("term");
+  const replay = document.getElementById("replay");
+  const SESSION = "7f3a2c9e", PIN = "418902", HOST = "https://reminal.app";
+  const esc = t => t.replace(/&/g, "&amp;").replace(/</g, "&lt;");
+
+  const SCRIPT = [
+    { type: `${esc("harshal@studio-mac ~ %")} `, instant: true },
+    { type: "reminal", speed: 62 },
+    { wait: 380 },
+    { line: "" },
+    { line: `  reminal — remote terminal · v3.0.3 · <span class="g">[HOST]</span> ${SESSION}` },
+    { line: "" },
+    { line: `  Session:  <span class="b">${SESSION}</span>` },
+    { line: `  PIN:      <span class="b">${PIN}</span>` },
+    { line: `  Open:     <span class="d">${HOST}/?s=${SESSION}</span>` },
+    { line: `  Connect:  <span class="d">reminal connect ${SESSION} ${PIN}</span>` },
+    { line: "" },
+    { line: "  Scan to join from your phone:" },
+    { qr: true },
+    { line: `  <span class="g">HOST:</span> This terminal IS the shared shell — type away.` },
+    { line: `  <span class="d">Ctrl-] stops sharing · the shell keeps running</span>` },
+    { line: "" },
+    { caret: true },
+  ];
+
+  let qrArt = null;
+  const loadQR = async () => {
+    if (qrArt !== null) return qrArt;
+    try {
+      const r = await fetch("/qr.svg");
+      qrArt = r.ok ? await r.text() : "";
+    } catch { qrArt = ""; }
+    return qrArt;
+  };
+
+  let runToken = 0;
+  const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+  async function run() {
+    const token = ++runToken;
+    const alive = () => token === runToken;
+    term.innerHTML = "";
+    if (replay) replay.hidden = true;
+
+    for (const step of SCRIPT) {
+      if (!alive()) return;
+
+      if (step.wait) { await sleep(step.wait); continue; }
+
+      if (step.type) {
+        if (step.instant || reduced) { term.innerHTML += step.type; continue; }
+        for (const ch of step.type) {
+          if (!alive()) return;
+          term.innerHTML += ch;
+          await sleep(step.speed);
+        }
+        continue;
+      }
+
+      if (step.line !== undefined) {
+        term.innerHTML += "\n" + step.line;
+        if (!reduced) await sleep(step.line ? 90 : 40);
+        continue;
+      }
+
+      if (step.qr) {
+        const art = await loadQR();
+        if (!alive()) return;
+        term.innerHTML += art
+          ? `\n  <span class="qr">${art}</span>\n`
+          : `\n  <span class="d">[QR] ${HOST}/?s=${SESSION}</span>\n`;
+        if (!reduced) await sleep(260);
+        continue;
+      }
+
+      if (step.caret) {
+        term.innerHTML += '\n<span class="caret"></span>';
+        if (replay) replay.hidden = false;
+      }
+    }
+  }
+
+  if (replay) replay.addEventListener("click", run);
+
+  // Start when it's actually on screen, so the typing isn't already over by
+  // the time anyone looks at it.
+  if (reduced || !("IntersectionObserver" in window)) {
+    run();
+  } else {
+    const io = new IntersectionObserver((entries, obs) => {
+      if (entries.some(e => e.isIntersecting)) { obs.disconnect(); run(); }
+    }, { threshold: 0.25 });
+    io.observe(term);
+  }
+}
+
+// ── waitlist ───────────────────────────────────────────────────────────
+const form = document.getElementById("signup");
+const emailEl = document.getElementById("email");
+const submitEl = document.getElementById("submit");
+const msgEl = document.getElementById("msg");
+
+function say(text, kind) {
+  msgEl.textContent = text;
+  msgEl.className = "formmsg" + (kind ? " " + kind : "");
+}
+
+form.addEventListener("submit", async event => {
+  event.preventDefault();
+  const email = emailEl.value.trim();
+
+  if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) {
+    say("That doesn't look like an email address.", "err");
+    emailEl.focus();
+    return;
+  }
+
+  if (LOOPS_ENDPOINT.includes("REPLACE_WITH_FORM_ID")) {
+    say("The waitlist isn't wired up yet — set LOOPS_ENDPOINT in index.html.", "err");
+    return;
+  }
+
+  submitEl.disabled = true;
+  say("Adding you…");
+
+  try {
+    // Loops' form endpoint wants form-encoded, and answers opaquely on
+    // some plans — so a network-level success is treated as a success.
+    const res = await fetch(LOOPS_ENDPOINT, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({ email, userGroup: "waitlist", source: "reminal.app" }),
+    });
+
+    if (!res.ok) throw new Error("HTTP " + res.status);
+
+    form.hidden = true;
+    say("You're on the list. I'll email you once, when it's ready.", "ok");
+  } catch (err) {
+    submitEl.disabled = false;
+    say("That didn't go through. Email mail@harshalgajjar.com and I'll add you by hand.", "err");
+  }
+});
+
+document.getElementById("year").textContent = new Date().getFullYear();
+</script>
+</body>
+</html>

@@ -1,0 +1,12 @@
+{
+  "name": "reminal-site",
+  "private": true,
+  "scripts": {
+    "assets": "./build.sh",
+    "dev": "./build.sh && wrangler dev",
+    "deploy": "./build.sh && wrangler deploy"
+  },
+  "devDependencies": {
+    "wrangler": "^4.102.0"
+  }
+}
