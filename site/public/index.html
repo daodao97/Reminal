@@ -500,7 +500,26 @@ h2{
     radial-gradient(ellipse 60% 100% at 50% 0%, rgba(31,111,235,.16), transparent 70%),
     linear-gradient(180deg,var(--surface),rgba(22,27,34,0));
 }
-form.signup{display:flex; gap:8px; margin:28px auto 0; max-width:460px}
+.who{display:inline-flex; gap:3px; padding:3px; margin:26px auto 0;
+  background:rgba(13,17,23,.6); border:1px solid var(--line-soft); border-radius:99px}
+.whobtn{
+  background:none; border:none; color:var(--dim); cursor:pointer;
+  font:inherit; font-size:13.5px; padding:7px 18px; border-radius:99px;
+  transition:color .2s, background .2s;
+}
+.whobtn:hover{color:var(--muted)}
+.whobtn[aria-checked="true"]{color:var(--fg); background:var(--surface-2)}
+.sizerow{
+  display:flex; align-items:center; justify-content:center; gap:10px;
+  margin:14px auto 0; font-size:14px; color:var(--muted);
+}
+.sizerow[hidden]{display:none}
+.sizerow select{
+  background:rgba(13,17,23,.8); color:var(--fg); border:1px solid var(--line);
+  border-radius:9px; padding:8px 12px; font:inherit; font-size:14px; cursor:pointer;
+}
+.sizerow select:focus{outline:none; border-color:var(--accent); box-shadow:0 0 0 3px rgba(88,166,255,.16)}
+form.signup{display:flex; gap:8px; margin:18px auto 0; max-width:460px}
 form.signup input{
   flex:1; min-width:0; background:rgba(13,17,23,.8); color:var(--fg);
   border:1px solid var(--line); border-radius:9px; padding:13px 15px;
@@ -889,11 +908,24 @@ footer a{color:var(--muted)}
       fresh ID every run, custom domains for <code>expose</code>, and TURN for networks that refuse to be
       punched through. Tell me where to send it.
     </p>
+    <div class="who reveal" role="radiogroup" aria-label="Who is this for">
+      <button type="button" class="whobtn" data-who="individual" role="radio" aria-checked="true">Just me</button>
+      <button type="button" class="whobtn" data-who="team" role="radio" aria-checked="false">My team</button>
+    </div>
     <form class="signup reveal" id="signup" novalidate>
       <input type="email" id="email" name="email" placeholder="you@example.com"
              autocomplete="email" required aria-label="Email address">
       <button type="submit" id="submit">Join the waitlist</button>
     </form>
+    <div class="sizerow" id="sizerow" hidden>
+      <label for="teamsize">How many people?</label>
+      <select id="teamsize">
+        <option value="2-10">2–10</option>
+        <option value="11-50">11–50</option>
+        <option value="51-200">51–200</option>
+        <option value="200+">200+</option>
+      </select>
+    </div>
     <p class="formmsg" id="msg" role="status" aria-live="polite"></p>
     <p class="formnote reveal">
       One email when it's ready. No drip sequence, no sharing your address, unsubscribe in a click.
@@ -1513,6 +1545,20 @@ if (FEATURES.liveTerminal) {
 // ── waitlist ───────────────────────────────────────────────────────────
 const form = document.getElementById("signup");
 const emailEl = document.getElementById("email");
+
+// Who it's for. The headcount only exists once someone says "my team", so an
+// individual signing up still answers exactly one question.
+let audience = "individual";
+const sizeRow = document.getElementById("sizerow");
+const sizeEl = document.getElementById("teamsize");
+document.querySelectorAll(".whobtn").forEach(btn => {
+  btn.addEventListener("click", () => {
+    audience = btn.dataset.who;
+    document.querySelectorAll(".whobtn").forEach(b =>
+      b.setAttribute("aria-checked", String(b === btn)));
+    if (sizeRow) sizeRow.hidden = audience !== "team";
+  });
+});
 const submitEl = document.getElementById("submit");
 const msgEl = document.getElementById("msg");
 
@@ -1545,7 +1591,13 @@ form.addEventListener("submit", async event => {
     const res = await fetch(LOOPS_ENDPOINT, {
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body: new URLSearchParams({ email, userGroup: "waitlist", source: "reminal.app" }),
+      body: new URLSearchParams({
+        email,
+        userGroup: "waitlist",
+        source: "reminal.app",
+        audience,
+        teamSize: audience === "team" && sizeEl ? sizeEl.value : "",
+      }),
     });
 
     if (!res.ok) throw new Error("HTTP " + res.status);
