@@ -547,6 +547,12 @@ func (a *Agent) startWindowStream(id string) {
 	}
 	if _, ok := a.winStreams[id]; ok {
 		a.winMu.Unlock() // already streaming this window
+		// Somebody new just asked for it, though. H.264 deltas are useless
+		// without the frames they were built from, so a viewer joining a
+		// stream already in flight has nothing to decode until the next IDR —
+		// which it will not ask for either, because its gap detection needs a
+		// sequence cursor it has yet to establish. Hand it an entry point.
+		a.requestWindowKey(id)
 		return
 	}
 	stop := make(chan struct{})
@@ -1006,7 +1012,7 @@ func (s *winStream) run() {
 				s.flushWSBatch(conn)
 				if time.Since(s.lastSent) >= winHeartbeat {
 					confirmed, probing, _ := s.a.rtcSinks()
-					s.sendHeartbeat(conn, confirmed, probing, s.a.currentViewerCount())
+					s.sendHeartbeat(conn, confirmed, probing, s.a.framesWantedBy())
 				}
 			}
 		default:
@@ -1049,8 +1055,7 @@ func (s *winStream) desiredCodec() (codec string, wsVideo bool) {
 		return "", false
 	}
 	confirmed, _, _ := s.a.rtcSinks()
-	vc := s.a.currentViewerCount()
-	return "h264", wsSinkNeeded(vc, len(confirmed))
+	return "h264", wsSinkNeeded(s.a.framesWantedBy(), len(confirmed))
 }
 
 // captureFPS is the frame-rate ceiling for the stream's current codec and
@@ -1413,7 +1418,7 @@ func (s *winStream) captureFailure(conn *websocket.Conn, err error) bool {
 // here — nowhere else.
 func (s *winStream) dispatch(conn *websocket.Conn, changed bool) {
 	confirmed, probing, _ := s.a.rtcSinks()
-	vc := s.a.currentViewerCount()
+	vc := s.a.framesWantedBy()
 
 	// Demote confirmed channels only on EVIDENCE of a dead link: several
 	// ack-expected frames sent since the last consumed ack, and sustained
@@ -1767,6 +1772,23 @@ func (s *winStream) sendHeartbeat(conn *websocket.Conn, confirmed, probing []*rt
 		p.sendCtl(raw)
 	}
 	s.lastSent = time.Now()
+}
+
+// framesWantedBy is the viewer count that should decide whether a relay copy
+// of each frame is needed: the relay's total, less those that have positively
+// reported having no window pane open. A viewer watching nothing cannot be the
+// one that needs the relay, and counting it was enough to force the whole
+// stream onto the billed path at half the frame rate with 200ms of batching.
+// Popping a window out hit this every time — the opener tab stays connected
+// with no panes, and with no frames to receive it can never confirm a
+// DataChannel either, so "viewers exceed confirmed channels" stayed true for
+// as long as the tab was open.
+func (a *Agent) framesWantedBy() int {
+	n := a.currentViewerCount() - a.idleViewerCount()
+	if n < 0 {
+		return 0
+	}
+	return n
 }
 
 // currentViewerCount returns the relay-reported live viewer count.

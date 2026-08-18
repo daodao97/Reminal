@@ -279,6 +279,21 @@ type rtcHelloMsg struct {
 	// than always offering both. Old viewers omit it and get exactly the
 	// reliable ordered single channel they have always had.
 	V2 bool `json:"v2,omitempty"`
+	// Viewer is a STABLE per-tab id. Peer churns across renegotiation
+	// attempts, so keying capability records by it left one stale record per
+	// attempt — fine for "can anyone decode h264", useless for counting how
+	// many viewers there are.
+	Viewer string `json:"viewer,omitempty"`
+	// Panes is how many window panes this viewer currently has open. A
+	// pointer so "didn't say" is distinguishable from "said zero": an older
+	// viewer omits it, and treating that as zero would drop the relay copy it
+	// still depends on.
+	Panes *int `json:"panes,omitempty"`
+	// CapsOnly asks the agent to record the above and do nothing else. A plain
+	// hello builds a whole PeerConnection and offer, so a viewer that just
+	// wants to refresh its record could not repeat it without leaving a trail
+	// of peers to reap.
+	CapsOnly bool `json:"caps_only,omitempty"`
 }
 type rtcSDPMsg struct {
 	Peer string          `json:"peer"`
@@ -314,7 +329,14 @@ func (a *Agent) handleWebRTCHello(conn *websocket.Conn, encData string) {
 	// still wants video — so capability tracking must not be tied to P2P
 	// succeeding. Viewers re-hello periodically while unconnected, which keeps
 	// this fresh (see viewerCapTTL).
-	a.noteViewerCap(hello.Peer, hello.H264)
+	capKey := hello.Viewer // stable per tab; falls back for older viewers
+	if capKey == "" {
+		capKey = hello.Peer
+	}
+	a.noteViewerCap(capKey, hello.H264, hello.Panes)
+	if hello.CapsOnly {
+		return // a record refresh, not a connection request
+	}
 
 	pionICE, viewerICE := iceConfig()
 	pc, err := webrtc.NewPeerConnection(webrtc.Configuration{ICEServers: pionICE})
@@ -579,7 +601,7 @@ const viewerCapTTL = 30 * time.Second
 // noteViewerCap records what a viewer said it can decode. Keyed by the peer id
 // the viewer minted for this attempt — those churn across retries, which is
 // fine: the decision below is "does ANY viewer lack H.264", not a headcount.
-func (a *Agent) noteViewerCap(peer string, h264 bool) {
+func (a *Agent) noteViewerCap(peer string, h264 bool, panes *int) {
 	a.rtcMu.Lock()
 	defer a.rtcMu.Unlock()
 	if a.viewerCaps == nil {
@@ -591,7 +613,34 @@ func (a *Agent) noteViewerCap(peer string, h264 bool) {
 			delete(a.viewerCaps, id)
 		}
 	}
-	a.viewerCaps[peer] = viewerCap{h264: h264, seen: now}
+	e := viewerCap{h264: h264, seen: now}
+	if panes != nil {
+		e.panes, e.panesKnown = *panes, true
+	}
+	a.viewerCaps[peer] = e
+}
+
+// idleViewerCount is how many connected viewers have positively told us they
+// have no window pane open. They still count toward the relay's viewer total,
+// which is what decides whether a relay copy of every frame is needed — so a
+// viewer watching nothing used to force the whole stream onto the billed path
+// at half the frame rate and a 200ms batching delay. Popping a window out hits
+// this every time: the opener keeps its tab open with no panes, and having
+// nothing to receive it can never confirm a DataChannel either, so the
+// arithmetic said "someone here needs the relay" forever.
+//
+// Only viewers that REPORTED counts here. An older viewer says nothing, and
+// assuming zero for it would cut off the relay copy it still depends on.
+func (a *Agent) idleViewerCount() int {
+	a.rtcMu.Lock()
+	defer a.rtcMu.Unlock()
+	now, n := time.Now(), 0
+	for _, c := range a.viewerCaps {
+		if now.Sub(c.seen) <= viewerCapTTL && c.panesKnown && c.panes == 0 {
+			n++
+		}
+	}
+	return n
 }
 
 // viewersCanH264 reports whether it is safe to put compressed video on the
@@ -638,4 +687,9 @@ func (a *Agent) forgetViewerCaps() {
 type viewerCap struct {
 	h264 bool
 	seen time.Time
+	// panes is how many window panes the viewer had open when it last said
+	// so; panesKnown is false for a viewer that never reported, which must be
+	// assumed to want frames.
+	panes      int
+	panesKnown bool
 }

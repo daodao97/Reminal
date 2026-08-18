@@ -317,7 +317,7 @@ func TestDesiredCodec(t *testing.T) {
 		for i, p := range peers {
 			id := string(rune('a' + i))
 			a.rtcPeers[id] = p
-			a.noteViewerCap(id, p.h264) // every viewer announces on hello
+			a.noteViewerCap(id, p.h264, nil) // every viewer announces on hello
 		}
 		return a
 	}

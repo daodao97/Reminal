@@ -6132,6 +6132,12 @@
       else { transport = '—'; cls = ''; }
       const enc = webrtc ? 'DTLS (end-to-end)' : 'AES-256-GCM (end-to-end)';
       const res = (p.w.w && p.w.h) ? (p.w.w + '×' + p.w.h) : '—';
+      // Prune on READ. The rolling window is otherwise only trimmed when a
+      // frame ARRIVES, so a stream that stopped kept reporting whatever rate
+      // it last had — a frozen pane showing a healthy fps, which is the single
+      // most misleading thing this popover could say.
+      const tnow = performance.now();
+      if (p.frameTimes) while (p.frameTimes.length && tnow - p.frameTimes[0] > 1000) p.frameTimes.shift();
       const fps = p.frameTimes ? p.frameTimes.length : 0;
       // Capture source, stamped by the agent on each frame: "native" = the
       // ScreenCaptureKit helper (fast path), "shot" = per-frame screencapture
@@ -6512,6 +6518,7 @@
 
       focusPane(w.id);
       sendWin('window_ctl', { action: 'start', id: w.id });
+      announcePaneInterest();
       savePaneLayout();
     }
 
@@ -6556,7 +6563,9 @@
     // therefore leaks nothing and simply prompts.
     function popOutPane(pane) {
       const url = new URL(location.href);
-      url.hash = '';
+      // KEEP the hash: the PIN lives there and authenticates end-to-end.
+      // Stripping it left the popup permanently on "Session + PIN required",
+      // which reads as a window that opened and froze.
       url.search = '?s=' + encodeURIComponent((sessionId || '').toUpperCase()) +
                    '&pane=' + encodeURIComponent(pane.w.id);
       // Size to the source aspect where the platform honours it (desktop);
@@ -6578,15 +6587,23 @@
         return;
       }
       try { pop.focus(); } catch (_) {}
-      // That tab streams this window itself now — stop streaming it here so
-      // the host doesn't encode and ship the same window twice.
-      closePane(pane.w.id);
+      // That tab streams this window itself now. Hand the stream over rather
+      // than stopping it — the host keeps exactly one stream per window, so
+      // the popup adopts this one instead of racing to restart it.
+      closePane(pane.w.id, true);
     }
 
-    function closePane(id) {
+    // handOff tears the pane down locally but leaves the host streaming, for
+    // pop-out: the popup adopts the running stream. Sending stop here raced the
+    // popup's start — one stream exists per window and start is a no-op when it
+    // is already running, so a stop landing after the popup's start killed the
+    // feed and nothing asked again. The stream is not orphaned if the popup
+    // never arrives: the viewer-count and ack-idle paths already stop a stream
+    // nobody is watching.
+    function closePane(id, handOff) {
       const p = panes.get(id);
       if (!p) return;
-      sendWin('window_ctl', { action: 'stop', id });
+      if (!handOff) sendWin('window_ctl', { action: 'stop', id });
       if (p.lastUrl) URL.revokeObjectURL(p.lastUrl);
       try { if (p.vdec && p.vdec.state !== 'closed') p.vdec.close(); } catch (_) {}
       if (p.renderRAF) { cancelAnimationFrame(p.renderRAF); p.renderRAF = 0; }
@@ -6594,6 +6611,7 @@
       p.el.remove();
       panes.delete(id);
       if (focusedPaneId === id) focusedPaneId = null;
+      announcePaneInterest();
       savePaneLayout();
     }
 
@@ -6664,6 +6682,11 @@
     // is the offerer and owns the "frames" channel. If the connection never
     // forms we transparently stay on the WS path — nothing else changes.
     const RTC_ICE = [{ urls: 'stun:stun.l.google.com:19302' }];
+    // Stable for the life of this tab. rtcPeerId is re-minted on every
+    // negotiation attempt, so keying the host's viewer records by it left one
+    // stale record per retry — fine for "can anyone decode h264", useless for
+    // counting viewers.
+    const viewerId = 'v-' + ((crypto.randomUUID && crypto.randomUUID()) || String(Math.random()).slice(2)).slice(0, 12);
     let rtcPc = null, rtcDc = null, rtcPeerId = null, rtcPendingIce = [];
     // The "ctl" channel: acks, keyframe requests and heartbeats, on their own
     // unreliable+unordered stream. They used to ride the frame channel, where
@@ -6748,7 +6771,7 @@
       // than assumed because the host is the offerer — an older viewer must
       // keep getting exactly one reliable ordered channel, or it would bind
       // its frame handler to whichever channel happened to open last.
-      try { await sendWin('webrtc_hello', { peer: rtcPeerId, h264: h264Decode, v2: true }); } catch (_) { rtcPeerId = null; }
+      try { await sendWin('webrtc_hello', { peer: rtcPeerId, viewer: viewerId, h264: h264Decode, v2: true, panes: panes.size }); } catch (_) { rtcPeerId = null; }
     }
     // Capability announcement for viewers that will never open a DataChannel
     // (P2P disabled, or blocked by the network). The agent tracks decode
@@ -6758,9 +6781,21 @@
     async function announceCaps() {
       if (!cryptoKey || !agentLive) return;
       await h264DecodeReady;
-      const peer = 'ws-' + ((crypto.randomUUID && crypto.randomUUID()) || String(Math.random()).slice(2)).slice(0, 9);
-      try { await sendWin('webrtc_hello', { peer, h264: h264Decode }); } catch (_) {}
+      // caps_only: a plain hello makes the host build a PeerConnection and an
+      // offer, so this could not be repeated without leaving a peer to reap
+      // each time. panes tells the host whether we are asking for frames at
+      // all — a tab with none must not be counted as a viewer needing the
+      // relay copy, which is what held a popped-out window at half rate.
+      try {
+        await sendWin('webrtc_hello', {
+          peer: viewerId, viewer: viewerId, h264: h264Decode,
+          panes: panes.size, caps_only: true,
+        });
+      } catch (_) {}
     }
+    // Report whenever what we want changes, so the host reacts to a pop-out or
+    // a closed pane at once rather than on the next periodic refresh.
+    function announcePaneInterest() { lastCapAt = Date.now(); announceCaps(); }
     async function onWebRTCOffer(payload) {
       if (!payload || payload.peer !== rtcPeerId || rtcPc) return;
       // Use the ICE servers the agent sent (STUN + any TURN it's configured
@@ -7227,7 +7262,12 @@
         p.h264NextSeq = seq;
         pruneHeldAUs(p, seq);
       } else if (!p.h264Synced) {
-        return; // no entry point yet — a delta on its own is undecodable
+        // No entry point yet. Ask for one: joining a stream mid-flight is the
+        // normal case for a pane opened on an already-running window (a
+        // pop-out adopts one), and without this the pane waits for whatever
+        // keyframe the encoder happens to emit next. Throttled inside.
+        requestH264Key(p);
+        return; // a delta on its own is undecodable
       } else if (p.h264NextSeq == null) {
         p.h264NextSeq = seq;
       }
