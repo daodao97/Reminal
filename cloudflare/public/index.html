@@ -6673,25 +6673,27 @@
       p.h264Hold = null; // a new stream renumbers from zero; held units are orphans
     }
 
-    function resumeWinStreams() {
-      if (!winStreamsPaused) return;
+    // Re-arm every open pane. The host starts a NEW stream, numbering from
+    // zero, so a pane still holding cursors from the old one discards
+    // everything that arrives as already-seen — a frozen picture that the
+    // overlay reports as healthy, because frames really are coming in and only
+    // fail further down. Both callers need the same reset, so neither writes
+    // its own: restartWinStreams used to reset the dedup cursor alone and
+    // leave the decoder's, which froze every pane on a reconnect for good.
+    function rearmWinStreams() {
       winStreamsPaused = false;
       for (const [id, p] of panes) {
-        // New stream, new seq space: without this, a young pane (< 1000 frames)
-        // has every post-resume frame eaten by the stale-seq dedup guard.
         resetPaneStreamCursors(p);
         sendWin('window_ctl', { action: 'start', id });
       }
     }
+    function resumeWinStreams() {
+      if (!winStreamsPaused) return; // returning to a tab that never paused
+      rearmWinStreams();
+    }
     // Re-arm every open pane's stream (popped-out ones included — their
     // agent-side streams died with the drop just the same).
-    function restartWinStreams() {
-      winStreamsPaused = false;
-      for (const [id, p] of panes) {
-        p.lastSeq = null; // new stream numbers from zero — forget the dedup cursor
-        sendWin('window_ctl', { action: 'start', id });
-      }
-    }
+    function restartWinStreams() { rearmWinStreams(); }
     document.addEventListener('visibilitychange', () => {
       if (document.hidden) { pauseWinStreams(); return; }
       resumeWinStreams();
