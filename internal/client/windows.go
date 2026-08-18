@@ -941,6 +941,12 @@ const maxFramesInFlightH264 = 12
 // captures. The heartbeat isn't capped (it's tiny and only every few seconds).
 const wsFrameMinInterval = 200 * time.Millisecond
 
+// winCapAnnounceInterval is how often a viewer with nothing open re-asserts
+// that fact (see announceCaps in the viewer). Every one of those crosses the
+// billed relay, so it is as slow as viewerCapTTL allows rather than as fast as
+// convenient.
+const winCapAnnounceInterval = 25 * time.Second
+
 // streamNoWatcherTimeout stops a stream once every connected viewer has said it
 // has no pane open for this long.
 //
@@ -957,10 +963,13 @@ const wsFrameMinInterval = 200 * time.Millisecond
 // window nobody is watching, heartbeating over the billed relay and holding
 // the display awake through winAwake.
 //
-// Generous against the 10s at which viewers refresh their pane count, so a
-// stream is never reaped over one lost report or a pane opened a moment before
-// its announcement lands.
-const streamNoWatcherTimeout = 25 * time.Second
+// It must exceed viewerCapTTL. A viewer that goes away leaves its last report
+// behind, and a report of "no panes" from a viewer that is no longer there
+// subtracts from the count of viewers wanting frames just as a live one does —
+// so with a shorter timeout than the record's lifetime, a ghost could hold the
+// total at zero long enough to reap a stream someone was still watching. The
+// record expiring first is what makes that impossible.
+const streamNoWatcherTimeout = 120 * time.Second
 
 // streamAckIdleTimeout stops a stream whose viewer was acking frames but then
 // went silent this long. An unclean viewer drop (phone asleep, network lost,

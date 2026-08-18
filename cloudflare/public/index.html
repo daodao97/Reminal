@@ -6819,6 +6819,9 @@
     }
     // Report whenever what we want changes, so the host reacts to a pop-out or
     // a closed pane at once rather than on the next periodic refresh.
+    // Matches winCapAnnounceInterval on the host, which sizes its record
+    // lifetime around it.
+    const WIN_CAP_ANNOUNCE_MS = 25000;
     function announcePaneInterest() { lastCapAt = Date.now(); announceCaps(); }
     async function onWebRTCOffer(payload) {
       if (!payload || payload.peer !== rtcPeerId || rtcPc) return;
@@ -6993,16 +6996,18 @@
       // hello went unanswered, clear it so the next tick retries.
       if (rtcPeerId && !rtcPc && Date.now() - rtcHelloAt > 8000) rtcPeerId = null;
       if (!rtcPc) ensureWebRTC();
-      // Keep the capability record alive. Unconditionally, not only while off
-      // a live channel: the record now carries how many panes this viewer has
-      // open, and the host subtracts viewers wanting nothing before deciding
-      // whether a relay copy of every frame is needed. Letting it lapse (TTL
-      // is viewerCapTTL) makes an idle tab look like a viewer that needs the
-      // relay again, which drops a popped-out window back to the capped path
-      // about half a minute after it was handed over — the very regression the
-      // pane count was added to prevent. One small message every 10s against a
-      // stream that would otherwise halve its frame rate.
-      if (!lastCapAt || Date.now() - lastCapAt > 10000) { lastCapAt = Date.now(); announceCaps(); }
+      // Keep the record alive only while this tab has nothing open. That is the
+      // only case the host needs repeated: it subtracts viewers wanting nothing
+      // before deciding whether a relay copy of every frame is needed, and a
+      // lapsed record makes an idle tab look like one that needs the relay
+      // again — which is what dropped a popped-out window back to the capped
+      // path shortly after it was handed over. A tab WITH panes needs no
+      // repetition: not being in the idle set is already the safe default, so
+      // saying so costs relay messages to change nothing.
+      // Every one of these is billed, so the cadence is as slow as the host's
+      // record lifetime allows rather than as fast as would be convenient.
+      const capStale = !lastCapAt || Date.now() - lastCapAt > WIN_CAP_ANNOUNCE_MS;
+      if (capStale && (panes.size === 0 || !rtcActive())) { lastCapAt = Date.now(); announceCaps(); }
       if (rtcActive()) refreshRtcRoute(); // keep direct-vs-TURN current for the (i)
       if (!panes.size) return;
       for (const p of panes.values()) {

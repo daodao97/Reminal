@@ -565,3 +565,33 @@ func TestViewerSuppliedSizesAreBounded(t *testing.T) {
 		}
 	})
 }
+
+// Three intervals govern the pane-count accounting, and they are only correct
+// in relation to each other. Tuning one alone has already broken it once, so
+// the relationships are asserted rather than left in a comment.
+func TestPaneCountIntervalsAreOrdered(t *testing.T) {
+	// A record must survive several missed announcements. At one interval it
+	// would expire on a single lost message; the announcements cross a relay
+	// and are not guaranteed.
+	if viewerCapTTL < 3*winCapAnnounceInterval {
+		t.Fatalf("record lifetime %v spans fewer than three announcements of %v — one lost message expires a live record",
+			viewerCapTTL, winCapAnnounceInterval)
+	}
+
+	// The reaper must outlast the record. A viewer that goes away leaves its
+	// last "no panes" behind, and that ghost subtracts from the count of
+	// viewers wanting frames exactly as a live one does — so a reaper shorter
+	// than the record's life can finish counting down and stop a stream
+	// somebody is still watching. The record expiring first prevents it.
+	if streamNoWatcherTimeout <= viewerCapTTL {
+		t.Fatalf("reaper %v does not outlast the record lifetime %v — a departed viewer's record could reap a live stream",
+			streamNoWatcherTimeout, viewerCapTTL)
+	}
+
+	// And the reaper must still be short enough to matter: a stream nobody can
+	// see holds a capture helper, bills the relay for heartbeats and keeps the
+	// display awake.
+	if streamNoWatcherTimeout > 5*time.Minute {
+		t.Fatalf("reaper %v is too slow to collect an abandoned stream", streamNoWatcherTimeout)
+	}
+}

@@ -599,14 +599,21 @@ func (a *Agent) unconfirmRTC() {
 	}
 }
 
-// viewerCapTTL bounds how long a viewer's announced decode capability is
-// trusted without a refresh. It has to outlive the viewer's re-announce
+// viewerCapTTL bounds how long a viewer's announced capability and pane count
+// are trusted without a refresh. Two constraints tie it to other numbers, and
+// both are asserted by a test rather than left to whoever next tunes one:
+//   - viewers re-announce at winCapAnnounceInterval, and this must span several
+//     of those, so one lost announcement cannot expire a live record;
+//   - streamNoWatcherTimeout must EXCEED it, so a record left behind by a
+//     departed viewer always expires before it can complete a countdown to
+//     reaping a stream someone is still watching. It has to outlive the viewer's re-announce
+//
 // cadence (~10s) but stay SHORT, because the failure mode is asymmetric: a
 // stale record saying "can't decode H.264", left behind by a viewer that has
 // since gone, holds every remaining viewer on JPEG until it expires. A viewer
 // with a live DataChannel needs no record at all — its peer entry is
 // authoritative and disappears the moment the channel does.
-const viewerCapTTL = 30 * time.Second
+const viewerCapTTL = 90 * time.Second
 
 // noteViewerCap records what a viewer said it can decode. Keyed by the peer id
 // the viewer minted for this attempt — those churn across retries, which is
