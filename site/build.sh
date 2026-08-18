@@ -44,6 +44,16 @@ done
 
 cp ../assets/reminal-icon-1024.png "$OUT/icon.png"
 
+# The hero terminal prints a version, so it has to be the real one. Hardcoding
+# it meant the site advertised v3.0.3 while people were installing v3.0.6.
+VERSION="$(git -C .. describe --tags --abbrev=0 2>/dev/null | sed 's/^v//')"
+if [ -n "$VERSION" ]; then
+  printf '%s' "$VERSION" > "$OUT/version.txt"
+  echo "  version  $VERSION"
+else
+  echo "  version  skipped (no git tag) — page falls back to its built-in string"
+fi
+
 # The hero terminal prints a real, scannable QR — the same half-block art the
 # CLI renders. public/qr.txt is committed, so this only regenerates when segno
 # happens to be installed; the site never depends on it being present.

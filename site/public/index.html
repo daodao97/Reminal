@@ -1451,6 +1451,12 @@ if (FEATURES.liveTerminal) {
   const term = document.getElementById("term");
   const replay = document.getElementById("replay");
   const SESSION = "7f3a2c9e", PIN = "418902", HOST = "https://reminal.app";
+  // Written by build.sh from the latest git tag. The literal below is only a
+  // fallback for a stale or failed fetch — never the source of truth.
+  let VERSION = "3.0.6";
+  fetch("/assets/version.txt").then(r => r.ok ? r.text() : null)
+    .then(v => { if (v && /^\d+\.\d+\.\d+$/.test(v.trim())) VERSION = v.trim(); })
+    .catch(() => {});
   const esc = t => t.replace(/&/g, "&amp;").replace(/</g, "&lt;");
 
   const SCRIPT = [
@@ -1458,7 +1464,7 @@ if (FEATURES.liveTerminal) {
     { type: "reminal", speed: 62 },
     { wait: 380 },
     { line: "" },
-    { line: `  reminal — remote terminal · v3.0.3 · <span class="g">[HOST]</span> ${SESSION}` },
+    { line: () => `  reminal — remote terminal · v${VERSION} · <span class="g">[HOST]</span> ${SESSION}` },
     { line: "" },
     { line: `  Session:  <span class="b">${SESSION}</span>` },
     { line: `  PIN:      <span class="b">${PIN}</span>` },
@@ -1508,8 +1514,9 @@ if (FEATURES.liveTerminal) {
       }
 
       if (step.line !== undefined) {
-        term.innerHTML += "\n" + step.line;
-        if (!reduced) await sleep(step.line ? 90 : 40);
+        const text = typeof step.line === "function" ? step.line() : step.line;
+        term.innerHTML += "\n" + text;
+        if (!reduced) await sleep(text ? 90 : 40);
         continue;
       }
 
