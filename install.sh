@@ -147,8 +147,26 @@ echo "Installing reminal v${VERSION} (${OS}/${ARCH})..."
 TMPDIR=$(mktemp -d)
 trap 'rm -rf "$TMPDIR"' EXIT
 
-curl -fsSL -o "$TMPDIR/$TARBALL" "$URL"
-tar -xzf "$TMPDIR/$TARBALL" -C "$TMPDIR"
+# A release is built one platform per job, so a single failed job publishes a
+# release carrying every other platform's build and none for this one. Left to
+# curl that is "error: 404" and nothing else — a first-run failure that reads
+# like a broken installer rather than a release still finishing, or one whose
+# build for this machine did not make it.
+if ! curl -fsSL -o "$TMPDIR/$TARBALL" "$URL"; then
+    if curl -fsSLI -o /dev/null "https://github.com/$REPO/releases/tag/v${VERSION}" 2>/dev/null; then
+        echo "reminal: release v${VERSION} exists but has no ${OS}/${ARCH} build." >&2
+        echo "  It may still be publishing — try again in a few minutes." >&2
+        echo "  If it persists: https://github.com/$REPO/releases/tag/v${VERSION}" >&2
+    else
+        echo "reminal: could not download ${TARBALL}." >&2
+        echo "  Check your connection, or see https://github.com/$REPO/releases" >&2
+    fi
+    exit 1
+fi
+if ! tar -xzf "$TMPDIR/$TARBALL" -C "$TMPDIR"; then
+    echo "reminal: the downloaded archive could not be extracted (truncated download?)." >&2
+    exit 1
+fi
 
 mkdir -p "$INSTALL_DIR"
 
