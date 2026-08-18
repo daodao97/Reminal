@@ -1187,12 +1187,17 @@ type winStream struct {
 	// Cadence stamps.
 	lastSent       time.Time // last frame OR heartbeat (paces both)
 	noWatcherSince time.Time // when every viewer last reported no panes
-	lastWSFrame    time.Time // billed-relay rate cap
-	lastProbe      time.Time // probe-frame cadence
-	lastGeoCheck   time.Time // window liveness / geometry poll
-	geoFails       int       // consecutive failed geometry lookups (transient osascript errors)
-	lastImg        []byte    // newest frame — lets a probe go out while idle
-	fails          int       // consecutive capture failures while the window exists
+	// geoCh carries an off-thread geometry probe back to this loop; geoBusy
+	// keeps one in flight at a time. The probe enumerates every window on the
+	// system, which is far too slow to do between frames.
+	geoCh        chan geoResult
+	geoBusy      bool
+	lastWSFrame  time.Time // billed-relay rate cap
+	lastProbe    time.Time // probe-frame cadence
+	lastGeoCheck time.Time // window liveness / geometry poll
+	geoFails     int       // consecutive failed geometry lookups (transient osascript errors)
+	lastImg      []byte    // newest frame — lets a probe go out while idle
+	fails        int       // consecutive capture failures while the window exists
 }
 
 // streamWindow captures w and streams JPEG frames to viewers until stop closes
@@ -1636,13 +1641,40 @@ func (s *winStream) detectChange(img []byte) bool {
 // resizes happen); the subprocess path polls existence only while static, as a
 // closed window there keeps "capturing" its retained backing store instead of
 // erroring. Returns false when the stream should end.
+// geoResult is one off-thread answer to "is this window still there, and has
+// it moved?".
+type geoResult struct {
+	w   winInfo
+	err error
+}
+
 func (s *winStream) checkWindow(conn *websocket.Conn, changed bool) bool {
 	if s.capNative {
-		if time.Since(s.lastGeoCheck) < 2*winLiveCheck {
-			return true
+		// Resolving a window enumerates every window on the system through an
+		// osascript — measured at ~114ms. Running that inline stalled the
+		// capture loop for the length of it every couple of seconds, which at
+		// 60fps drops a visible handful of frames on a schedule, on the
+		// desktop view as much as a window. So it runs off the loop, and its
+		// answer is picked up whenever it happens to be ready: nothing here
+		// needs the geometry sooner than that, and a window that closed is
+		// noticed a moment later either way.
+		if s.geoCh == nil {
+			s.geoCh = make(chan geoResult, 1)
 		}
-		s.lastGeoCheck = time.Now()
-		cur, err := findWindow(s.b, s.w.ID)
+		if !s.geoBusy && time.Since(s.lastGeoCheck) >= 2*winLiveCheck {
+			s.lastGeoCheck = time.Now()
+			s.geoBusy = true
+			id, b, ch := s.w.ID, s.b, s.geoCh
+			go func() { w, err := findWindow(b, id); ch <- geoResult{w, err} }()
+		}
+		var res geoResult
+		select {
+		case res = <-s.geoCh:
+			s.geoBusy = false
+		default:
+			return true // nothing back yet; keep streaming
+		}
+		cur, err := res.w, res.err
 		if err != nil {
 			// findWindow shells out to osascript, which can fail transiently
 			// under load — and the busier this loop is (60fps video), the more

@@ -446,3 +446,71 @@ func TestUnwatchedStreamIsReaped(t *testing.T) {
 		t.Fatal("countdown not reset — the stream would die mid-view")
 	}
 }
+
+// slowBackend models what resolving a window actually costs: an osascript that
+// enumerates every window on the system, measured at ~114ms.
+type slowBackend struct {
+	windowBackend
+	delay time.Duration
+	mu    sync.Mutex // the probe reads this off the stream goroutine
+	wins  []winInfo
+}
+
+func (b *slowBackend) list() ([]winInfo, error) {
+	time.Sleep(b.delay)
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return append([]winInfo(nil), b.wins...), nil
+}
+
+func (b *slowBackend) setWins(w []winInfo) {
+	b.mu.Lock()
+	b.wins = w
+	b.mu.Unlock()
+}
+
+// The geometry probe must not run on the capture loop. Inline, it stalled every
+// window mirror for the length of an osascript every couple of seconds — at
+// 60fps a visible handful of frames dropped on a schedule, and on the desktop
+// view just as much as on a window.
+func TestGeometryProbeDoesNotStallTheStream(t *testing.T) {
+	b := &slowBackend{delay: 150 * time.Millisecond}
+	b.setWins([]winInfo{{ID: "w1", W: 800, H: 600}})
+	s := &winStream{a: &Agent{}, b: b, w: winInfo{ID: "w1", W: 800, H: 600}, capNative: true}
+
+	// A probe is due immediately (lastGeoCheck is zero), so this call is the
+	// one that would have paid for it.
+	start := time.Now()
+	if !s.checkWindow(nil, false) {
+		t.Fatal("stream ended on a healthy window")
+	}
+	if elapsed := time.Since(start); elapsed > 50*time.Millisecond {
+		t.Fatalf("capture loop blocked %v on the probe; it must not wait at all", elapsed)
+	}
+
+	// Further iterations while it is still out must also not wait.
+	for i := 0; i < 5; i++ {
+		start = time.Now()
+		s.checkWindow(nil, false)
+		if elapsed := time.Since(start); elapsed > 50*time.Millisecond {
+			t.Fatalf("iteration %d blocked %v while a probe was in flight", i, elapsed)
+		}
+	}
+
+	// And the answer must actually be collected once it lands.
+	b.setWins([]winInfo{{ID: "w1", W: 1024, H: 768}}) // resized meanwhile
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		s.checkWindow(nil, false)
+		if !s.geoBusy {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if s.geoBusy {
+		t.Fatal("probe result was never collected")
+	}
+	if s.w.W != 800 && s.w.W != 1024 {
+		t.Fatalf("geometry not applied: %dx%d", s.w.W, s.w.H)
+	}
+}
