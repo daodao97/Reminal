@@ -16,10 +16,12 @@ host (the "+" in the Machines panel) run under launchd, *outside* your terminal'
 permission grant, so they need reminal itself to hold the grant. Without stable
 signing that grant resets on every version bump.
 
-Not notarized — that's fine. Homebrew doesn't quarantine formula binaries, so
-Gatekeeper never gates them. (A raw `.tar.gz` downloaded from GitHub *with*
-quarantine would still show one "unidentified developer" click-through; removing
-that would require notarization, which does need the paid account.)
+Not notarized — that's fine for how reminal is actually installed. `install.sh`
+fetches the release tarball with `curl`, which does not attach the
+`com.apple.quarantine` attribute the way a browser download does, so Gatekeeper
+never gates it. (A `.tar.gz` downloaded through a browser *would* carry
+quarantine and show one "unidentified developer" click-through; clearing that
+needs notarization, which needs the paid account.)
 
 ## One-time setup
 

@@ -142,8 +142,11 @@ func shouldCheck(currentVersion string) bool {
 	if err != nil {
 		return false
 	}
-	// Brew-managed installs should be upgraded via `brew upgrade reminal`,
-	// not by replacing the file in the Cellar; skip the prompt for them.
+	// Homebrew is no longer a supported install path, but installs made while
+	// it was still live are out there. Replacing a file inside the Cellar is
+	// something brew would undo anyway, so leave those alone rather than
+	// prompting for an upgrade that cannot stick; `install.sh` tells anyone in
+	// that position how to move across.
 	if real, err := filepath.EvalSymlinks(bin); err == nil && strings.Contains(real, "/Cellar/") {
 		return false
 	}
