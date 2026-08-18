@@ -176,10 +176,18 @@ func (a *Agent) handleControlConn(conn net.Conn) {
 			// pipe before we replace our process image.
 			time.Sleep(50 * time.Millisecond)
 			if err := a.executeRestart(); err != nil {
-				// Exec failed — we're still alive. Surface the
-				// failure to viewers + host so the user knows
-				// they need to manually restart.
-				a.broadcastNotice("restart failed: " + err.Error())
+				// Exec failed, so this process is still here — but the
+				// tear-down before it already closed the control socket,
+				// to free the path for a successor that never arrived.
+				// Left that way the session keeps streaming and stops
+				// answering the CLI altogether: restart, stop and kill
+				// all reach a session through that socket, so the advice
+				// below would have been impossible to follow and the
+				// session could only be ended by finding its pid. Re-arm
+				// it before saying anything.
+				a.stopControlFn = a.listenControl()
+				a.broadcastNotice("restart failed (" + err.Error() +
+					") — still running the previous version; try again")
 			}
 		}()
 		return
