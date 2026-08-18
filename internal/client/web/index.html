@@ -7006,8 +7006,24 @@
       // saying so costs relay messages to change nothing.
       // Every one of these is billed, so the cadence is as slow as the host's
       // record lifetime allows rather than as fast as would be convenient.
+      // Two reasons to repeat ourselves, and they are not the same reason.
+      //
+      // Without a live channel this has always run: it is how a viewer that
+      // will never open one keeps its decode capability on record, and every
+      // host in the field depends on it.
+      //
+      // With a live channel and nothing open, it exists only to keep the pane
+      // count fresh — and it is only safe against a host that RECORDS a
+      // caps-only hello and stops. A host that predates that answers every one
+      // by building a PeerConnection and an offer, reaped only on a handshake
+      // timeout, so repeating them at an older host would have it constructing
+      // peers forever for a tab showing nothing. Ask only where it is inert.
       const capStale = !lastCapAt || Date.now() - lastCapAt > WIN_CAP_ANNOUNCE_MS;
-      if (capStale && (panes.size === 0 || !rtcActive())) { lastCapAt = Date.now(); announceCaps(); }
+      const capsOnlyOK = !!(lastHostInfo && lastHostInfo.caps_only);
+      if (capStale && (!rtcActive() || (panes.size === 0 && capsOnlyOK))) {
+        lastCapAt = Date.now();
+        announceCaps();
+      }
       if (rtcActive()) refreshRtcRoute(); // keep direct-vs-TURN current for the (i)
       if (!panes.size) return;
       for (const p of panes.values()) {

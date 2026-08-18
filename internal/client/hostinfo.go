@@ -97,6 +97,11 @@ type HostInfo struct {
 	// host expecting the batched form would press and release once per chunk —
 	// a burst of clicks instead of a drag. Absent (old host) → batched.
 	DragPhases bool `json:"drag_phases,omitempty"`
+	// CapsOnly says a hello marked caps_only is recorded and dropped here
+	// rather than answered with a peer connection. A host without this builds
+	// a whole PeerConnection and offer for every one — reaped only after
+	// rtcHandshakeTimeout — so a viewer must not repeat them at it.
+	CapsOnly bool `json:"caps_only,omitempty"`
 }
 
 // gatherHostInfo collects the cross-platform basics, then lets the per-OS hook
@@ -111,6 +116,7 @@ func gatherHostInfo() HostInfo {
 		// backends still replay a path, and telling a viewer otherwise would
 		// turn every drag there into a stutter of clicks.
 		DragPhases: runtime.GOOS == "darwin",
+		CapsOnly:   true,
 	}
 	if name, err := os.Hostname(); err == nil {
 		h.Hostname = name

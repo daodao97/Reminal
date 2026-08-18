@@ -595,3 +595,23 @@ func TestPaneCountIntervalsAreOrdered(t *testing.T) {
 		t.Fatalf("reaper %v is too slow to collect an abandoned stream", streamNoWatcherTimeout)
 	}
 }
+
+// A viewer reaches hosts older than itself: the page is served from the relay
+// and updates the moment it is deployed, while agents upgrade whenever their
+// owners get round to it. Anything the viewer repeats must therefore be inert
+// on a host that does not understand it.
+func TestHostAdvertisesWhatARepeatedHelloCosts(t *testing.T) {
+	h := gatherHostInfo()
+	if !h.CapsOnly {
+		t.Fatal("host does not advertise caps_only, so viewers will not refresh their pane count against it")
+	}
+
+	// And the flag must mean what the viewer relies on: recorded, then dropped
+	// without building a peer connection.
+	a := &Agent{}
+	panes := 0
+	a.noteViewerCap("v1", true, &panes)
+	if got := a.idleViewerCount(); got != 1 {
+		t.Fatalf("idle viewers = %d, want the caps-only report recorded", got)
+	}
+}
