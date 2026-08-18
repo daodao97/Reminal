@@ -36,7 +36,7 @@ func TestMirrorRaisesOnlyWhenTheFrontWindowChanges(t *testing.T) {
 			// Pretend each event took longer than the old gesture gap. That is
 			// the case the previous rule got wrong.
 			mirrorFront.mu.Lock()
-			mirrorFront.at = time.Now().Add(-winScrollGestureGap - 200*time.Millisecond)
+			mirrorFront.at = time.Now().Add(-winLookupReuseTTL - 200*time.Millisecond)
 			mirrorFront.mu.Unlock()
 			if mirrorFront.needsRaise("w1") {
 				t.Fatalf("event %d re-raised a window already in front", i+2)
@@ -132,7 +132,7 @@ func TestMirrorFindWindowReusesLookupWithinAGesture(t *testing.T) {
 		resolveWindowFor(c, "w1", true)
 		winLookupMu.Lock()
 		e := winLookupCache["w1"]
-		e.at = time.Now().Add(-winScrollGestureGap - time.Millisecond)
+		e.at = time.Now().Add(-winLookupReuseTTL - time.Millisecond)
 		winLookupCache["w1"] = e
 		winLookupMu.Unlock()
 		resolveWindowFor(c, "w1", true)
@@ -148,7 +148,7 @@ func TestMirrorFindWindowReusesLookupWithinAGesture(t *testing.T) {
 		c.wins = nil // window closed
 		winLookupMu.Lock()
 		e := winLookupCache["w1"]
-		e.at = time.Now().Add(-winScrollGestureGap - time.Millisecond)
+		e.at = time.Now().Add(-winLookupReuseTTL - time.Millisecond)
 		winLookupCache["w1"] = e
 		winLookupMu.Unlock()
 		if _, err := resolveWindowFor(c, "w1", true); err == nil {

@@ -440,10 +440,6 @@ func (a *Agent) deliverWindowAck(id string, seq uint64) {
 	}
 }
 
-// clickCount returns the click-state (1=single, 2=double, 3=triple) for a click
-// at (fx, fy) in window w, by timing it against the previous click. Mirrors how
-// the OS coalesces rapid clicks in one spot. Runs on the winOps worker only.
-
 func absInt(n int) int {
 	if n < 0 {
 		return -n
@@ -540,11 +536,11 @@ func (a *Agent) setStayUnlocked(on bool) {
 	}
 }
 
-// winScrollGestureGap is how long a resolved window may be reused for the
+// winLookupReuseTTL is how long a resolved window may be reused for the
 // repeating event kinds before it is looked up again — long enough to cover a
 // continuous gesture, short enough that a window which moved or closed is
 // noticed within one.
-const winScrollGestureGap = 400 * time.Millisecond
+const winLookupReuseTTL = 400 * time.Millisecond
 
 // Resolved-window cache. findWindow enumerates EVERY window on the system
 // through an osascript — measured at ~114ms on an idle machine — and
@@ -565,7 +561,7 @@ var (
 
 // resolveWindowFor resolves a window id for an input event. The repeating
 // event kinds reuse a recent lookup; anything that depends on exact, current
-// geometry re-resolves. Entries expire with winScrollGestureGap, so a window
+// geometry re-resolves. Entries expire with winLookupReuseTTL, so a window
 // that moves, resizes or closes is picked up within one gesture's worth of
 // time — the same bound that already governs re-raising.
 func resolveWindowFor(b windowBackend, id string, reuse bool) (winInfo, error) {
@@ -574,7 +570,7 @@ func resolveWindowFor(b windowBackend, id string, reuse bool) (winInfo, error) {
 		winLookupMu.Lock()
 		e, ok := winLookupCache[id]
 		winLookupMu.Unlock()
-		if ok && now.Sub(e.at) < winScrollGestureGap {
+		if ok && now.Sub(e.at) < winLookupReuseTTL {
 			return e.w, nil
 		}
 	}
@@ -587,7 +583,7 @@ func resolveWindowFor(b windowBackend, id string, reuse bool) (winInfo, error) {
 	}
 	winLookupMu.Lock()
 	for k, e := range winLookupCache { // opportunistic sweep; the map stays tiny
-		if now.Sub(e.at) > winScrollGestureGap {
+		if now.Sub(e.at) > winLookupReuseTTL {
 			delete(winLookupCache, k)
 		}
 	}
@@ -648,6 +644,10 @@ type clickRun struct {
 	lastY int
 }
 
+// count returns the click-state (1=single, 2=double, 3=triple) for a click at
+// (fx, fy) in window w, by timing it against the previous click — mirroring how
+// the OS coalesces rapid clicks in one spot. Mutex-guarded: the daemon serves
+// each input on its own connection, concurrently.
 func (c *clickRun) count(w winInfo, fx, fy float64) int {
 	x := w.X + int(fx*float64(w.W))
 	y := w.Y + int(fy*float64(w.H))

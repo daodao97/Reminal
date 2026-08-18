@@ -178,7 +178,11 @@ func TestResizeSegmentsSnapshotCostAtCap(t *testing.T) {
 	}
 	t.Logf("snapshot with %d segments over ~%d scrollback lines took %v",
 		len(a.resizeSegs), a.screen.Scrollback().Len(), elapsed)
-	if elapsed > 2*time.Second {
-		t.Errorf("snapshot too slow at segment cap: %v", elapsed)
+	budget := 2 * time.Second
+	if raceDetector {
+		budget *= 8 // instrumented builds run far slower; see raceDetector
+	}
+	if elapsed > budget {
+		t.Errorf("snapshot too slow at segment cap: %v (budget %v)", elapsed, budget)
 	}
 }
