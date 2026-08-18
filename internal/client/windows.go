@@ -899,6 +899,27 @@ const maxFramesInFlightH264 = 12
 // captures. The heartbeat isn't capped (it's tiny and only every few seconds).
 const wsFrameMinInterval = 200 * time.Millisecond
 
+// streamNoWatcherTimeout stops a stream once every connected viewer has said it
+// has no pane open for this long.
+//
+// The ack-idle timeout below cannot do this. It is evaluated only inside the
+// in-flight gate, which a stream enters only when it is AHEAD of the viewer —
+// and an idle window emits no frames, so its sequence never advances, the gate
+// is never entered, and the check never runs. A busy unwatched window reaps
+// itself in seconds; a quiet one never did.
+//
+// That went unnoticed while every pane sent a stop when it closed. Popping a
+// window out deliberately does not, so the popup can adopt the stream instead
+// of racing to restart it — which means a popup that never arrives (blocked,
+// or closed at once) leaves a capture helper and its encoder running for a
+// window nobody is watching, heartbeating over the billed relay and holding
+// the display awake through winAwake.
+//
+// Generous against the 10s at which viewers refresh their pane count, so a
+// stream is never reaped over one lost report or a pane opened a moment before
+// its announcement lands.
+const streamNoWatcherTimeout = 25 * time.Second
+
 // streamAckIdleTimeout stops a stream whose viewer was acking frames but then
 // went silent this long. An unclean viewer drop (phone asleep, network lost,
 // laptop closed) sends no WebSocket close, so the relay can be slow to tell the
@@ -1149,13 +1170,14 @@ type winStream struct {
 	haveSig, pendingSigOK bool
 
 	// Cadence stamps.
-	lastSent     time.Time // last frame OR heartbeat (paces both)
-	lastWSFrame  time.Time // billed-relay rate cap
-	lastProbe    time.Time // probe-frame cadence
-	lastGeoCheck time.Time // window liveness / geometry poll
-	geoFails     int       // consecutive failed geometry lookups (transient osascript errors)
-	lastImg      []byte    // newest frame — lets a probe go out while idle
-	fails        int       // consecutive capture failures while the window exists
+	lastSent       time.Time // last frame OR heartbeat (paces both)
+	noWatcherSince time.Time // when every viewer last reported no panes
+	lastWSFrame    time.Time // billed-relay rate cap
+	lastProbe      time.Time // probe-frame cadence
+	lastGeoCheck   time.Time // window liveness / geometry poll
+	geoFails       int       // consecutive failed geometry lookups (transient osascript errors)
+	lastImg        []byte    // newest frame — lets a probe go out while idle
+	fails          int       // consecutive capture failures while the window exists
 }
 
 // streamWindow captures w and streams JPEG frames to viewers until stop closes
@@ -1209,6 +1231,9 @@ func (s *winStream) run() {
 			return
 		}
 		s.drainAcks()
+		if !s.watched() {
+			return
+		}
 		if !s.waitCapacity() {
 			return
 		}
@@ -1333,6 +1358,22 @@ func (s *winStream) negotiateCodec() {
 	}
 	s.helperErr = ""
 	s.helperRetryAt = time.Time{} // a codec switch never inherits a failure cooldown
+}
+
+// watched reports whether anyone still wants this stream, ending it when every
+// viewer has reported no panes for streamNoWatcherTimeout. Viewers that have
+// not reported at all are assumed to want frames, so this never acts on
+// silence — only on everyone actively saying they are watching nothing.
+func (s *winStream) watched() bool {
+	if s.a.framesWantedBy() > 0 {
+		s.noWatcherSince = time.Time{}
+		return true
+	}
+	if s.noWatcherSince.IsZero() {
+		s.noWatcherSince = time.Now()
+		return true
+	}
+	return time.Since(s.noWatcherSince) < streamNoWatcherTimeout
 }
 
 // consumeAck folds one viewer ack into the pacing state.

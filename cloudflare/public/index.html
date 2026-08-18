@@ -6993,8 +6993,16 @@
       // hello went unanswered, clear it so the next tick retries.
       if (rtcPeerId && !rtcPc && Date.now() - rtcHelloAt > 8000) rtcPeerId = null;
       if (!rtcPc) ensureWebRTC();
-      // Keep the capability record alive whenever we're not on a live channel.
-      if (!rtcActive() && (!lastCapAt || Date.now() - lastCapAt > 10000)) { lastCapAt = Date.now(); announceCaps(); }
+      // Keep the capability record alive. Unconditionally, not only while off
+      // a live channel: the record now carries how many panes this viewer has
+      // open, and the host subtracts viewers wanting nothing before deciding
+      // whether a relay copy of every frame is needed. Letting it lapse (TTL
+      // is viewerCapTTL) makes an idle tab look like a viewer that needs the
+      // relay again, which drops a popped-out window back to the capped path
+      // about half a minute after it was handed over — the very regression the
+      // pane count was added to prevent. One small message every 10s against a
+      // stream that would otherwise halve its frame rate.
+      if (!lastCapAt || Date.now() - lastCapAt > 10000) { lastCapAt = Date.now(); announceCaps(); }
       if (rtcActive()) refreshRtcRoute(); // keep direct-vs-TURN current for the (i)
       if (!panes.size) return;
       for (const p of panes.values()) {

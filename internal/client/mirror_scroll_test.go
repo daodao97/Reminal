@@ -383,3 +383,52 @@ func TestAbandonedDragReleasesTheButton(t *testing.T) {
 		}
 	})
 }
+
+// A stream must end once every viewer says it is watching nothing — and must
+// NOT end on silence. The ack-idle timeout cannot cover this: it is evaluated
+// only inside the in-flight gate, which a quiet window never enters because its
+// sequence never advances. Popping a window out relies on the stream surviving
+// without a stop, so a popup that never arrives would otherwise leave a capture
+// helper running, billing the relay and holding the display awake.
+func TestUnwatchedStreamIsReaped(t *testing.T) {
+	// viewerCount with no capability records at all: nobody has said anything,
+	// so every viewer is assumed to want frames.
+	silent := &Agent{}
+	silent.viewerCount = 2
+	s := &winStream{a: silent}
+	if !s.watched() {
+		t.Fatal("reaped a stream although no viewer had reported anything")
+	}
+	s.noWatcherSince = time.Now().Add(-streamNoWatcherTimeout - time.Second)
+	if !s.watched() {
+		t.Fatal("silence must never reap a stream, however long it lasts")
+	}
+
+	// Now both viewers actively report zero panes.
+	zero := 0
+	watching := &Agent{}
+	watching.viewerCount = 2
+	watching.noteViewerCap("v1", true, &zero)
+	watching.noteViewerCap("v2", true, &zero)
+	s2 := &winStream{a: watching}
+	if got := watching.framesWantedBy(); got != 0 {
+		t.Fatalf("framesWantedBy = %d, want 0 when every viewer reports no panes", got)
+	}
+	if !s2.watched() {
+		t.Fatal("reaped immediately; a pane opened just before its report lands would be cut off")
+	}
+	s2.noWatcherSince = time.Now().Add(-streamNoWatcherTimeout - time.Second)
+	if s2.watched() {
+		t.Fatal("stream outlived every viewer reporting no panes")
+	}
+
+	// One viewer opens a pane again: the countdown must reset, not resume.
+	one := 1
+	watching.noteViewerCap("v2", true, &one)
+	if !s2.watched() {
+		t.Fatal("a viewer with a pane open did not keep the stream alive")
+	}
+	if !s2.noWatcherSince.IsZero() {
+		t.Fatal("countdown not reset — the stream would die mid-view")
+	}
+}
