@@ -18,6 +18,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -417,16 +418,11 @@ func (a *Agent) handleWindowInput(encData string) {
 		_ = b.focus(w)
 		_ = b.drag(w, ev.Path)
 	case "scroll":
-		// Raise the target window once at the start of a scroll gesture so the
-		// scroll lands on IT (not whatever was focused). Skip the ~100ms raise on
-		// subsequent events of the same gesture (a new gesture = a different
-		// window, or a gap past winScrollGestureGap) so continuous scrolling
-		// stays smooth.
-		if ev.ID != a.winScrollID || time.Since(a.winScrollAt) > winScrollGestureGap {
+		// Raise only when this isn't already the front window — see
+		// frontWindowTracker for why timing was the wrong thing to key on.
+		if a.winFront.needsRaise(ev.ID) {
 			_ = b.focus(w)
 		}
-		a.winScrollID = ev.ID
-		a.winScrollAt = time.Now()
 		_ = b.scroll(w, ev.X, ev.Y, ev.Dx, ev.Dy)
 	case "key":
 		// Keys land on whatever's focused; the user focuses the target by
@@ -617,19 +613,61 @@ func (a *Agent) setStayUnlocked(on bool) {
 	}
 }
 
-// winScrollGestureGap separates one scroll gesture from the next. Within a
-// gesture the target window is raised ONCE; every later event skips the raise,
-// which on macOS is a ~100ms osascript spawn. That matters because the viewer
-// emits a scroll roughly every 50ms while a finger moves: paying the raise per
-// event puts the host at half the rate input arrives, so the lag ACCUMULATES
-// for the length of the gesture and then drains after the finger stops — which
-// reads as "I scrolled too far", not as a constant delay.
-//
-// Lives here, shared, because this logic exists twice: once for the in-process
-// backend below, and once in the daemon (mirrorServeInput), which is the path
-// macOS actually takes. The daemon copy was missing entirely — the debounce
-// below has never run on a Mac.
+// winScrollGestureGap is how long a resolved window may be reused for the
+// repeating event kinds before it is looked up again — long enough to cover a
+// continuous gesture, short enough that a window which moved or closed is
+// noticed within one.
 const winScrollGestureGap = 400 * time.Millisecond
+
+// frontWindowTracker remembers which window was last brought to the front, so
+// an event only pays for a raise when it actually changes the front window.
+//
+// Raising is expensive out of all proportion to what it does: on macOS focus()
+// runs an AppleScript that walks EVERY window of the target application over
+// the Accessibility bridge reading each one's position and size — measured at
+// ~410ms against a browser, against ~20ms for the injection itself. A whole
+// desktop skips it (nothing to raise), which is the entire reason scrolling
+// the desktop felt immediate and scrolling a window did not.
+//
+// The rule used to be "skip the raise if the last scroll was under 400ms ago",
+// which could never work: at ~570ms an event, scrolls queued further apart
+// than the gap they were tested against, so every one looked like a fresh
+// gesture and paid again. The cost being avoided defeated the test for
+// avoiding it. Keying on WHICH window is in front has no such feedback.
+//
+// One implementation, deliberately: this decision previously existed twice —
+// once here and once in the daemon — and only the copy that never runs on
+// macOS was correct.
+type frontWindowTracker struct {
+	mu sync.Mutex
+	id string
+	at time.Time
+}
+
+// frontWindowTTL bounds how long the record is trusted. Nothing reports when
+// the person at the host clicks something themselves, so it has to go stale on
+// its own.
+const frontWindowTTL = 4 * time.Second
+
+// needsRaise reports whether id must be raised, and records that it now is.
+func (t *frontWindowTracker) needsRaise(id string) bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if id == t.id && time.Since(t.at) < frontWindowTTL {
+		t.at = time.Now() // still in front; keep the record fresh
+		return false
+	}
+	t.id, t.at = id, time.Now()
+	return true
+}
+
+// note records a raise performed for its own sake (a click, a drag), so a
+// scroll that follows knows the window is already in front.
+func (t *frontWindowTracker) note(id string) {
+	t.mu.Lock()
+	t.id, t.at = id, time.Now()
+	t.mu.Unlock()
+}
 
 // windowFrameInterval is a floor on the frame period — a cheap-to-capture window
 // with instant acks could otherwise spin a core respawning the capture tool. The

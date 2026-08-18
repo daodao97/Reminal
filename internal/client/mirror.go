@@ -348,28 +348,12 @@ type mirrorInputEvent struct {
 	Phase string `json:"phase,omitempty"`
 }
 
-// Scroll-gesture tracking for the daemon. Each input arrives on its own
-// short-lived connection, so "am I still in the same gesture" can't live on the
-// connection — it has to be daemon-wide state. Guarded because connections are
-// served concurrently (go handleMirrorConn).
-var (
-	mirrorScrollMu sync.Mutex
-	mirrorScrollID string
-	mirrorScrollAt time.Time
-)
-
-// mirrorScrollStartsGesture reports whether this scroll event begins a new
-// gesture — a different window, or a long enough pause since the last one — and
-// records it either way. Only the first event of a gesture pays the ~100ms
-// window raise; see winScrollGestureGap for why paying it per event is what
-// made scrolling feel like it ran away from you.
-func mirrorScrollStartsGesture(id string) bool {
-	mirrorScrollMu.Lock()
-	defer mirrorScrollMu.Unlock()
-	fresh := id != mirrorScrollID || time.Since(mirrorScrollAt) > winScrollGestureGap
-	mirrorScrollID, mirrorScrollAt = id, time.Now()
-	return fresh
-}
+// The daemon's record of the front window. Each input arrives on its own
+// short-lived connection, so this can't live on the connection. Same rule and
+// the same implementation the in-process backend uses — see frontWindowTracker,
+// which explains why raising is keyed on which window is in front rather than
+// on how recently the last event arrived.
+var mirrorFront frontWindowTracker
 
 // Resolved-window cache. findWindow enumerates EVERY window on the system
 // through an osascript — measured at ~114ms on an idle machine — and
@@ -467,6 +451,7 @@ func mirrorServeInput(conn net.Conn, payload string) {
 			count = 1
 		}
 		_ = b.focus(w)
+		mirrorFront.note(ev.ID)
 		_ = b.clickN(w, ev.X, ev.Y, count, ev.Button == "right")
 	case "drag":
 		switch ev.Phase {
@@ -474,9 +459,11 @@ func mirrorServeInput(conn net.Conn, payload string) {
 			// Legacy: the viewer buffered the whole gesture and sent it after
 			// the pointer lifted. Replayed at scripted speed.
 			_ = b.focus(w)
+			mirrorFront.note(ev.ID)
 			_ = b.drag(w, ev.Path)
 		case "begin":
 			_ = b.focus(w)
+			mirrorFront.note(ev.ID)
 			_ = b.dragPhase(w, "down", ev.X, ev.Y)
 		case "move":
 			// Points accumulated since the last send, in order. Each is posted
@@ -492,7 +479,7 @@ func mirrorServeInput(conn net.Conn, payload string) {
 			_ = b.dragPhase(w, "up", ev.X, ev.Y)
 		}
 	case "scroll":
-		if mirrorScrollStartsGesture(ev.ID) {
+		if mirrorFront.needsRaise(ev.ID) {
 			_ = b.focus(w)
 		}
 		_ = b.scroll(w, ev.X, ev.Y, ev.Dx, ev.Dy)

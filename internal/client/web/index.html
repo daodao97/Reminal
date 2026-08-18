@@ -992,6 +992,14 @@
     // pasted onto another device carries no secret and simply prompts.
     const paneOnly = params.get('pane') || '';
     if (paneOnly) { document.documentElement.classList.add('pane-only'); document.body.classList.add('pane-only'); }
+    // A pane tab shows exactly one mirrored window and nothing else. It does
+    // NOT own the terminal: its xterm is display:none, so it cannot measure
+    // itself, and anything it reports about size is a guess the whole session
+    // would then have to live with. Named once here rather than re-tested at
+    // each call site — the layout save already skipped a pane tab for the same
+    // reason ("a pane tab owns no layout") while resume/fit/resize did not,
+    // which is exactly how the two came apart.
+    const ownsTerminal = !paneOnly;
     if (initialSession) sessionInput.value = initialSession.toUpperCase();
 
     // The PIN may arrive in the URL fragment (e.g. #p=123456) from the
@@ -3353,6 +3361,15 @@
     // a local measurement is always fresher than an in-flight echo of an older one.
     let pendingRemoteSize = null, remoteSizeTimer = null;
     function sendResize() {
+      // A pane tab must never drive the PTY. Its terminal is display:none, so
+      // fitAddon measures nothing and xterm falls back to its 80x24 default —
+      // and the agent applies the most recent viewer's size, so popping a
+      // window out dropped the shared terminal from whatever it was to 80x24
+      // for everyone. Each resize also makes Ink re-emit its whole frame, so
+      // this was corrupting scrollback as well as geometry. Guarded here
+      // rather than at the call sites: there are five, and gating them one at
+      // a time is precisely how this was missed.
+      if (!ownsTerminal) return;
       // Our own measurement supersedes any stale mirror still waiting to apply.
       pendingRemoteSize = null;
       if (remoteSizeTimer) { clearTimeout(remoteSizeTimer); remoteSizeTimer = null; }
@@ -3360,6 +3377,13 @@
     }
 
     function sendResume() {
+      // Resume rewinds the agent's output cursor, and the agent holds ONE
+      // socket to the relay which fans out — so a pane tab asking to resume
+      // from seq 0 replays the entire scrollback to EVERY viewer, not just
+      // itself, and re-renders the terminal of whoever was already watching.
+      // A tab that never shows the terminal has no business moving that
+      // cursor.
+      if (!ownsTerminal) return;
       if (!ws || ws.readyState !== WebSocket.OPEN) return;
       ws.send(JSON.stringify({ type: 'resume', from_seq: lastSeq }));
     }
