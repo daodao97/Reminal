@@ -7348,12 +7348,30 @@
       requestH264Key(p);
     }
 
+    // h264Seqs pairs each submitted access unit with what to do when its frame
+    // comes back, by position: one decoder output per decode() call. If the
+    // decoder ever accepts a chunk and emits nothing without raising an error,
+    // that pairing shifts by one and never recovers — every later frame is then
+    // acked with another frame's sequence, which walks the host's delivery
+    // accounting backwards and throttles the stream, and is painted with
+    // another frame's timing. Silent, permanent, and it looks like plain lag.
+    // In normal operation this holds a handful of entries, so a queue this
+    // long means the pairing is already lost: drop it and resync on a keyframe
+    // rather than carry a corrupt mapping for the life of the pane.
+    const H264_PENDING_MAX = 64;
+
     // decodeAU hands one in-order access unit to the decoder.
     function decodeAU(p, au, key, seq, ackSeq) {
       p.h264AUs = (p.h264AUs || 0) + 1;
       // ackSeq is set only on the per-message path; a batch is acked once by
       // its caller, and its frames are the ones that need paced playout.
       (p.h264Seqs || (p.h264Seqs = [])).push({ ack: ackSeq !== undefined ? ackSeq : null, paced: ackSeq === undefined })
+      if (p.h264Seqs.length > H264_PENDING_MAX) {
+        p.h264Seqs = [];
+        p.h264Synced = false;
+        requestH264Key(p);
+        return;
+      }
       try {
         p.vdec.decode(new EncodedVideoChunk({
           type: key ? 'key' : 'delta',
