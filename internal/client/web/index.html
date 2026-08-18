@@ -7901,6 +7901,10 @@
         if (grewBy > 120 && document.activeElement === wkey) wkey.blur();
       });
     }
+    // Bounds one typed message. Large enough that ordinary input and most
+    // pastes go in a single call, small enough that the host never builds an
+    // unwieldy script argument out of one.
+    const WIN_TYPE_CHUNK = 256;
     wkey.addEventListener('keydown', (e) => {
       if (!focusedPaneId) return;
       const sp = WIN_SPECIAL_KEYS[e.key];
@@ -7915,7 +7919,16 @@
       if (!focusedPaneId) return;
       if (e.inputType === 'deleteContentBackward') { window.kbdlog('SEND delete'); sendWin('window_input', { id: focusedPaneId, kind: 'key', special: 'delete' }); return; }
       if (text) window.kbdlog('SEND text ' + JSON.stringify(text).slice(0, 16));
-      for (const ch of text) sendWin('window_input', { id: focusedPaneId, kind: 'key', text: ch });
+      // Send the text as text, not as a stream of single characters. The host
+      // types whatever it is given in one call, and that call is an osascript
+      // costing ~100ms whether it carries one character or a hundred — so a
+      // per-character send turned a 200-character paste into 200 messages and
+      // twenty seconds of host work, against an input queue that holds 64 and
+      // DROPS what it cannot fit. The tail of a paste simply vanished.
+      // Chunked only to keep any single script argument sane.
+      for (let i = 0; i < text.length; i += WIN_TYPE_CHUNK) {
+        sendWin('window_input', { id: focusedPaneId, kind: 'key', text: text.slice(i, i + WIN_TYPE_CHUNK) });
+      }
     });
 
     // Fetch a fresh window list each time the dropdown is opened.
