@@ -334,10 +334,7 @@ func mirrorServeCaptureRegion(conn net.Conn, args []string) {
 // the same implementation the in-process backend uses — see frontWindowTracker,
 // which explains why raising is keyed on which window is in front rather than
 // on how recently the last event arrived.
-var (
-	mirrorFront  frontWindowTracker
-	mirrorClicks clickRun
-)
+var mirrorInput inputState
 
 // mirrorServeInput injects one forwarded viewer event using the daemon's granted
 // backend, then replies ok/error.
@@ -351,8 +348,8 @@ func mirrorServeInput(conn net.Conn, payload string) {
 		return
 	}
 	// The daemon has no Agent to hang state on, so it keeps its own record of
-	// the front window and its own run of clicks.
-	applyWindowInput(darwinWindows{}, &mirrorFront, &mirrorClicks, ev, nil)
+	// the front window, its own run of clicks and its own drag watchdog.
+	applyWindowInput(darwinWindows{}, &mirrorInput, ev, nil)
 	fmt.Fprintln(conn, "ok")
 }
 

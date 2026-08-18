@@ -362,7 +362,7 @@ func (a *Agent) handleWindowInput(encData string) {
 	if b.unsupported() != "" {
 		return
 	}
-	applyWindowInput(b, &a.winFront, &a.winClicks, ev, func(w winInfo, right bool) {
+	applyWindowInput(b, &a.winInput, ev, func(w winInfo, right bool) {
 		// A right-click opens a context menu drawn as its own window (missed by
 		// capture-by-id). Snapshot this window's bounds and region-capture it
 		// briefly so the menu shows; a left click dismisses it.
@@ -666,11 +666,70 @@ func (c *clickRun) count(w winInfo, fx, fy float64) int {
 	return c.n
 }
 
+// dragStallTimeout is how long a live drag may go without a move or an end
+// before the button is released for it. The viewer sends moves continuously
+// while a finger is down, so a gap this long means the gesture is not coming
+// back.
+const dragStallTimeout = 5 * time.Second
+
+// dragGuard releases a held mouse button when a live drag stops arriving.
+//
+// Phased drags press on "begin" and release on "end", which leaves the button
+// down in between — and the host desktop grabbed if the end never comes. The
+// existing releases only fire when the last viewer leaves or a pane is closed,
+// so a socket that drops mid-drag and then RECONNECTS strands the button
+// indefinitely: the viewer count never reaches zero and no pane is stopped.
+// The batched drag this replaced could not do that, because it was one replay
+// that always ended with a mouse-up.
+type dragGuard struct {
+	mu    sync.Mutex
+	timer *time.Timer
+}
+
+// arm starts (or extends) the watchdog. release is called if the drag goes
+// quiet, and must be safe to call from a timer goroutine.
+func (g *dragGuard) arm(release func()) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.timer != nil {
+		g.timer.Stop()
+	}
+	g.timer = time.AfterFunc(dragStallTimeout, release)
+}
+
+// disarm cancels the watchdog — the drag ended as it should have.
+func (g *dragGuard) disarm() {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.timer != nil {
+		g.timer.Stop()
+		g.timer = nil
+	}
+}
+
+// inputState is the per-injector state applyWindowInput carries between events:
+// which window is in front, the run of rapid clicks, and the live-drag
+// watchdog. Bundled because there are two injectors — the agent and the daemon
+// — and each needs its own of all three; passing them separately grew the call
+// signature every time one was added.
+type inputState struct {
+	front  frontWindowTracker
+	clicks clickRun
+	drag   dragGuard
+}
+
 // phasedDragger is a backend that can inject a drag as it happens rather than
 // replaying a path afterwards. Optional: a backend without it gets the batched
 // form, and only hosts whose backend has it advertise drag_phases.
 type phasedDragger interface {
 	dragPhase(w winInfo, phase string, fx, fy float64) error
+}
+
+// dragWatch (re)arms the stall watchdog to release at the last point the drag
+// reached, so an abandoned gesture lifts where the finger was rather than
+// somewhere it never went.
+func (st *inputState) dragWatch(pd phasedDragger, w winInfo, fx, fy float64) {
+	st.drag.arm(func() { _ = pd.dragPhase(w, "up", fx, fy) })
 }
 
 // applyWindowInput injects one viewer event. front keeps a window from being
@@ -682,7 +741,7 @@ type phasedDragger interface {
 // and the copies drifted every time: only one learned the raise rule, only one
 // learned phased drags, only one had a click-count fallback. The platform that
 // runs the daemon copy was the one left behind each time.
-func applyWindowInput(b windowBackend, front *frontWindowTracker, clicks *clickRun, ev windowInput, noteMenu func(w winInfo, right bool)) {
+func applyWindowInput(b windowBackend, st *inputState, ev windowInput, noteMenu func(w winInfo, right bool)) {
 	w, err := resolveWindowFor(b, ev.ID, reuseLookupFor(ev.Kind, ev.Phase))
 	if err != nil {
 		return
@@ -691,11 +750,11 @@ func applyWindowInput(b windowBackend, front *frontWindowTracker, clicks *clickR
 	case "click":
 		count := ev.Count
 		if count < 1 {
-			count = clicks.count(w, ev.X, ev.Y)
+			count = st.clicks.count(w, ev.X, ev.Y)
 		}
 		right := ev.Button == "right"
 		_ = b.focus(w)
-		front.note(ev.ID)
+		st.front.note(ev.ID)
 		_ = b.clickN(w, ev.X, ev.Y, count, right)
 		if noteMenu != nil {
 			noteMenu(w, right)
@@ -707,7 +766,7 @@ func applyWindowInput(b windowBackend, front *frontWindowTracker, clicks *clickR
 			// The viewer buffered the gesture and sent it after the pointer
 			// lifted; replayed at scripted speed.
 			_ = b.focus(w)
-			front.note(ev.ID)
+			st.front.note(ev.ID)
 			_ = b.drag(w, ev.Path)
 		case !phased:
 			// This backend never advertised drag_phases, so a phased event
@@ -716,22 +775,29 @@ func applyWindowInput(b windowBackend, front *frontWindowTracker, clicks *clickR
 			return
 		case ev.Phase == "begin":
 			_ = b.focus(w)
-			front.note(ev.ID)
+			st.front.note(ev.ID)
 			_ = pd.dragPhase(w, "down", ev.X, ev.Y)
+			st.dragWatch(pd, w, ev.X, ev.Y)
 		case ev.Phase == "move":
 			// Each accumulated point in turn, so the target sees the real path
 			// rather than a jump to wherever the finger ended up.
 			for _, p := range ev.Path {
 				_ = pd.dragPhase(w, "move", p[0], p[1])
 			}
+			if n := len(ev.Path); n > 0 {
+				st.dragWatch(pd, w, ev.Path[n-1][0], ev.Path[n-1][1])
+			} else {
+				st.dragWatch(pd, w, ev.X, ev.Y)
+			}
 		case ev.Phase == "end":
 			for _, p := range ev.Path {
 				_ = pd.dragPhase(w, "move", p[0], p[1])
 			}
+			st.drag.disarm()
 			_ = pd.dragPhase(w, "up", ev.X, ev.Y)
 		}
 	case "scroll":
-		if front.needsRaise(ev.ID) {
+		if st.front.needsRaise(ev.ID) {
 			_ = b.focus(w)
 		}
 		_ = b.scroll(w, ev.X, ev.Y, ev.Dx, ev.Dy)

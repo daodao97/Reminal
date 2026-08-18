@@ -320,8 +320,7 @@ type Agent struct {
 	// Scroll-gesture tracking (winOps worker only): we raise the target window
 	// once at the start of a gesture so scroll lands on it, then skip re-raising
 	// during the gesture to keep it smooth.
-	winFront  frontWindowTracker
-	winClicks clickRun
+	winInput inputState
 
 	// WebRTC peer-to-peer frame transport. When a viewer can open a
 	// DataChannel, window frames + acks flow directly to it instead of through

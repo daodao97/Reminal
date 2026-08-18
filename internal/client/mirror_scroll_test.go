@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"runtime"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -19,26 +20,26 @@ import (
 // again. The cost being avoided defeated the test for avoiding it.
 func TestMirrorRaisesOnlyWhenTheFrontWindowChanges(t *testing.T) {
 	reset := func() {
-		mirrorFront = frontWindowTracker{}
+		mirrorInput.front = frontWindowTracker{}
 	}
 
 	t.Run("first event on a window raises it", func(t *testing.T) {
 		reset()
-		if !mirrorFront.needsRaise("w1") {
+		if !mirrorInput.front.needsRaise("w1") {
 			t.Fatal("a window not known to be in front must be raised")
 		}
 	})
 
 	t.Run("staying on it does not, however slowly events arrive", func(t *testing.T) {
 		reset()
-		mirrorFront.needsRaise("w1")
+		mirrorInput.front.needsRaise("w1")
 		for i := 0; i < 20; i++ {
 			// Pretend each event took longer than the old gesture gap. That is
 			// the case the previous rule got wrong.
-			mirrorFront.mu.Lock()
-			mirrorFront.at = time.Now().Add(-winLookupReuseTTL - 200*time.Millisecond)
-			mirrorFront.mu.Unlock()
-			if mirrorFront.needsRaise("w1") {
+			mirrorInput.front.mu.Lock()
+			mirrorInput.front.at = time.Now().Add(-winLookupReuseTTL - 200*time.Millisecond)
+			mirrorInput.front.mu.Unlock()
+			if mirrorInput.front.needsRaise("w1") {
 				t.Fatalf("event %d re-raised a window already in front", i+2)
 			}
 		}
@@ -46,31 +47,31 @@ func TestMirrorRaisesOnlyWhenTheFrontWindowChanges(t *testing.T) {
 
 	t.Run("a different window raises immediately", func(t *testing.T) {
 		reset()
-		mirrorFront.needsRaise("w1")
-		if !mirrorFront.needsRaise("w2") {
+		mirrorInput.front.needsRaise("w1")
+		if !mirrorInput.front.needsRaise("w2") {
 			t.Fatal("switching windows must raise the new one")
 		}
-		if mirrorFront.needsRaise("w2") {
+		if mirrorInput.front.needsRaise("w2") {
 			t.Fatal("re-raised the window it just raised")
 		}
 	})
 
 	t.Run("a click elsewhere makes the next scroll re-raise", func(t *testing.T) {
 		reset()
-		mirrorFront.needsRaise("w1")
-		mirrorFront.note("w2") // a click raised something else
-		if !mirrorFront.needsRaise("w1") {
+		mirrorInput.front.needsRaise("w1")
+		mirrorInput.front.note("w2") // a click raised something else
+		if !mirrorInput.front.needsRaise("w1") {
 			t.Fatal("scrolling w1 after w2 was raised must raise w1 again")
 		}
 	})
 
 	t.Run("the record goes stale so an external focus change is picked up", func(t *testing.T) {
 		reset()
-		mirrorFront.needsRaise("w1")
-		mirrorFront.mu.Lock()
-		mirrorFront.at = time.Now().Add(-frontWindowTTL - time.Millisecond)
-		mirrorFront.mu.Unlock()
-		if !mirrorFront.needsRaise("w1") {
+		mirrorInput.front.needsRaise("w1")
+		mirrorInput.front.mu.Lock()
+		mirrorInput.front.at = time.Now().Add(-frontWindowTTL - time.Millisecond)
+		mirrorInput.front.mu.Unlock()
+		if !mirrorInput.front.needsRaise("w1") {
 			t.Fatal("a stale record must be re-established")
 		}
 	})
@@ -232,36 +233,36 @@ func newRecording() *recordingBackend {
 // macOS actually takes — never gained the click-count fallback, so an older
 // viewer that reports no count got a single click where it meant a double.
 func TestApplyWindowInputIsOneImplementation(t *testing.T) {
-	fresh := func() (*recordingBackend, *frontWindowTracker, *clickRun) {
+	fresh := func() (*recordingBackend, *inputState) {
 		winLookupMu.Lock()
 		winLookupCache = map[string]winLookupEntry{}
 		winLookupMu.Unlock()
-		return newRecording(), &frontWindowTracker{}, &clickRun{}
+		return newRecording(), &inputState{}
 	}
 
 	t.Run("a viewer that reports no count still gets a double-click", func(t *testing.T) {
-		b, front, clicks := fresh()
+		b, st := fresh()
 		ev := windowInput{ID: "w1", Kind: "click", X: 0.5, Y: 0.5} // Count unset
-		applyWindowInput(b, front, clicks, ev, nil)
-		applyWindowInput(b, front, clicks, ev, nil)
+		applyWindowInput(b, st, ev, nil)
+		applyWindowInput(b, st, ev, nil)
 		if got := strings.Join(b.calls, " "); !strings.Contains(got, "click(n=2") {
 			t.Fatalf("calls = %q, want a second click counted as n=2", got)
 		}
 	})
 
 	t.Run("a reported count is trusted over the fallback", func(t *testing.T) {
-		b, front, clicks := fresh()
-		applyWindowInput(b, front, clicks, windowInput{ID: "w1", Kind: "click", Count: 3}, nil)
+		b, st := fresh()
+		applyWindowInput(b, st, windowInput{ID: "w1", Kind: "click", Count: 3}, nil)
 		if got := strings.Join(b.calls, " "); !strings.Contains(got, "click(n=3") {
 			t.Fatalf("calls = %q, want the viewer's own count", got)
 		}
 	})
 
 	t.Run("a backend without phased drag drops phased events", func(t *testing.T) {
-		b, front, clicks := fresh()
+		b, st := fresh()
 		// recordingBackend implements no dragPhase, standing in for the
 		// platforms that never advertised drag_phases.
-		applyWindowInput(b, front, clicks, windowInput{ID: "w1", Kind: "drag", Phase: "move",
+		applyWindowInput(b, st, windowInput{ID: "w1", Kind: "drag", Phase: "move",
 			Path: [][2]float64{{0.1, 0.1}}}, nil)
 		if len(b.calls) != 0 {
 			t.Fatalf("calls = %v, want a phased event dropped, not replayed as a click burst", b.calls)
@@ -269,8 +270,8 @@ func TestApplyWindowInputIsOneImplementation(t *testing.T) {
 	})
 
 	t.Run("a whole-path drag still replays", func(t *testing.T) {
-		b, front, clicks := fresh()
-		applyWindowInput(b, front, clicks, windowInput{ID: "w1", Kind: "drag",
+		b, st := fresh()
+		applyWindowInput(b, st, windowInput{ID: "w1", Kind: "drag",
 			Path: [][2]float64{{0.1, 0.1}, {0.2, 0.2}}}, nil)
 		if got := strings.Join(b.calls, " "); !strings.Contains(got, "drag(path=2)") {
 			t.Fatalf("calls = %q, want the batched drag", got)
@@ -278,22 +279,107 @@ func TestApplyWindowInputIsOneImplementation(t *testing.T) {
 	})
 
 	t.Run("scroll raises once and the click path records the raise", func(t *testing.T) {
-		b, front, clicks := fresh()
+		b, st := fresh()
 		sc := windowInput{ID: "w1", Kind: "scroll"}
-		applyWindowInput(b, front, clicks, sc, nil)
-		applyWindowInput(b, front, clicks, sc, nil)
+		applyWindowInput(b, st, sc, nil)
+		applyWindowInput(b, st, sc, nil)
 		if n := strings.Count(strings.Join(b.calls, " "), "focus"); n != 1 {
 			t.Fatalf("focus called %d times for one window, want 1", n)
 		}
 	})
 
 	t.Run("a right-click is reported to the menu hook", func(t *testing.T) {
-		b, front, clicks := fresh()
+		b, st := fresh()
 		var gotRight, called = false, false
-		applyWindowInput(b, front, clicks, windowInput{ID: "w1", Kind: "click", Button: "right", Count: 1},
+		applyWindowInput(b, st, windowInput{ID: "w1", Kind: "click", Button: "right", Count: 1},
 			func(w winInfo, right bool) { called, gotRight = true, right })
 		if !called || !gotRight {
 			t.Fatalf("menu hook called=%v right=%v, want true/true", called, gotRight)
+		}
+	})
+}
+
+// draggingBackend records phased drag injection.
+type draggingBackend struct {
+	recordingBackend
+	mu     sync.Mutex
+	phases []string
+}
+
+func (d *draggingBackend) dragPhase(w winInfo, phase string, fx, fy float64) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.phases = append(d.phases, phase)
+	return nil
+}
+func (d *draggingBackend) got() []string {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return append([]string(nil), d.phases...)
+}
+
+// A live drag presses on "begin" and releases on "end", so an end that never
+// arrives leaves the host's desktop grabbed. The existing releases only fire
+// when the last viewer leaves or a pane closes — neither happens when a socket
+// drops mid-drag and the viewer RECONNECTS, so the button stayed down for as
+// long as the session lived. The batched drag this replaced could not do that:
+// it was one replay that always ended with a mouse-up.
+func TestAbandonedDragReleasesTheButton(t *testing.T) {
+	newDragging := func() *draggingBackend {
+		winLookupMu.Lock()
+		winLookupCache = map[string]winLookupEntry{}
+		winLookupMu.Unlock()
+		d := &draggingBackend{}
+		d.wins = []winInfo{{ID: "w1", W: 800, H: 600}}
+		return d
+	}
+
+	t.Run("a drag that stops arriving is released for it", func(t *testing.T) {
+		b, st := newDragging(), &inputState{}
+		applyWindowInput(b, st, windowInput{ID: "w1", Kind: "drag", Phase: "begin", X: 0.2, Y: 0.2}, nil)
+		applyWindowInput(b, st, windowInput{ID: "w1", Kind: "drag", Phase: "move",
+			Path: [][2]float64{{0.5, 0.5}}}, nil)
+		// The viewer vanishes here — no "end" ever comes.
+		st.drag.mu.Lock()
+		armed := st.drag.timer != nil
+		st.drag.mu.Unlock()
+		if !armed {
+			t.Fatal("no watchdog armed for a live drag")
+		}
+		// Fire it now rather than waiting out dragStallTimeout.
+		st.drag.mu.Lock()
+		st.drag.timer.Reset(time.Millisecond)
+		st.drag.mu.Unlock()
+		deadline := time.Now().Add(2 * time.Second)
+		for time.Now().Before(deadline) {
+			got := b.got()
+			if len(got) > 0 && got[len(got)-1] == "up" {
+				return // released, as it must be
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+		t.Fatalf("button never released; phases = %v", b.got())
+	})
+
+	t.Run("a drag that ends properly is not released twice", func(t *testing.T) {
+		b, st := newDragging(), &inputState{}
+		applyWindowInput(b, st, windowInput{ID: "w1", Kind: "drag", Phase: "begin"}, nil)
+		applyWindowInput(b, st, windowInput{ID: "w1", Kind: "drag", Phase: "end"}, nil)
+		st.drag.mu.Lock()
+		stillArmed := st.drag.timer != nil
+		st.drag.mu.Unlock()
+		if stillArmed {
+			t.Fatal("watchdog left armed after a clean end")
+		}
+		time.Sleep(50 * time.Millisecond)
+		ups := 0
+		for _, p := range b.got() {
+			if p == "up" {
+				ups++
+			}
+		}
+		if ups != 1 {
+			t.Fatalf("got %d releases, want exactly 1", ups)
 		}
 	})
 }
