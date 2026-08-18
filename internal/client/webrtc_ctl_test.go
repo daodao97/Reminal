@@ -154,3 +154,88 @@ func TestV2ChannelsNegotiate(t *testing.T) {
 		t.Fatalf("channels = %v, want both frames and ctl", got)
 	}
 }
+
+// Heartbeats are the only liveness an idle window has once a peer is confirmed
+// and the relay copy has been dropped. A ctl channel that exists but is not
+// usable — mid-handshake, or closed while frames kept flowing — must not
+// swallow them, or the pane reports a sleeping host that is wide awake. That is
+// precisely the symptom the split channel was added to cure.
+func TestHeartbeatFallsBackWhenCtlIsNotOpen(t *testing.T) {
+	// Two connected peers give us real channels in real states.
+	offerer, err := webrtc.NewPeerConnection(webrtc.Configuration{})
+	if err != nil {
+		t.Skipf("no peer connection here: %v", err)
+	}
+	defer offerer.Close()
+	answerer, err := webrtc.NewPeerConnection(webrtc.Configuration{})
+	if err != nil {
+		t.Skipf("no peer connection here: %v", err)
+	}
+	defer answerer.Close()
+
+	frames, err := offerer.CreateDataChannel("frames", nil)
+	if err != nil {
+		t.Fatalf("frames: %v", err)
+	}
+	ordered, retransmits := false, uint16(0)
+	ctl, err := offerer.CreateDataChannel("ctl", &webrtc.DataChannelInit{Ordered: &ordered, MaxRetransmits: &retransmits})
+	if err != nil {
+		t.Fatalf("ctl: %v", err)
+	}
+
+	got := make(chan string, 8)
+	answerer.OnDataChannel(func(d *webrtc.DataChannel) {
+		label := d.Label()
+		d.OnMessage(func(m webrtc.DataChannelMessage) { got <- label })
+	})
+	offerer.OnICECandidate(func(c *webrtc.ICECandidate) {
+		if c != nil {
+			_ = answerer.AddICECandidate(c.ToJSON())
+		}
+	})
+	answerer.OnICECandidate(func(c *webrtc.ICECandidate) {
+		if c != nil {
+			_ = offerer.AddICECandidate(c.ToJSON())
+		}
+	})
+	offer, _ := offerer.CreateOffer(nil)
+	_ = offerer.SetLocalDescription(offer)
+	_ = answerer.SetRemoteDescription(offer)
+	answer, _ := answerer.CreateAnswer(nil)
+	_ = answerer.SetLocalDescription(answer)
+	_ = offerer.SetRemoteDescription(answer)
+
+	open := make(chan struct{})
+	frames.OnOpen(func() { close(open) })
+	select {
+	case <-open:
+	case <-time.After(15 * time.Second):
+		t.Skip("channels did not open in this environment")
+	}
+
+	peer := &rtcPeer{dc: frames, ctl: ctl}
+
+	// Closing ctl models both hazards: a channel that is present on the peer
+	// but not in a state that can carry anything.
+	if err := ctl.Close(); err != nil {
+		t.Fatalf("close ctl: %v", err)
+	}
+	deadline := time.After(5 * time.Second)
+	for ctl.ReadyState() == webrtc.DataChannelStateOpen {
+		select {
+		case <-deadline:
+			t.Fatal("ctl never left the open state")
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+
+	peer.sendCtl([]byte(`{"id":"w1","hb":true}`))
+	select {
+	case label := <-got:
+		if label != "frames" {
+			t.Fatalf("heartbeat arrived on %q, want the frames channel", label)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("heartbeat was swallowed — an idle pane would report a sleeping host")
+	}
+}

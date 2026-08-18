@@ -196,12 +196,22 @@ func (p *rtcPeer) sendFrame(raw []byte) {
 }
 
 // sendCtl delivers a small out-of-band message (currently only heartbeats;
-// acks travel the other way). Falls back to the frame channel for a v1 viewer,
-// which has no separate one.
+// acks travel the other way), falling back to the frame channel.
+//
+// The fallback is not just for v1 viewers that have no ctl channel. A ctl
+// channel that exists but is not open — still completing its handshake, or
+// closed on its own while frames kept flowing — used to swallow the message
+// silently, because a failed send returned rather than trying the other
+// channel. Heartbeats are the ONLY liveness signal an idle window has once a
+// peer is confirmed and the relay copy has been dropped, so losing them puts
+// "Waiting for host — screen may be locked or asleep" on a pane whose host is
+// perfectly awake. That is the exact symptom the split channel was introduced
+// to cure, so it must not be able to cause it.
 func (p *rtcPeer) sendCtl(raw []byte) {
-	if p.ctl != nil {
-		_ = p.ctl.Send(raw)
-		return
+	if c := p.ctl; c != nil && c.ReadyState() == webrtc.DataChannelStateOpen {
+		if c.Send(raw) == nil {
+			return
+		}
 	}
 	if p.dc != nil {
 		_ = p.dc.Send(raw)
