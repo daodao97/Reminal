@@ -4,7 +4,9 @@
 package client
 
 import (
+	"fmt"
 	"runtime"
+	"strings"
 	"testing"
 	"time"
 )
@@ -88,9 +90,9 @@ func (c *countingBackend) list() ([]winInfo, error) { c.lists++; return c.wins, 
 
 func TestMirrorFindWindowReusesLookupWithinAGesture(t *testing.T) {
 	reset := func() {
-		mirrorWinMu.Lock()
-		mirrorWinCache = map[string]mirrorWinEntry{}
-		mirrorWinMu.Unlock()
+		winLookupMu.Lock()
+		winLookupCache = map[string]winLookupEntry{}
+		winLookupMu.Unlock()
 	}
 	b := func() *countingBackend {
 		return &countingBackend{wins: []winInfo{{ID: "w1", W: 800, H: 600}}}
@@ -100,7 +102,7 @@ func TestMirrorFindWindowReusesLookupWithinAGesture(t *testing.T) {
 		reset()
 		c := b()
 		for i := 0; i < 20; i++ { // a second of scrolling at the viewer's cadence
-			if _, err := mirrorFindWindow(c, "w1", true); err != nil {
+			if _, err := resolveWindowFor(c, "w1", true); err != nil {
 				t.Fatalf("event %d: %v", i, err)
 			}
 		}
@@ -115,7 +117,7 @@ func TestMirrorFindWindowReusesLookupWithinAGesture(t *testing.T) {
 		for i := 0; i < 3; i++ {
 			// reuse=false is what a click/drag passes: placing a pointer on a
 			// stale rectangle is a click in the wrong place.
-			if _, err := mirrorFindWindow(c, "w1", false); err != nil {
+			if _, err := resolveWindowFor(c, "w1", false); err != nil {
 				t.Fatal(err)
 			}
 		}
@@ -127,13 +129,13 @@ func TestMirrorFindWindowReusesLookupWithinAGesture(t *testing.T) {
 	t.Run("the entry expires so a moved window is picked up", func(t *testing.T) {
 		reset()
 		c := b()
-		mirrorFindWindow(c, "w1", true)
-		mirrorWinMu.Lock()
-		e := mirrorWinCache["w1"]
+		resolveWindowFor(c, "w1", true)
+		winLookupMu.Lock()
+		e := winLookupCache["w1"]
 		e.at = time.Now().Add(-winScrollGestureGap - time.Millisecond)
-		mirrorWinCache["w1"] = e
-		mirrorWinMu.Unlock()
-		mirrorFindWindow(c, "w1", true)
+		winLookupCache["w1"] = e
+		winLookupMu.Unlock()
+		resolveWindowFor(c, "w1", true)
 		if c.lists != 2 {
 			t.Fatalf("enumerated %d times, want a re-resolve after expiry (2)", c.lists)
 		}
@@ -142,19 +144,19 @@ func TestMirrorFindWindowReusesLookupWithinAGesture(t *testing.T) {
 	t.Run("a closed window is not served from cache", func(t *testing.T) {
 		reset()
 		c := b()
-		mirrorFindWindow(c, "w1", true)
+		resolveWindowFor(c, "w1", true)
 		c.wins = nil // window closed
-		mirrorWinMu.Lock()
-		e := mirrorWinCache["w1"]
+		winLookupMu.Lock()
+		e := winLookupCache["w1"]
 		e.at = time.Now().Add(-winScrollGestureGap - time.Millisecond)
-		mirrorWinCache["w1"] = e
-		mirrorWinMu.Unlock()
-		if _, err := mirrorFindWindow(c, "w1", true); err == nil {
+		winLookupCache["w1"] = e
+		winLookupMu.Unlock()
+		if _, err := resolveWindowFor(c, "w1", true); err == nil {
 			t.Fatal("resolved a window that is gone")
 		}
-		mirrorWinMu.Lock()
-		_, still := mirrorWinCache["w1"]
-		mirrorWinMu.Unlock()
+		winLookupMu.Lock()
+		_, still := winLookupCache["w1"]
+		winLookupMu.Unlock()
 		if still {
 			t.Fatal("stale entry survived a failed lookup")
 		}
@@ -178,8 +180,8 @@ func TestMirrorReuseLookupOnlyWhereGeometryIsStable(t *testing.T) {
 		{"drag", "", false, "legacy whole-path replay places its own press"},
 		{"click", "", false, "a stale rectangle is a click in the wrong place"},
 	} {
-		if got := mirrorReuseLookup(tc.kind, tc.phase); got != tc.want {
-			t.Errorf("mirrorReuseLookup(%q, %q) = %v, want %v — %s",
+		if got := reuseLookupFor(tc.kind, tc.phase); got != tc.want {
+			t.Errorf("reuseLookupFor(%q, %q) = %v, want %v — %s",
 				tc.kind, tc.phase, got, tc.want, tc.why)
 		}
 	}
@@ -194,4 +196,104 @@ func TestDragPhasesAdvertisedOnlyWhereImplemented(t *testing.T) {
 	if want := runtime.GOOS == "darwin"; h.DragPhases != want {
 		t.Fatalf("DragPhases = %v on %s, want %v", h.DragPhases, runtime.GOOS, want)
 	}
+}
+
+// recordingBackend records what a backend was actually asked to do.
+type recordingBackend struct {
+	windowBackend
+	wins  []winInfo
+	calls []string
+}
+
+func (r *recordingBackend) list() ([]winInfo, error) { return r.wins, nil }
+func (r *recordingBackend) focus(w winInfo) error {
+	r.calls = append(r.calls, "focus")
+	return nil
+}
+func (r *recordingBackend) clickN(w winInfo, fx, fy float64, n int, right bool) error {
+	r.calls = append(r.calls, fmt.Sprintf("click(n=%d,right=%v)", n, right))
+	return nil
+}
+func (r *recordingBackend) scroll(w winInfo, fx, fy, dx, dy float64) error {
+	r.calls = append(r.calls, "scroll")
+	return nil
+}
+func (r *recordingBackend) drag(w winInfo, pts [][2]float64) error {
+	r.calls = append(r.calls, fmt.Sprintf("drag(path=%d)", len(pts)))
+	return nil
+}
+
+func newRecording() *recordingBackend {
+	return &recordingBackend{wins: []winInfo{{ID: "w1", W: 800, H: 600}}}
+}
+
+// One dispatcher serves both injection paths. It previously existed twice and
+// the copies drifted every time something was added: the daemon — the path
+// macOS actually takes — never gained the click-count fallback, so an older
+// viewer that reports no count got a single click where it meant a double.
+func TestApplyWindowInputIsOneImplementation(t *testing.T) {
+	fresh := func() (*recordingBackend, *frontWindowTracker, *clickRun) {
+		winLookupMu.Lock()
+		winLookupCache = map[string]winLookupEntry{}
+		winLookupMu.Unlock()
+		return newRecording(), &frontWindowTracker{}, &clickRun{}
+	}
+
+	t.Run("a viewer that reports no count still gets a double-click", func(t *testing.T) {
+		b, front, clicks := fresh()
+		ev := windowInput{ID: "w1", Kind: "click", X: 0.5, Y: 0.5} // Count unset
+		applyWindowInput(b, front, clicks, ev, nil)
+		applyWindowInput(b, front, clicks, ev, nil)
+		if got := strings.Join(b.calls, " "); !strings.Contains(got, "click(n=2") {
+			t.Fatalf("calls = %q, want a second click counted as n=2", got)
+		}
+	})
+
+	t.Run("a reported count is trusted over the fallback", func(t *testing.T) {
+		b, front, clicks := fresh()
+		applyWindowInput(b, front, clicks, windowInput{ID: "w1", Kind: "click", Count: 3}, nil)
+		if got := strings.Join(b.calls, " "); !strings.Contains(got, "click(n=3") {
+			t.Fatalf("calls = %q, want the viewer's own count", got)
+		}
+	})
+
+	t.Run("a backend without phased drag drops phased events", func(t *testing.T) {
+		b, front, clicks := fresh()
+		// recordingBackend implements no dragPhase, standing in for the
+		// platforms that never advertised drag_phases.
+		applyWindowInput(b, front, clicks, windowInput{ID: "w1", Kind: "drag", Phase: "move",
+			Path: [][2]float64{{0.1, 0.1}}}, nil)
+		if len(b.calls) != 0 {
+			t.Fatalf("calls = %v, want a phased event dropped, not replayed as a click burst", b.calls)
+		}
+	})
+
+	t.Run("a whole-path drag still replays", func(t *testing.T) {
+		b, front, clicks := fresh()
+		applyWindowInput(b, front, clicks, windowInput{ID: "w1", Kind: "drag",
+			Path: [][2]float64{{0.1, 0.1}, {0.2, 0.2}}}, nil)
+		if got := strings.Join(b.calls, " "); !strings.Contains(got, "drag(path=2)") {
+			t.Fatalf("calls = %q, want the batched drag", got)
+		}
+	})
+
+	t.Run("scroll raises once and the click path records the raise", func(t *testing.T) {
+		b, front, clicks := fresh()
+		sc := windowInput{ID: "w1", Kind: "scroll"}
+		applyWindowInput(b, front, clicks, sc, nil)
+		applyWindowInput(b, front, clicks, sc, nil)
+		if n := strings.Count(strings.Join(b.calls, " "), "focus"); n != 1 {
+			t.Fatalf("focus called %d times for one window, want 1", n)
+		}
+	})
+
+	t.Run("a right-click is reported to the menu hook", func(t *testing.T) {
+		b, front, clicks := fresh()
+		var gotRight, called = false, false
+		applyWindowInput(b, front, clicks, windowInput{ID: "w1", Kind: "click", Button: "right", Count: 1},
+			func(w winInfo, right bool) { called, gotRight = true, right })
+		if !called || !gotRight {
+			t.Fatalf("menu hook called=%v right=%v, want true/true", called, gotRight)
+		}
+	})
 }

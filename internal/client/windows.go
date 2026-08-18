@@ -354,20 +354,7 @@ func (a *Agent) handleWindowInput(encData string) {
 		a.updateMenuState(plaintext)
 		return
 	}
-	var ev struct {
-		ID      string       `json:"id"`
-		Kind    string       `json:"kind"`
-		X       float64      `json:"x"`
-		Y       float64      `json:"y"`
-		Dx      float64      `json:"dx"`
-		Dy      float64      `json:"dy"`
-		Path    [][2]float64 `json:"path"`
-		Text    string       `json:"text"`
-		Special string       `json:"special"`
-		Button  string       `json:"button"` // "right" for the secondary button; else left
-		Count   int          `json:"count"`  // viewer-reported click count (1/2/3); 0 = unset
-		Phase   string       `json:"phase"`  // live-drag phase; only darwin advertises support
-	}
+	var ev windowInput
 	if json.Unmarshal(plaintext, &ev) != nil {
 		return
 	}
@@ -375,29 +362,12 @@ func (a *Agent) handleWindowInput(encData string) {
 	if b.unsupported() != "" {
 		return
 	}
-	w, err := findWindow(b, ev.ID)
-	if err != nil {
-		return
-	}
-	switch ev.Kind {
-	case "click":
-		// Raise the specific window so the click lands on it, then post a click
-		// whose click-state gives native single/double/triple-click behaviour.
-		// Prefer the viewer's count (it times taps at the source, immune to
-		// network jitter); fall back to the Agent's own rapid-click timer for
-		// older viewers that don't report it. button:"right" → context click.
-		count := ev.Count
-		if count < 1 {
-			count = a.clickCount(w, ev.X, ev.Y)
-		}
-		right := ev.Button == "right"
-		_ = b.focus(w)
-		_ = b.clickN(w, ev.X, ev.Y, count, right)
-		// A right-click opens a context menu, which macOS draws as its own window
-		// (missed by capture-by-id). Snapshot this window's bounds and region-
-		// capture it briefly so the menu shows; a left click dismisses the menu, so
-		// clear the flag then and revert to the sharper per-window capture.
+	applyWindowInput(b, &a.winFront, &a.winClicks, ev, func(w winInfo, right bool) {
+		// A right-click opens a context menu drawn as its own window (missed by
+		// capture-by-id). Snapshot this window's bounds and region-capture it
+		// briefly so the menu shows; a left click dismisses it.
 		a.winMu.Lock()
+		defer a.winMu.Unlock()
 		if a.winMenu == nil {
 			a.winMenu = map[string]winMenuState{}
 		}
@@ -406,34 +376,7 @@ func (a *Agent) handleWindowInput(encData string) {
 		} else {
 			delete(a.winMenu, w.ID)
 		}
-		a.winMu.Unlock()
-	case "drag":
-		// These backends replay a whole path; they never advertised
-		// drag_phases (see gatherHostInfo), so a phased event here means a
-		// viewer got it wrong. Dropping it is right — acting on it would press
-		// and release once per chunk, turning a drag into a burst of clicks.
-		if ev.Phase != "" {
-			return
-		}
-		_ = b.focus(w)
-		_ = b.drag(w, ev.Path)
-	case "scroll":
-		// Raise only when this isn't already the front window — see
-		// frontWindowTracker for why timing was the wrong thing to key on.
-		if a.winFront.needsRaise(ev.ID) {
-			_ = b.focus(w)
-		}
-		_ = b.scroll(w, ev.X, ev.Y, ev.Dx, ev.Dy)
-	case "key":
-		// Keys land on whatever's focused; the user focuses the target by
-		// clicking it first, so we don't re-focus per keystroke (that would
-		// add ~100ms osascript latency to every character).
-		if ev.Special != "" {
-			_ = b.key(w, ev.Special)
-		} else if ev.Text != "" {
-			_ = b.typeText(w, ev.Text)
-		}
-	}
+	})
 }
 
 // handleWindowAck records a viewer's ack of a rendered frame, unblocking the
@@ -500,22 +443,6 @@ func (a *Agent) deliverWindowAck(id string, seq uint64) {
 // clickCount returns the click-state (1=single, 2=double, 3=triple) for a click
 // at (fx, fy) in window w, by timing it against the previous click. Mirrors how
 // the OS coalesces rapid clicks in one spot. Runs on the winOps worker only.
-func (a *Agent) clickCount(w winInfo, fx, fy float64) int {
-	x := w.X + int(fx*float64(w.W))
-	y := w.Y + int(fy*float64(w.H))
-	now := time.Now()
-	if now.Sub(a.winLastClickAt) < 450*time.Millisecond &&
-		absInt(x-a.winLastClickX) <= 4 && absInt(y-a.winLastClickY) <= 4 {
-		a.winClickN++
-		if a.winClickN > 3 {
-			a.winClickN = 1 // wrap after triple; further clicks start fresh
-		}
-	} else {
-		a.winClickN = 1
-	}
-	a.winLastClickAt, a.winLastClickX, a.winLastClickY = now, x, y
-	return a.winClickN
-}
 
 func absInt(n int) int {
 	if n < 0 {
@@ -618,6 +545,207 @@ func (a *Agent) setStayUnlocked(on bool) {
 // continuous gesture, short enough that a window which moved or closed is
 // noticed within one.
 const winScrollGestureGap = 400 * time.Millisecond
+
+// Resolved-window cache. findWindow enumerates EVERY window on the system
+// through an osascript — measured at ~114ms on an idle machine — and
+// both injection paths ran it for every event. The viewer emits a scroll
+// roughly every 50ms while a finger moves, so the lookup ALONE put the host
+// more than twice behind the input rate: the backlog grew for as long as the
+// gesture lasted and kept draining after the finger stopped, which is what
+// made scrolling overshoot rather than merely lag.
+type winLookupEntry struct {
+	w  winInfo
+	at time.Time
+}
+
+var (
+	winLookupMu    sync.Mutex
+	winLookupCache = map[string]winLookupEntry{}
+)
+
+// resolveWindowFor resolves a window id for an input event. The repeating
+// event kinds reuse a recent lookup; anything that depends on exact, current
+// geometry re-resolves. Entries expire with winScrollGestureGap, so a window
+// that moves, resizes or closes is picked up within one gesture's worth of
+// time — the same bound that already governs re-raising.
+func resolveWindowFor(b windowBackend, id string, reuse bool) (winInfo, error) {
+	now := time.Now()
+	if reuse {
+		winLookupMu.Lock()
+		e, ok := winLookupCache[id]
+		winLookupMu.Unlock()
+		if ok && now.Sub(e.at) < winScrollGestureGap {
+			return e.w, nil
+		}
+	}
+	w, err := findWindow(b, id)
+	if err != nil {
+		winLookupMu.Lock()
+		delete(winLookupCache, id) // gone — don't let a stale entry outlive it
+		winLookupMu.Unlock()
+		return w, err
+	}
+	winLookupMu.Lock()
+	for k, e := range winLookupCache { // opportunistic sweep; the map stays tiny
+		if now.Sub(e.at) > winScrollGestureGap {
+			delete(winLookupCache, k)
+		}
+	}
+	winLookupCache[id] = winLookupEntry{w: w, at: now}
+	winLookupMu.Unlock()
+	return w, nil
+}
+
+// reuseLookupFor decides whether an event may reuse a recently resolved
+// window instead of paying the ~114ms enumeration again. The rule is whether
+// the event depends on the window's CURRENT rectangle:
+//
+//   - scroll repeats many times a second and only moves content under a fixed
+//     pointer; key doesn't use geometry at all.
+//   - a live drag re-resolves once at "begin"; the window cannot meaningfully
+//     move out from under a drag the user is performing on it, and re-resolving
+//     per move is exactly the cost the phased protocol exists to avoid.
+//   - a click, and the legacy whole-path drag, place a pointer at an exact
+//     spot. A stale rectangle there is a click in the wrong place.
+func reuseLookupFor(kind, phase string) bool {
+	switch kind {
+	case "scroll", "key":
+		return true
+	case "drag":
+		return phase == "move" || phase == "end"
+	}
+	return false
+}
+
+// windowInput is one decrypted viewer input event. Both paths that inject input
+// — the in-process backend and the daemon — decode into this and hand it to
+// applyWindowInput, so there is one description of the wire format and one
+// implementation of what each kind means.
+type windowInput struct {
+	ID      string       `json:"id"`
+	Kind    string       `json:"kind"`
+	X       float64      `json:"x"`
+	Y       float64      `json:"y"`
+	Dx      float64      `json:"dx"`
+	Dy      float64      `json:"dy"`
+	Path    [][2]float64 `json:"path"`
+	Text    string       `json:"text"`
+	Special string       `json:"special"`
+	Button  string       `json:"button"` // "right" for the secondary button; else left
+	Count   int          `json:"count"`  // viewer-reported click count (1/2/3); 0 = unset
+	Phase   string       `json:"phase"`  // live-drag phase: begin, move, end
+}
+
+// clickRun turns a stream of clicks into native single/double/triple clicks for
+// viewers too old to report a count themselves. Extracted so both injection
+// paths have it: the daemon — the path macOS actually takes — had no fallback,
+// so an older viewer never got a double-click on a Mac.
+type clickRun struct {
+	mu    sync.Mutex
+	n     int
+	at    time.Time
+	lastX int
+	lastY int
+}
+
+func (c *clickRun) count(w winInfo, fx, fy float64) int {
+	x := w.X + int(fx*float64(w.W))
+	y := w.Y + int(fy*float64(w.H))
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	now := time.Now()
+	if now.Sub(c.at) < 450*time.Millisecond && absInt(x-c.lastX) <= 4 && absInt(y-c.lastY) <= 4 {
+		c.n++
+		if c.n > 3 {
+			c.n = 1 // wrap after triple; further clicks start fresh
+		}
+	} else {
+		c.n = 1
+	}
+	c.at, c.lastX, c.lastY = now, x, y
+	return c.n
+}
+
+// phasedDragger is a backend that can inject a drag as it happens rather than
+// replaying a path afterwards. Optional: a backend without it gets the batched
+// form, and only hosts whose backend has it advertise drag_phases.
+type phasedDragger interface {
+	dragPhase(w winInfo, phase string, fx, fy float64) error
+}
+
+// applyWindowInput injects one viewer event. front keeps a window from being
+// re-raised while it is already in front; clicks supplies a count for viewers
+// that don't report one; noteMenu (optional) records a right-click so the menu
+// it opens can be region-captured.
+//
+// This exists once because it used to exist twice — here and in the daemon —
+// and the copies drifted every time: only one learned the raise rule, only one
+// learned phased drags, only one had a click-count fallback. The platform that
+// runs the daemon copy was the one left behind each time.
+func applyWindowInput(b windowBackend, front *frontWindowTracker, clicks *clickRun, ev windowInput, noteMenu func(w winInfo, right bool)) {
+	w, err := resolveWindowFor(b, ev.ID, reuseLookupFor(ev.Kind, ev.Phase))
+	if err != nil {
+		return
+	}
+	switch ev.Kind {
+	case "click":
+		count := ev.Count
+		if count < 1 {
+			count = clicks.count(w, ev.X, ev.Y)
+		}
+		right := ev.Button == "right"
+		_ = b.focus(w)
+		front.note(ev.ID)
+		_ = b.clickN(w, ev.X, ev.Y, count, right)
+		if noteMenu != nil {
+			noteMenu(w, right)
+		}
+	case "drag":
+		pd, phased := b.(phasedDragger)
+		switch {
+		case ev.Phase == "":
+			// The viewer buffered the gesture and sent it after the pointer
+			// lifted; replayed at scripted speed.
+			_ = b.focus(w)
+			front.note(ev.ID)
+			_ = b.drag(w, ev.Path)
+		case !phased:
+			// This backend never advertised drag_phases, so a phased event
+			// means a viewer got it wrong. Acting on it would press and release
+			// once per chunk — a burst of clicks, not a drag.
+			return
+		case ev.Phase == "begin":
+			_ = b.focus(w)
+			front.note(ev.ID)
+			_ = pd.dragPhase(w, "down", ev.X, ev.Y)
+		case ev.Phase == "move":
+			// Each accumulated point in turn, so the target sees the real path
+			// rather than a jump to wherever the finger ended up.
+			for _, p := range ev.Path {
+				_ = pd.dragPhase(w, "move", p[0], p[1])
+			}
+		case ev.Phase == "end":
+			for _, p := range ev.Path {
+				_ = pd.dragPhase(w, "move", p[0], p[1])
+			}
+			_ = pd.dragPhase(w, "up", ev.X, ev.Y)
+		}
+	case "scroll":
+		if front.needsRaise(ev.ID) {
+			_ = b.focus(w)
+		}
+		_ = b.scroll(w, ev.X, ev.Y, ev.Dx, ev.Dy)
+	case "key":
+		// Keys land on whatever is focused; the target was focused by clicking
+		// it, so no raise per keystroke — that would add a window raise to
+		// every character.
+		if ev.Special != "" {
+			_ = b.key(w, ev.Special)
+		} else if ev.Text != "" {
+			_ = b.typeText(w, ev.Text)
+		}
+	}
+}
 
 // frontWindowTracker remembers which window was last brought to the front, so
 // an event only pays for a raise when it actually changes the front window.

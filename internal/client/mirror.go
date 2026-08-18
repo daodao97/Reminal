@@ -329,167 +329,30 @@ func mirrorServeCaptureRegion(conn net.Conn, args []string) {
 	_, _ = conn.Write(img)
 }
 
-// mirrorInputEvent mirrors the viewer input event the session forwards verbatim.
-type mirrorInputEvent struct {
-	ID      string       `json:"id"`
-	Kind    string       `json:"kind"`
-	X       float64      `json:"x"`
-	Y       float64      `json:"y"`
-	Dx      float64      `json:"dx"`
-	Dy      float64      `json:"dy"`
-	Path    [][2]float64 `json:"path"`
-	Text    string       `json:"text"`
-	Special string       `json:"special"`
-	Button  string       `json:"button"`
-	Count   int          `json:"count"`
-	// Phase drives a live drag: "begin", "move", "end". Empty means the old
-	// whole-path-after-the-fact drag, which viewers still send when the host
-	// hasn't advertised drag_phases.
-	Phase string `json:"phase,omitempty"`
-}
-
 // The daemon's record of the front window. Each input arrives on its own
 // short-lived connection, so this can't live on the connection. Same rule and
 // the same implementation the in-process backend uses — see frontWindowTracker,
 // which explains why raising is keyed on which window is in front rather than
 // on how recently the last event arrived.
-var mirrorFront frontWindowTracker
-
-// Resolved-window cache. findWindow enumerates EVERY window on the system
-// through an osascript — measured at ~114ms on an idle machine — and
-// mirrorServeInput ran it for every single event. The viewer emits a scroll
-// roughly every 50ms while a finger moves, so the lookup ALONE put the host
-// more than twice behind the input rate: the backlog grew for as long as the
-// gesture lasted and kept draining after the finger stopped, which is what
-// made scrolling overshoot rather than merely lag.
-type mirrorWinEntry struct {
-	w  winInfo
-	at time.Time
-}
-
 var (
-	mirrorWinMu    sync.Mutex
-	mirrorWinCache = map[string]mirrorWinEntry{}
+	mirrorFront  frontWindowTracker
+	mirrorClicks clickRun
 )
-
-// mirrorFindWindow resolves a window id for an input event. The repeating
-// event kinds reuse a recent lookup; anything that depends on exact, current
-// geometry re-resolves. Entries expire with winScrollGestureGap, so a window
-// that moves, resizes or closes is picked up within one gesture's worth of
-// time — the same bound that already governs re-raising.
-func mirrorFindWindow(b windowBackend, id string, reuse bool) (winInfo, error) {
-	now := time.Now()
-	if reuse {
-		mirrorWinMu.Lock()
-		e, ok := mirrorWinCache[id]
-		mirrorWinMu.Unlock()
-		if ok && now.Sub(e.at) < winScrollGestureGap {
-			return e.w, nil
-		}
-	}
-	w, err := findWindow(b, id)
-	if err != nil {
-		mirrorWinMu.Lock()
-		delete(mirrorWinCache, id) // gone — don't let a stale entry outlive it
-		mirrorWinMu.Unlock()
-		return w, err
-	}
-	mirrorWinMu.Lock()
-	for k, e := range mirrorWinCache { // opportunistic sweep; the map stays tiny
-		if now.Sub(e.at) > winScrollGestureGap {
-			delete(mirrorWinCache, k)
-		}
-	}
-	mirrorWinCache[id] = mirrorWinEntry{w: w, at: now}
-	mirrorWinMu.Unlock()
-	return w, nil
-}
-
-// mirrorReuseLookup decides whether an event may reuse a recently resolved
-// window instead of paying the ~114ms enumeration again. The rule is whether
-// the event depends on the window's CURRENT rectangle:
-//
-//   - scroll repeats many times a second and only moves content under a fixed
-//     pointer; key doesn't use geometry at all.
-//   - a live drag re-resolves once at "begin"; the window cannot meaningfully
-//     move out from under a drag the user is performing on it, and re-resolving
-//     per move is exactly the cost the phased protocol exists to avoid.
-//   - a click, and the legacy whole-path drag, place a pointer at an exact
-//     spot. A stale rectangle there is a click in the wrong place.
-func mirrorReuseLookup(kind, phase string) bool {
-	switch kind {
-	case "scroll", "key":
-		return true
-	case "drag":
-		return phase == "move" || phase == "end"
-	}
-	return false
-}
 
 // mirrorServeInput injects one forwarded viewer event using the daemon's granted
 // backend, then replies ok/error.
+// mirrorServeInput injects one forwarded viewer event using the daemon's granted
+// backend, then replies ok/error. The injection is applyWindowInput, shared with
+// the in-process path so the two cannot drift apart again.
 func mirrorServeInput(conn net.Conn, payload string) {
-	var ev mirrorInputEvent
+	var ev windowInput
 	if json.Unmarshal([]byte(payload), &ev) != nil {
 		fmt.Fprintln(conn, "error: bad event")
 		return
 	}
-	b := darwinWindows{}
-	// Scroll repeats many times a second and moves nothing but the content
-	// under a fixed pointer; keys don't use geometry at all. Both can reuse a
-	// recent lookup. A click or drag places the pointer at an exact spot, so
-	// those always re-resolve — landing one on a stale rect is a wrong click.
-	w, err := mirrorFindWindow(b, ev.ID, mirrorReuseLookup(ev.Kind, ev.Phase))
-	if err != nil {
-		fmt.Fprintln(conn, "error: window gone")
-		return
-	}
-	switch ev.Kind {
-	case "click":
-		count := ev.Count
-		if count < 1 {
-			count = 1
-		}
-		_ = b.focus(w)
-		mirrorFront.note(ev.ID)
-		_ = b.clickN(w, ev.X, ev.Y, count, ev.Button == "right")
-	case "drag":
-		switch ev.Phase {
-		case "":
-			// Legacy: the viewer buffered the whole gesture and sent it after
-			// the pointer lifted. Replayed at scripted speed.
-			_ = b.focus(w)
-			mirrorFront.note(ev.ID)
-			_ = b.drag(w, ev.Path)
-		case "begin":
-			_ = b.focus(w)
-			mirrorFront.note(ev.ID)
-			_ = b.dragPhase(w, "down", ev.X, ev.Y)
-		case "move":
-			// Points accumulated since the last send, in order. Each is posted
-			// as its own drag event so the target sees the real path rather
-			// than a jump to wherever the finger ended up.
-			for _, p := range ev.Path {
-				_ = b.dragPhase(w, "move", p[0], p[1])
-			}
-		case "end":
-			for _, p := range ev.Path {
-				_ = b.dragPhase(w, "move", p[0], p[1])
-			}
-			_ = b.dragPhase(w, "up", ev.X, ev.Y)
-		}
-	case "scroll":
-		if mirrorFront.needsRaise(ev.ID) {
-			_ = b.focus(w)
-		}
-		_ = b.scroll(w, ev.X, ev.Y, ev.Dx, ev.Dy)
-	case "key":
-		if ev.Special != "" {
-			_ = b.key(w, ev.Special)
-		} else if ev.Text != "" {
-			_ = b.typeText(w, ev.Text)
-		}
-	}
+	// The daemon has no Agent to hang state on, so it keeps its own record of
+	// the front window and its own run of clicks.
+	applyWindowInput(darwinWindows{}, &mirrorFront, &mirrorClicks, ev, nil)
 	fmt.Fprintln(conn, "ok")
 }
 

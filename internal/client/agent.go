@@ -317,14 +317,11 @@ type Agent struct {
 	winOps    chan func()
 	// Click-counting state for native double/triple-click detection. Touched
 	// only by the single winOps worker goroutine, so it needs no lock.
-	winClickN      int
-	winLastClickX  int
-	winLastClickY  int
-	winLastClickAt time.Time
 	// Scroll-gesture tracking (winOps worker only): we raise the target window
 	// once at the start of a gesture so scroll lands on it, then skip re-raising
 	// during the gesture to keep it smooth.
-	winFront frontWindowTracker
+	winFront  frontWindowTracker
+	winClicks clickRun
 
 	// WebRTC peer-to-peer frame transport. When a viewer can open a
 	// DataChannel, window frames + acks flow directly to it instead of through
