@@ -10,6 +10,7 @@ import (
 	"sync"
 	"testing"
 	"time"
+	"unicode/utf8"
 )
 
 // A window must be raised when it is not already the front one, and NOT
@@ -513,4 +514,54 @@ func TestGeometryProbeDoesNotStallTheStream(t *testing.T) {
 	if s.w.W != 800 && s.w.W != 1024 {
 		t.Fatalf("geometry not applied: %dx%d", s.w.W, s.w.H)
 	}
+}
+
+// The viewer is a remote party whose messages the relay only forwards, and the
+// work a field commands is not proportional to its own size: every point of a
+// phased drag is a separate injection, and a typed run becomes a script
+// argument. Sizes therefore cannot be taken on trust.
+func TestViewerSuppliedSizesAreBounded(t *testing.T) {
+	t.Run("a phased drag cannot demand unbounded injections", func(t *testing.T) {
+		winLookupMu.Lock()
+		winLookupCache = map[string]winLookupEntry{}
+		winLookupMu.Unlock()
+		b := &draggingBackend{}
+		b.wins = []winInfo{{ID: "w1", W: 800, H: 600}}
+		huge := make([][2]float64, 100000)
+		applyWindowInput(b, &inputState{}, windowInput{ID: "w1", Kind: "drag", Phase: "move", Path: huge}, nil)
+		if n := len(b.got()); n > winMaxDragPoints {
+			t.Fatalf("injected %d times for one event, cap is %d", n, winMaxDragPoints)
+		}
+		if len(b.got()) == 0 {
+			t.Fatal("clamped away entirely; a real gesture must still land")
+		}
+	})
+
+	t.Run("a typed run is clamped without splitting a character", func(t *testing.T) {
+		// Multi-byte throughout: a byte-wise cut would produce invalid UTF-8.
+		long := strings.Repeat("世", winMaxTypeRunes+500)
+		got := clampText(long, winMaxTypeRunes)
+		if len([]rune(got)) != winMaxTypeRunes {
+			t.Fatalf("clamped to %d runes, want %d", len([]rune(got)), winMaxTypeRunes)
+		}
+		if !utf8.ValidString(got) {
+			t.Fatal("clamping produced invalid UTF-8")
+		}
+		// Text within the bound is returned untouched.
+		if s := "hello"; clampText(s, winMaxTypeRunes) != s {
+			t.Fatal("clamped a string that was already short enough")
+		}
+	})
+
+	t.Run("click count is clamped to what a click-state can mean", func(t *testing.T) {
+		winLookupMu.Lock()
+		winLookupCache = map[string]winLookupEntry{}
+		winLookupMu.Unlock()
+		b := newRecording()
+		applyWindowInput(b, &inputState{}, windowInput{ID: "w1", Kind: "click", Count: 1 << 30}, nil)
+		joined := strings.Join(b.calls, " ")
+		if !strings.Contains(joined, fmt.Sprintf("click(n=%d", winMaxClickCount)) {
+			t.Fatalf("calls = %q, want the count clamped to %d", joined, winMaxClickCount)
+		}
+	})
 }

@@ -732,6 +732,45 @@ func (st *inputState) dragWatch(pd phasedDragger, w winInfo, fx, fy float64) {
 	st.drag.arm(func() { _ = pd.dragPhase(w, "up", fx, fy) })
 }
 
+// Bounds on what one viewer event may ask the host to do. The viewer sends far
+// less than any of these — a phased drag carries at most a few points, typed
+// runs are chunked — but a viewer is not something to take sizes from on
+// trust. It is a remote party whose messages the relay merely forwards, and
+// the work each field commands is not proportional to the field's own size:
+// every point of a phased drag is a separate injection, and a typed run
+// becomes a script argument.
+//
+// Truncating rather than rejecting: an oversized event is far likelier to be a
+// bug at the other end than an attack, and dropping it whole would lose a real
+// gesture where clipping it loses only its tail.
+const (
+	winMaxDragPoints = 64   // per phased event; each point is an injection
+	winMaxPathPoints = 512  // a whole-path drag becomes one script, so cheaper
+	winMaxTypeRunes  = 4096 // one typed run
+	winMaxClickCount = 3    // single, double, triple — nothing beyond means anything
+)
+
+// clampPath limits a viewer-supplied point list.
+func clampPath(pts [][2]float64, max int) [][2]float64 {
+	if len(pts) > max {
+		return pts[:max]
+	}
+	return pts
+}
+
+// clampText limits a viewer-supplied string by RUNES, so a cut never lands
+// inside a multi-byte character and hands the host invalid UTF-8.
+func clampText(s string, max int) string {
+	if len(s) <= max { // bytes >= runes, so this is a cheap early out
+		return s
+	}
+	r := []rune(s)
+	if len(r) <= max {
+		return s
+	}
+	return string(r[:max])
+}
+
 // applyWindowInput injects one viewer event. front keeps a window from being
 // re-raised while it is already in front; clicks supplies a count for viewers
 // that don't report one; noteMenu (optional) records a right-click so the menu
@@ -752,6 +791,9 @@ func applyWindowInput(b windowBackend, st *inputState, ev windowInput, noteMenu 
 		if count < 1 {
 			count = st.clicks.count(w, ev.X, ev.Y)
 		}
+		if count > winMaxClickCount {
+			count = winMaxClickCount
+		}
 		right := ev.Button == "right"
 		_ = b.focus(w)
 		st.front.note(ev.ID)
@@ -767,7 +809,7 @@ func applyWindowInput(b windowBackend, st *inputState, ev windowInput, noteMenu 
 			// lifted; replayed at scripted speed.
 			_ = b.focus(w)
 			st.front.note(ev.ID)
-			_ = b.drag(w, ev.Path)
+			_ = b.drag(w, clampPath(ev.Path, winMaxPathPoints))
 		case !phased:
 			// This backend never advertised drag_phases, so a phased event
 			// means a viewer got it wrong. Acting on it would press and release
@@ -781,7 +823,7 @@ func applyWindowInput(b windowBackend, st *inputState, ev windowInput, noteMenu 
 		case ev.Phase == "move":
 			// Each accumulated point in turn, so the target sees the real path
 			// rather than a jump to wherever the finger ended up.
-			for _, p := range ev.Path {
+			for _, p := range clampPath(ev.Path, winMaxDragPoints) {
 				_ = pd.dragPhase(w, "move", p[0], p[1])
 			}
 			if n := len(ev.Path); n > 0 {
@@ -790,7 +832,7 @@ func applyWindowInput(b windowBackend, st *inputState, ev windowInput, noteMenu 
 				st.dragWatch(pd, w, ev.X, ev.Y)
 			}
 		case ev.Phase == "end":
-			for _, p := range ev.Path {
+			for _, p := range clampPath(ev.Path, winMaxDragPoints) {
 				_ = pd.dragPhase(w, "move", p[0], p[1])
 			}
 			st.drag.disarm()
@@ -808,7 +850,7 @@ func applyWindowInput(b windowBackend, st *inputState, ev windowInput, noteMenu 
 		if ev.Special != "" {
 			_ = b.key(w, ev.Special)
 		} else if ev.Text != "" {
-			_ = b.typeText(w, ev.Text)
+			_ = b.typeText(w, clampText(ev.Text, winMaxTypeRunes))
 		}
 	}
 }
