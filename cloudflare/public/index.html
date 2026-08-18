@@ -5665,6 +5665,67 @@
           e.preventDefault();                       // we own the vertical drag now
         }
       }
+      // Tap a URL to open it. xterm activates a link only after it sees
+      // mousemove, mousedown AND mouseup land on that link, and all three are
+      // swallowed for touch further down so a scroll can never be read as a
+      // selection — so on a phone a link could never activate, and the URL had
+      // to be copied out by hand. Synthesising the trio would work, but it
+      // would also deliver a real click to any TUI with mouse reporting on, so
+      // resolve the link from the buffer instead: the tap stays a tap.
+      // Trailing punctuation is excluded — a URL at the end of a sentence
+      // shouldn't carry the full stop into the address bar.
+      const TAP_URL_RE = /https?:\/\/[^\s"'<>`{}|\\^[\]]+/g;
+      // Reads the LOGICAL line at a row. xterm stores a wrapped line as
+      // several rows, and a long URL is exactly the thing that wraps, so
+      // following isWrapped is what makes those tappable at all. Returns the
+      // joined text and where the tapped row starts inside it.
+      function logicalLineAt(buf, row) {
+        let start = row;
+        while (start > 0) {
+          const l = buf.getLine(start);
+          if (!l || !l.isWrapped) break;
+          start--;
+        }
+        let text = '', rowOffset = 0;
+        for (let i = start; i < buf.length; i++) {
+          const l = buf.getLine(i);
+          if (!l || (i > start && !l.isWrapped)) break;
+          if (i === row) rowOffset = text.length;
+          // Every row but the last must contribute exactly cols characters. A
+          // line wraps at the column boundary, so that is what makes a tapped
+          // column line up with an index in the joined text; a row reporting a
+          // different width would shift everything after it and split the URL
+          // being reassembled. (Wide CJK cells still count as one character
+          // here, so a tap on a line mixing them with a URL can be off — the
+          // URL itself resolves, only the hit test drifts.)
+          const next = buf.getLine(i + 1);
+          const continued = !!(next && next.isWrapped);
+          let seg = l.translateToString(false);
+          if (continued && seg.length !== term.cols) {
+            seg = seg.length > term.cols ? seg.slice(0, term.cols) : seg.padEnd(term.cols, ' ');
+          }
+          text += seg;
+          if (!continued) break;
+        }
+        return { text, rowOffset };
+      }
+      function linkAtPoint(clientX, clientY) {
+        try {
+          const { col, row } = pointToCell(clientX, clientY);
+          const buf = term.buffer.active;
+          const { text, rowOffset } = logicalLineAt(buf, row);
+          const idx = rowOffset + col;
+          TAP_URL_RE.lastIndex = 0;
+          let m;
+          while ((m = TAP_URL_RE.exec(text)) !== null) {
+            if (idx >= m.index && idx < m.index + m[0].length) {
+              return m[0].replace(/[.,;:!?)\]}'"]+$/, '');
+            }
+          }
+        } catch (_) {}
+        return null;
+      }
+
       function onTouchEnd(e) {
         if (seenGestureEvent(e)) return;
         // Only OUR gesture finger ends the drag. A palm or second touch lifting
@@ -5708,12 +5769,23 @@
           return;
         }
         // A quick tap (no long-press) while a selection is showing dismisses it.
+        const tp = e.changedTouches[0];
+        const quickStill = !!(tp && lpStart && Date.now() - downAt < LP_MS &&
+          Math.abs(tp.clientX - lpStart.x) < MOVE_CANCEL &&
+          Math.abs(tp.clientY - lpStart.y) < MOVE_CANCEL);
         if (active && lpStart) {
-          const quick = Date.now() - downAt < LP_MS;
-          const still = e.changedTouches[0] &&
-            Math.abs(e.changedTouches[0].clientX - lpStart.x) < MOVE_CANCEL &&
-            Math.abs(e.changedTouches[0].clientY - lpStart.y) < MOVE_CANCEL;
-          if (quick && still && lpStart.wasActive) { clearSelection(); suppressFocusClick = true; }
+          if (quickStill && lpStart.wasActive) { clearSelection(); suppressFocusClick = true; return; }
+        }
+        // Nothing to dismiss and the finger didn't travel: if that landed on a
+        // URL, open it. Runs inside the touchend gesture so the popup is not
+        // blocked. Deliberately after the dismiss branch — the first tap out of
+        // a selection clears it and does nothing else.
+        if (quickStill) {
+          const url = linkAtPoint(tp.clientX, tp.clientY);
+          if (url) {
+            suppressFocusClick = true;
+            window.open(url, '_blank', 'noopener,noreferrer');
+          }
         }
       }
 
