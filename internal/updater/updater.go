@@ -67,6 +67,9 @@ func CheckAndPromptOnStart(currentVersion string) {
 	}
 
 	latestTag, assetURL, critical, err := check(currentVersion, httpTimeoutBackground)
+	if errors.Is(err, errNoAssetForPlatform) {
+		return // nothing installable; stay quiet rather than nag about it
+	}
 	if err != nil || latestTag == "" {
 		return
 	}
@@ -110,6 +113,11 @@ func CheckAndPromptOnStart(currentVersion string) {
 // Upgrade runs the explicit `reminal upgrade` subcommand: forces a fresh
 // version check and applies the upgrade if one is available. Returns an
 // error so the caller can set a nonzero exit code on failure.
+// errNoAssetForPlatform means the newest release has no build for this
+// GOOS/GOARCH — usually because it is still publishing, or because one
+// platform's build failed while the others succeeded.
+var errNoAssetForPlatform = errors.New("no build for this platform in the latest release")
+
 // Upgrade performs an interactive upgrade. It reports whether the binary was
 // actually replaced (false when already on the latest release) so the caller can
 // skip post-upgrade work — like refreshing the background host — on a no-op.
@@ -117,6 +125,12 @@ func Upgrade(currentVersion string) (updated bool, err error) {
 	// Bypass the cache so explicit `reminal upgrade` always hits the network.
 	clearCache()
 	latestTag, assetURL, _, err := check(currentVersion, httpTimeoutInteractive)
+	if errors.Is(err, errNoAssetForPlatform) {
+		fmt.Printf("A newer release exists, but it has no %s/%s build yet — it may still be\n"+
+			"publishing, or that build failed. Staying on v%s; try again shortly.\n",
+			runtime.GOOS, runtime.GOARCH, currentVersion)
+		return false, nil
+	}
 	if err != nil {
 		return false, fmt.Errorf("check for updates: %w", err)
 	}
@@ -182,8 +196,17 @@ func check(currentVersion string, timeout time.Duration) (latestTag, assetURL st
 	writeCache(cacheEntry{CheckedAt: time.Now(), LatestTag: tag, AssetURL: url, CriticalMin: criticalMin})
 
 	critical = criticalMin != "" && newer(currentVersion, criticalMin)
-	if url == "" || (!critical && !newer(currentVersion, tag)) {
+	if !critical && !newer(currentVersion, tag) {
 		return "", "", false, nil
+	}
+	if url == "" {
+		// A newer release exists but carries nothing this platform can run.
+		// That is not "you are up to date", and reporting it as such is how a
+		// release that published only some of its builds becomes invisible:
+		// the tag is right there, the binary simply is not, and every client on
+		// the missing platform is told it has nothing to do. Releases are built
+		// one platform per job, so any single job failing leaves exactly this.
+		return "", "", false, errNoAssetForPlatform
 	}
 	return tag, url, critical, nil
 }
