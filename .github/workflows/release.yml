@@ -9,7 +9,36 @@ permissions:
   contents: write
 
 jobs:
+  # A tag used to go straight to building and publishing, so the only thing
+  # standing between a broken test and a release was somebody remembering to
+  # run them. This gate cannot live in ci.yml — `needs` reaches jobs in the same
+  # workflow only — so the checks are stated here too, and the build waits on
+  # them.
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+          cache: true
+      - name: Formatting
+        run: |
+          unformatted="$(gofmt -l ./cmd ./internal)"
+          if [ -n "$unformatted" ]; then
+            echo "::error::gofmt would change these files:"
+            echo "$unformatted"
+            exit 1
+          fi
+      - name: Vet
+        run: go vet ./...
+      - name: Test
+        run: go test ./...
+      - name: Test with the race detector
+        run: go test -race ./...
+
   release:
+    needs: test
     runs-on: ${{ matrix.os }}
     strategy:
       # Don't cancel sibling builds when one job races to create the release;
@@ -184,6 +213,13 @@ jobs:
         run: |
           set -uo pipefail
           version="${GITHUB_REF_NAME#v}"
+          if ! gh release view "$GITHUB_REF_NAME" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            # Nothing was published at all — the tests or every build failed.
+            # Reporting six missing binaries here would blame the assets for
+            # something that happened well before any were produced.
+            echo "::error title=Nothing published::$GITHUB_REF_NAME produced no release; check the test and build jobs above."
+            exit 1
+          fi
           have="$(gh release view "$GITHUB_REF_NAME" -R "$GITHUB_REPOSITORY" --json assets -q '.assets[].name' || true)"
           missing=""
           for a in darwin_arm64 darwin_amd64 linux_amd64 linux_arm64 windows_amd64 windows_arm64; do
