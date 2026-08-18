@@ -283,6 +283,9 @@ type Agent struct {
 	winBackend windowBackend
 	winMu      sync.Mutex
 	winStreams map[string]chan struct{}
+	// winSubs maps a window id to the set of viewer ids that asked for it, so
+	// one viewer closing a pane cannot stop a stream another is watching.
+	winSubs map[string]map[string]bool
 	// winAck maps a streaming window's id to a channel the viewer's frame acks
 	// are delivered on, so streamWindow can pace to the viewer (see streamWindow).
 	// Guarded by winMu.

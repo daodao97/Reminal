@@ -294,14 +294,22 @@ func (a *Agent) handleWindowCtl(encData string) {
 	var req struct {
 		Action string `json:"action"`
 		ID     string `json:"id"`
+		// Viewer is stable per tab. Without it a stop cannot be attributed, so
+		// one viewer closing a pane stopped the stream for everyone watching
+		// that window. Absent for viewers older than this field, which keeps
+		// their old all-or-nothing behaviour.
+		Viewer string `json:"viewer"`
 	}
 	if json.Unmarshal(plaintext, &req) != nil {
 		return
 	}
 	switch req.Action {
 	case "start":
-		a.startWindowStream(req.ID)
+		a.startWindowStream(req.ID, req.Viewer)
 	case "stop":
+		if a.dropWindowSub(req.ID, req.Viewer) {
+			return // somebody else is still watching this window
+		}
 		a.stopWindowStream(req.ID)
 		a.releaseWindowInput() // never leave a button held after a pane closes
 	}
@@ -447,9 +455,65 @@ func absInt(n int) int {
 	return n
 }
 
+// addWindowSub records that a viewer wants this window. Anonymous viewers (an
+// older build, which sends no id) are not tracked: nothing can be attributed to
+// them, so they keep the behaviour they were written against.
+func (a *Agent) addWindowSub(id, viewer string) {
+	if viewer == "" {
+		return
+	}
+	a.winMu.Lock()
+	defer a.winMu.Unlock()
+	if a.winSubs == nil {
+		a.winSubs = map[string]map[string]bool{}
+	}
+	if a.winSubs[id] == nil {
+		a.winSubs[id] = map[string]bool{}
+	}
+	a.winSubs[id][viewer] = true
+}
+
+// dropWindowSub removes a viewer's interest and reports whether the stream
+// should be LEFT RUNNING because somebody else still wants it.
+//
+// A window has one stream shared by every viewer of it, and a stop used to end
+// it outright. So two people watching the same window, one of them closing the
+// pane, froze the other's picture until its own stall detection re-asked for it
+// — around ten seconds of a still image with nothing to say why.
+func (a *Agent) dropWindowSub(id, viewer string) bool {
+	a.winMu.Lock()
+	defer a.winMu.Unlock()
+	subs := a.winSubs[id]
+	if viewer == "" || subs == nil {
+		// Unattributable, so it has to be taken at face value: stop, and forget
+		// everyone, since we cannot know who is left.
+		delete(a.winSubs, id)
+		return false
+	}
+	delete(subs, viewer)
+	if len(subs) == 0 {
+		delete(a.winSubs, id)
+		return false
+	}
+	return true
+}
+
+// forgetWindowSubs clears a window's subscribers when its stream ends for any
+// other reason, so a later start is not judged against a stale set.
+func (a *Agent) forgetWindowSubs(id string) {
+	a.winMu.Lock()
+	if id == "" {
+		a.winSubs = nil
+	} else {
+		delete(a.winSubs, id)
+	}
+	a.winMu.Unlock()
+}
+
 // startWindowStream launches a capture goroutine for the given window unless
 // one is already running for it. Multiple windows can stream concurrently.
-func (a *Agent) startWindowStream(id string) {
+func (a *Agent) startWindowStream(id, viewer string) {
+	a.addWindowSub(id, viewer)
 	b := a.windows()
 	if b.unsupported() != "" {
 		return
@@ -495,6 +559,7 @@ func (a *Agent) startWindowStream(id string) {
 // stopWindowStream ends the stream for one window id (its pane was closed).
 // An empty id stops every stream (viewer left / connection dropped).
 func (a *Agent) stopWindowStream(id string) {
+	a.forgetWindowSubs(id)
 	a.winMu.Lock()
 	if id == "" {
 		for k, ch := range a.winStreams {

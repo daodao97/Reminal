@@ -6541,7 +6541,7 @@
       infoEl.addEventListener('pointerdown', (e) => e.stopPropagation()); // don't drag/focus when interacting
 
       focusPane(w.id);
-      sendWin('window_ctl', { action: 'start', id: w.id });
+      sendWin('window_ctl', { action: 'start', id: w.id, viewer: viewerId });
       announcePaneInterest();
       savePaneLayout();
     }
@@ -6627,7 +6627,7 @@
     function closePane(id, handOff) {
       const p = panes.get(id);
       if (!p) return;
-      if (!handOff) sendWin('window_ctl', { action: 'stop', id });
+      if (!handOff) sendWin('window_ctl', { action: 'stop', id, viewer: viewerId });
       if (p.lastUrl) URL.revokeObjectURL(p.lastUrl);
       try { if (p.vdec && p.vdec.state !== 'closed') p.vdec.close(); } catch (_) {}
       if (p.renderRAF) { cancelAnimationFrame(p.renderRAF); p.renderRAF = 0; }
@@ -6658,7 +6658,7 @@
       if (winStreamsPaused || !panes.size) return;
       winStreamsPaused = true;
       for (const [id, p] of panes) {
-        sendWin('window_ctl', { action: 'stop', id });
+        sendWin('window_ctl', { action: 'stop', id, viewer: viewerId });
       }
     }
     // A restarted stream numbers frames from zero again, so every cursor that
@@ -6684,7 +6684,7 @@
       winStreamsPaused = false;
       for (const [id, p] of panes) {
         resetPaneStreamCursors(p);
-        sendWin('window_ctl', { action: 'start', id });
+        sendWin('window_ctl', { action: 'start', id, viewer: viewerId });
       }
     }
     function resumeWinStreams() {
@@ -7043,7 +7043,7 @@
         if (p.gotFrame && staleFor > 9000 && (!p.reqAt || performance.now() - p.reqAt > 10000)) {
           p.reqAt = performance.now();
           resetPaneStreamCursors(p);
-          sendWin('window_ctl', { action: 'start', id: p.w.id });
+          sendWin('window_ctl', { action: 'start', id: p.w.id, viewer: viewerId });
         }
         // Safety net for playout: if frames are queued and overdue, rAF is not
         // running (every window holding this pane is hidden, or the browser

@@ -615,3 +615,62 @@ func TestHostAdvertisesWhatARepeatedHelloCosts(t *testing.T) {
 		t.Fatalf("idle viewers = %d, want the caps-only report recorded", got)
 	}
 }
+
+// A window has one stream shared by everyone watching it, so a stop has to say
+// who is stopping. Without that, two people on the same window meant either one
+// of them closing a pane froze the other's picture until its own stall
+// detection re-asked — a still image for about ten seconds with nothing to say
+// why.
+func TestStopOnlyEndsAStreamNobodyElseWants(t *testing.T) {
+	a := &Agent{}
+
+	t.Run("another watcher keeps it alive", func(t *testing.T) {
+		a.winSubs = nil
+		a.addWindowSub("w1", "viewerA")
+		a.addWindowSub("w1", "viewerB")
+		if keep := a.dropWindowSub("w1", "viewerB"); !keep {
+			t.Fatal("stream ended while viewerA was still watching")
+		}
+		if keep := a.dropWindowSub("w1", "viewerA"); keep {
+			t.Fatal("stream kept alive after the last watcher left")
+		}
+	})
+
+	t.Run("the same viewer stopping twice does not strand it", func(t *testing.T) {
+		a.winSubs = nil
+		a.addWindowSub("w1", "viewerA")
+		a.dropWindowSub("w1", "viewerA")
+		if keep := a.dropWindowSub("w1", "viewerA"); keep {
+			t.Fatal("a repeated stop reported a watcher that had already gone")
+		}
+	})
+
+	t.Run("windows are tracked apart", func(t *testing.T) {
+		a.winSubs = nil
+		a.addWindowSub("w1", "viewerA")
+		a.addWindowSub("w2", "viewerA")
+		if keep := a.dropWindowSub("w1", "viewerA"); keep {
+			t.Fatal("closing w1 was held open by an interest in w2")
+		}
+		if _, still := a.winSubs["w2"]; !still {
+			t.Fatal("closing w1 forgot who wanted w2")
+		}
+	})
+
+	t.Run("a viewer too old to identify itself keeps the old behaviour", func(t *testing.T) {
+		a.winSubs = nil
+		a.addWindowSub("w1", "") // records nothing
+		if keep := a.dropWindowSub("w1", ""); keep {
+			t.Fatal("an unattributable stop must be taken at face value")
+		}
+		// And it must not be able to strand a stream that others do want:
+		// nothing can be attributed, so the set is cleared with it.
+		a.addWindowSub("w1", "viewerA")
+		if keep := a.dropWindowSub("w1", ""); keep {
+			t.Fatal("an unattributable stop left the stream running")
+		}
+		if _, still := a.winSubs["w1"]; still {
+			t.Fatal("subscriber set survived an unattributable stop")
+		}
+	})
+}
