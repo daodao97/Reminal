@@ -128,6 +128,13 @@ var forwardableTypes = map[protocol.MessageType]bool{
 	protocol.TypeWindowFrame: true, protocol.TypeWindowInput: true, protocol.TypeWindowAck: true,
 	protocol.TypeAppList: true, protocol.TypeAppOpen: true,
 	protocol.TypeHostInfo: true, protocol.TypeNewSession: true,
+	// File transfer and notices ride the session socket too: `reminal send`
+	// and `reminal notify` push to viewers, a viewer uploads back, and the
+	// host acknowledges. Missing here, all four did nothing at all on this
+	// relay while working through the hosted one, which inspects nothing and
+	// so cannot leave a type behind.
+	protocol.TypeNotify: true, protocol.TypeDownload: true,
+	protocol.TypeUpload: true, protocol.TypeUploadAck: true,
 	protocol.TypeWebRTCHello: true, protocol.TypeWebRTCOffer: true,
 	protocol.TypeWebRTCAnswer: true, protocol.TypeWebRTCICE: true,
 }
