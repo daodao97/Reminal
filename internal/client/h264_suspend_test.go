@@ -6,6 +6,7 @@ package client
 import (
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 )
@@ -119,4 +120,32 @@ func contains(s, sub string) bool {
 		}
 	}
 	return false
+}
+
+// What the pane displays when the daemon is briefly away has to read as a
+// state, not as a stack trace. The wrapped cause is a socket path and an errno:
+// useful in a log, meaningless on screen, and it was the entire message shown
+// during every restart and upgrade.
+func TestTransientCaptureErrorIsReadable(t *testing.T) {
+	wrapped := fmt.Errorf("%w: %w", errMirrorUnavailable,
+		errors.New("dial unix /Users/someone/.reminal/mirror.sock: connect: no such file or directory"))
+
+	// The cause stays reachable for logs and for errors.Is.
+	if !errors.Is(wrapped, errMirrorUnavailable) {
+		t.Fatal("transient failures must stay recognisable")
+	}
+	if !strings.Contains(wrapped.Error(), "no such file") {
+		t.Fatal("cause lost from the error itself")
+	}
+
+	// What a pane is given must not carry it.
+	shown := errMirrorUnavailable.Error()
+	for _, leak := range []string{"dial unix", "/Users/", "connect:", "no such file", ".sock"} {
+		if strings.Contains(shown, leak) {
+			t.Fatalf("pane message %q leaks %q", shown, leak)
+		}
+	}
+	if !strings.Contains(shown, "retry") {
+		t.Fatalf("pane message %q does not say what is happening", shown)
+	}
 }

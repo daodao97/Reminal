@@ -1582,6 +1582,12 @@ func (s *winStream) ensureHelper() {
 	// every `restart --all` quietly drop live panes to JPEG until they were
 	// closed and reopened.
 	if errors.Is(err, errMirrorUnavailable) {
+		// Say only the part that means something to whoever is looking at the
+		// pane. The wrapped cause is a socket path and an errno — worth having
+		// in a log, but it is the whole of what the overlay displayed, so a
+		// restart put "dial unix /Users/…/mirror.sock: connect: no such file
+		// or directory" on screen where "starting — retry" was the message.
+		s.helperErr = errMirrorUnavailable.Error()
 		s.helperRetryAt = time.Now().Add(helperUnavailableRetry)
 		return
 	}
