@@ -165,3 +165,35 @@ jobs:
           # doesn't become /releases/latest — install.sh keeps resolving the last
           # stable for everyone while we validate a candidate.
           prerelease: ${{ contains(github.ref_name, '-') }}
+
+  # Each platform uploads its own build, and a failing job does not stop its
+  # siblings — so one job dying leaves a published release, marked latest,
+  # carrying every other platform's binary and none for that one. Nothing
+  # downstream treats that as wrong: the client looks for its own asset, does
+  # not find one, and reports being up to date. v3.0.8 shipped that way after a
+  # rate-limited checkout, and it was found by chance rather than by anything
+  # saying so.
+  verify:
+    needs: release
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Every platform must have published a build
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -uo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          have="$(gh release view "$GITHUB_REF_NAME" -R "$GITHUB_REPOSITORY" --json assets -q '.assets[].name' || true)"
+          missing=""
+          for a in darwin_arm64 darwin_amd64 linux_amd64 linux_arm64 windows_amd64 windows_arm64; do
+            name="reminal_${version}_${a}.tar.gz"
+            printf '%s\n' "$have" | grep -qxF "$name" || missing="$missing $name"
+          done
+          if [ -n "$missing" ]; then
+            echo "::error title=Incomplete release::$GITHUB_REF_NAME is missing:$missing"
+            echo "Anyone on those platforms is told 'already up to date' and never upgrades."
+            echo "Re-run the failed matrix job, then re-run this check."
+            exit 1
+          fi
+          echo "All six platform builds are present for $GITHUB_REF_NAME."
