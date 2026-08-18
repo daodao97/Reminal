@@ -422,6 +422,20 @@ func TestUnwatchedStreamIsReaped(t *testing.T) {
 		t.Fatal("stream outlived every viewer reporting no panes")
 	}
 
+	// An unknown viewer count must never reap. Zero means the relay has not
+	// reported yet (or resetViewerSize just cleared it between connections);
+	// a real zero already stops every stream through the count transition, so
+	// reading it as "nobody is watching" would kill live panes on reconnect.
+	unknown := &Agent{}
+	unknown.viewerCount = 0
+	s3 := &winStream{a: unknown, noWatcherSince: time.Now().Add(-streamNoWatcherTimeout - time.Second)}
+	if !s3.watched() {
+		t.Fatal("reaped a stream on an unknown viewer count")
+	}
+	if !s3.noWatcherSince.IsZero() {
+		t.Fatal("countdown left running while the viewer count is unknown")
+	}
+
 	// One viewer opens a pane again: the countdown must reset, not resume.
 	one := 1
 	watching.noteViewerCap("v2", true, &one)

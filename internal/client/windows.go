@@ -1089,10 +1089,22 @@ const helperUnavailableRetry = 500 * time.Millisecond
 // failed to set itself up.
 const helperFastDeath = 3 * time.Second
 
-// h264SuspendFor is how long a stream stays on JPEG after h264 looked broken.
-// Long enough that a machine which truly cannot encode isn't retrying in a
-// loop, short enough that a misread (a daemon bounce caught inside
-// helperFastDeath) costs a minute of JPEG rather than the life of the pane.
+// h264SuspendMax caps the backoff below. A machine that keeps failing is
+// answering the question — stop asking it every minute.
+const h264SuspendMax = 30 * time.Minute
+
+// h264SuspendFor is the FIRST suspension after h264 looked broken.
+// Each consecutive failure doubles it, up to h264SuspendMax, and a helper that
+// starts in h264 clears the run.
+//
+// A fixed interval is wrong in both directions. Latching permanently — what
+// this replaced — meant one misread, such as a daemon bounce caught inside
+// helperFastDeath, cost the pane its video for as long as it stayed open.
+// Retrying at a fixed minute forever is the mirror of that fault: on a machine
+// with no usable encoder, every retry restarts the helper, fails, and restarts
+// it again, so the picture hitches twice a minute for the life of the session
+// to re-ask a question already answered. Backing off recovers quickly from a
+// wrong guess and goes quiet on a right one.
 const h264SuspendFor = 60 * time.Second
 
 // winSinks is the resolved set of destinations for ONE frame — the single
@@ -1146,6 +1158,9 @@ type winStream struct {
 	// stream its video for as long as the pane stayed open. Re-testing once a
 	// minute is cheap, and a genuinely broken encoder still can't flap.
 	h264BrokenUntil time.Time
+	// h264Suspend is the current backoff length; it doubles per consecutive
+	// failure and resets once a helper actually starts in h264.
+	h264Suspend time.Duration
 	// Relay batching: AUs accumulate here and ship as ONE message per
 	// wsFrameMinInterval, because the relay bills per message, not per byte.
 	wsBatch         []winFrame
@@ -1365,7 +1380,12 @@ func (s *winStream) negotiateCodec() {
 // not reported at all are assumed to want frames, so this never acts on
 // silence — only on everyone actively saying they are watching nothing.
 func (s *winStream) watched() bool {
-	if s.a.framesWantedBy() > 0 {
+	// A viewer count of zero is "we have not heard from the relay", not
+	// "nobody is here" — the same reading wsSinkNeeded takes of it, and a
+	// genuine zero already stops every stream through the count transition.
+	// It is also what resetViewerSize leaves behind between connections, so
+	// treating it as agreement would reap live panes across a reconnect.
+	if s.a.currentViewerCount() <= 0 || s.a.framesWantedBy() > 0 {
 		s.noWatcherSince = time.Time{}
 		return true
 	}
@@ -1493,6 +1513,9 @@ func (s *winStream) ensureHelper() {
 		s.helper = h
 		s.helperErr = ""
 		s.helperStarted = time.Now()
+		if s.codec == "h264" {
+			s.h264Suspend = 0 // it works here; forget the run of failures
+		}
 		return
 	}
 	s.helperErr = err.Error()
@@ -1528,7 +1551,12 @@ func (s *winStream) ensureHelper() {
 // here on evidence that h264 specifically failed — never on a failure that
 // says nothing about the codec (see errMirrorUnavailable).
 func (s *winStream) suspendH264() {
-	s.h264BrokenUntil = time.Now().Add(h264SuspendFor)
+	if s.h264Suspend == 0 {
+		s.h264Suspend = h264SuspendFor
+	} else if s.h264Suspend *= 2; s.h264Suspend > h264SuspendMax {
+		s.h264Suspend = h264SuspendMax
+	}
+	s.h264BrokenUntil = time.Now().Add(s.h264Suspend)
 	s.codec = ""
 }
 

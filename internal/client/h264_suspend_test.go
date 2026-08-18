@@ -58,6 +58,42 @@ func TestH264SuspensionExpires(t *testing.T) {
 	}
 }
 
+// A machine with no usable encoder answers the same way every time, and each
+// retry costs two helper restarts and a visible hitch. Backing off keeps a
+// wrong guess cheap to recover from without hitching the picture every minute
+// for the life of the session to re-ask a settled question.
+func TestH264SuspensionBacksOff(t *testing.T) {
+	s := &winStream{codec: "h264"}
+	var last time.Duration
+	for i := 0; i < 12; i++ {
+		s.codec = "h264"
+		s.suspendH264()
+		got := s.h264Suspend
+		if i == 0 && got != h264SuspendFor {
+			t.Fatalf("first suspension = %v, want %v", got, h264SuspendFor)
+		}
+		if i > 0 && got < last {
+			t.Fatalf("suspension shrank: %v then %v", last, got)
+		}
+		if got > h264SuspendMax {
+			t.Fatalf("suspension %v exceeded the cap %v", got, h264SuspendMax)
+		}
+		last = got
+	}
+	if last != h264SuspendMax {
+		t.Fatalf("backoff settled at %v, want the cap %v", last, h264SuspendMax)
+	}
+
+	// A helper that starts in h264 means the machine can do it after all —
+	// a later transient failure must not resume at half an hour.
+	s.h264Suspend = 0
+	s.codec = "h264"
+	s.suspendH264()
+	if s.h264Suspend != h264SuspendFor {
+		t.Fatalf("after a success the run restarts at %v, want %v", s.h264Suspend, h264SuspendFor)
+	}
+}
+
 // The retry pause has to match what actually went wrong: an unreachable daemon
 // is back in about a second, so the ten-second cooldown meant for a genuine
 // capture failure just leaves a stale error on screen.
