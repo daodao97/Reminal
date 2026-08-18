@@ -365,6 +365,7 @@ func (a *Agent) handleWindowInput(encData string) {
 		Special string       `json:"special"`
 		Button  string       `json:"button"` // "right" for the secondary button; else left
 		Count   int          `json:"count"`  // viewer-reported click count (1/2/3); 0 = unset
+		Phase   string       `json:"phase"`  // live-drag phase; only darwin advertises support
 	}
 	if json.Unmarshal(plaintext, &ev) != nil {
 		return
@@ -406,6 +407,13 @@ func (a *Agent) handleWindowInput(encData string) {
 		}
 		a.winMu.Unlock()
 	case "drag":
+		// These backends replay a whole path; they never advertised
+		// drag_phases (see gatherHostInfo), so a phased event here means a
+		// viewer got it wrong. Dropping it is right — acting on it would press
+		// and release once per chunk, turning a drag into a burst of clicks.
+		if ev.Phase != "" {
+			return
+		}
 		_ = b.focus(w)
 		_ = b.drag(w, ev.Path)
 	case "scroll":
@@ -810,6 +818,24 @@ func wsSinkNeeded(viewerCount, confirmed int) bool {
 // and PERMANENTLY; now it just degrades until the next retry succeeds.
 const helperRetryCooldown = 10 * time.Second
 
+// helperUnavailableRetry is the pause after a failure that only means the
+// daemon wasn't reachable. A restart or upgrade is over in about a second, so
+// the full helperRetryCooldown just leaves the pane showing a capture error
+// long after capture became possible again.
+const helperUnavailableRetry = 500 * time.Millisecond
+
+// helperFastDeath is how soon after starting a helper's death is taken as
+// evidence against the codec rather than as ordinary churn. A long-lived
+// helper dying is a daemon restart or window change; one that dies immediately
+// failed to set itself up.
+const helperFastDeath = 3 * time.Second
+
+// h264SuspendFor is how long a stream stays on JPEG after h264 looked broken.
+// Long enough that a machine which truly cannot encode isn't retrying in a
+// loop, short enough that a misread (a daemon bounce caught inside
+// helperFastDeath) costs a minute of JPEG rather than the life of the pane.
+const h264SuspendFor = 60 * time.Second
+
 // winSinks is the resolved set of destinations for ONE frame — the single
 // source of truth for who receives it. Every throttle (the billed-WS rate cap,
 // the probe cadence) is applied during resolution, so "will anyone take this
@@ -855,7 +881,12 @@ type winStream struct {
 	capNative     bool
 	codec         string // "" (jpeg), or "h264" when every viewer can decode it
 	wsVideo       bool   // some viewer needs the relay copy — batch video for it
-	h264Broken    bool   // h264 failed on this stream (old daemon, no encoder) — stay jpeg
+	// h264BrokenUntil suspends h264 on this stream after a failure that looked
+	// like the codec's fault (old daemon, no encoder). Bounded rather than
+	// permanent: the evidence is a guess, and a wrong guess used to cost the
+	// stream its video for as long as the pane stayed open. Re-testing once a
+	// minute is cheap, and a genuinely broken encoder still can't flap.
+	h264BrokenUntil time.Time
 	// Relay batching: AUs accumulate here and ship as ONE message per
 	// wsFrameMinInterval, because the relay bills per message, not per byte.
 	wsBatch         []winFrame
@@ -1011,7 +1042,7 @@ func (s *winStream) run() {
 // billed messages that one-JPEG-per-message spent on 5fps. wsVideo reports
 // whether any viewer needs the relay copy this iteration.
 func (s *winStream) desiredCodec() (codec string, wsVideo bool) {
-	if s.h264Broken || os.Getenv("REMINAL_NO_H264") != "" {
+	if time.Now().Before(s.h264BrokenUntil) || os.Getenv("REMINAL_NO_H264") != "" {
 		return "", false
 	}
 	if !s.a.viewersCanH264() {
@@ -1162,38 +1193,65 @@ func (s *winStream) ensureHelper() {
 		badFraming := s.helper.badFraming.Load()
 		s.helper.stop()
 		s.helper = nil
+		fast := time.Since(s.helperStarted) < helperFastDeath
 		s.helperRetryAt = time.Now().Add(helperRetryCooldown)
-		if s.codec == "h264" && (badFraming || time.Since(s.helperStarted) < 3*time.Second) {
-			s.h264Broken = true
-			s.codec = ""
+		if !fast {
+			// It ran fine and then stopped: a daemon restart, a window change.
+			// Come back promptly and let the start attempt classify what is
+			// wrong — sitting out ten seconds here is why every restart left
+			// panes reading "capture helper exited" long after capture worked.
+			s.helperRetryAt = time.Now().Add(helperUnavailableRetry)
+		}
+		if s.codec == "h264" && (badFraming || fast) {
+			s.suspendH264()
 			s.helperRetryAt = time.Time{} // retry as jpeg right away
 		}
 	}
 	if time.Now().Before(s.helperRetryAt) {
 		return
 	}
-	if h, err := startCaptureHelper(s.w.ID, winMaxWidth, winCaptureQuality, s.captureFPS(), s.codec); err == nil {
+	h, err := startCaptureHelper(s.w.ID, winMaxWidth, winCaptureQuality, s.captureFPS(), s.codec)
+	if err == nil {
 		s.helper = h
 		s.helperErr = ""
 		s.helperStarted = time.Now()
-	} else if s.codec == "h264" {
-		// Couldn't even start in h264 mode (helper missing under an old daemon,
-		// VTCompressionSession unavailable). Fall back to JPEG immediately —
-		// the viewer is waiting for frames.
-		s.h264Broken = true
-		s.codec = ""
-		s.helperErr = err.Error()
+		return
+	}
+	s.helperErr = err.Error()
+	// The service was simply not there to answer — a daemon restart, an
+	// upgrade. That is not a verdict on the codec, and it clears in about a
+	// second, so keep the codec and come back almost immediately. Latching
+	// h264 off here (and then sitting out a ten-second cooldown) is what made
+	// every `restart --all` quietly drop live panes to JPEG until they were
+	// closed and reopened.
+	if errors.Is(err, errMirrorUnavailable) {
+		s.helperRetryAt = time.Now().Add(helperUnavailableRetry)
+		return
+	}
+	if s.codec == "h264" {
+		// Couldn't start in h264 mode for a reason the daemon actually
+		// reported (helper missing under an old daemon, VTCompressionSession
+		// unavailable). Fall back to JPEG immediately — the viewer is waiting
+		// for frames — and re-test h264 once the suspension lapses.
+		s.suspendH264()
 		if h, jerr := startCaptureHelper(s.w.ID, winMaxWidth, winCaptureQuality, winHelperFPS, ""); jerr == nil {
 			s.helper = h
 			s.helperErr = ""
 			s.helperStarted = time.Now()
-		} else {
-			s.helperRetryAt = time.Now().Add(helperRetryCooldown)
+			return
 		}
-	} else {
-		s.helperErr = err.Error()
 		s.helperRetryAt = time.Now().Add(helperRetryCooldown)
+		return
 	}
+	s.helperRetryAt = time.Now().Add(helperRetryCooldown)
+}
+
+// suspendH264 drops this stream to JPEG and schedules a re-test. Callers reach
+// here on evidence that h264 specifically failed — never on a failure that
+// says nothing about the codec (see errMirrorUnavailable).
+func (s *winStream) suspendH264() {
+	s.h264BrokenUntil = time.Now().Add(h264SuspendFor)
+	s.codec = ""
 }
 
 // activeMenu returns the window's live right-click region-capture entry, if the

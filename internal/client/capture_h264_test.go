@@ -351,7 +351,10 @@ func TestDesiredCodec(t *testing.T) {
 	for _, tc := range cases {
 		a := mkAgent(tc.peers...)
 		a.viewerCount = tc.viewers
-		s := &winStream{a: a, h264Broken: tc.broken}
+		s := &winStream{a: a}
+		if tc.broken {
+			s.h264BrokenUntil = time.Now().Add(h264SuspendFor)
+		}
 		got, gotWS := s.desiredCodec()
 		if got != tc.want || (got != "" && gotWS != tc.wantWS) {
 			t.Errorf("%s: desiredCodec() = (%q, ws=%v), want (%q, ws=%v)", tc.name, got, gotWS, tc.want, tc.wantWS)

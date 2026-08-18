@@ -4,6 +4,7 @@
 package client
 
 import (
+	"runtime"
 	"testing"
 	"time"
 )
@@ -158,4 +159,39 @@ func TestMirrorFindWindowReusesLookupWithinAGesture(t *testing.T) {
 			t.Fatal("stale entry survived a failed lookup")
 		}
 	})
+}
+
+// Which events may reuse a resolved window is a correctness question, not just
+// a performance one: anything that places a pointer at an exact spot must see
+// the window's current rectangle, or the pointer lands somewhere else.
+func TestMirrorReuseLookupOnlyWhereGeometryIsStable(t *testing.T) {
+	for _, tc := range []struct {
+		kind, phase string
+		want        bool
+		why         string
+	}{
+		{"scroll", "", true, "repeats many times a second under a fixed pointer"},
+		{"key", "", true, "does not use geometry at all"},
+		{"drag", "begin", false, "the press must land on the current rectangle"},
+		{"drag", "move", true, "the window cannot move out from under a live drag"},
+		{"drag", "end", true, "continues the same gesture"},
+		{"drag", "", false, "legacy whole-path replay places its own press"},
+		{"click", "", false, "a stale rectangle is a click in the wrong place"},
+	} {
+		if got := mirrorReuseLookup(tc.kind, tc.phase); got != tc.want {
+			t.Errorf("mirrorReuseLookup(%q, %q) = %v, want %v — %s",
+				tc.kind, tc.phase, got, tc.want, tc.why)
+		}
+	}
+}
+
+// The phased protocol is opt-in per host. A viewer that sent phases to a host
+// which replays whole paths would press and release once per chunk — a burst
+// of clicks where the user meant one drag — so the flag has to track which
+// backends actually implement the phases.
+func TestDragPhasesAdvertisedOnlyWhereImplemented(t *testing.T) {
+	h := gatherHostInfo()
+	if want := runtime.GOOS == "darwin"; h.DragPhases != want {
+		t.Fatalf("DragPhases = %v on %s, want %v", h.DragPhases, runtime.GOOS, want)
+	}
 }

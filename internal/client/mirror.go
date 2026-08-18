@@ -342,6 +342,10 @@ type mirrorInputEvent struct {
 	Special string       `json:"special"`
 	Button  string       `json:"button"`
 	Count   int          `json:"count"`
+	// Phase drives a live drag: "begin", "move", "end". Empty means the old
+	// whole-path-after-the-fact drag, which viewers still send when the host
+	// hasn't advertised drag_phases.
+	Phase string `json:"phase,omitempty"`
 }
 
 // Scroll-gesture tracking for the daemon. Each input arrives on its own
@@ -417,6 +421,27 @@ func mirrorFindWindow(b windowBackend, id string, reuse bool) (winInfo, error) {
 	return w, nil
 }
 
+// mirrorReuseLookup decides whether an event may reuse a recently resolved
+// window instead of paying the ~114ms enumeration again. The rule is whether
+// the event depends on the window's CURRENT rectangle:
+//
+//   - scroll repeats many times a second and only moves content under a fixed
+//     pointer; key doesn't use geometry at all.
+//   - a live drag re-resolves once at "begin"; the window cannot meaningfully
+//     move out from under a drag the user is performing on it, and re-resolving
+//     per move is exactly the cost the phased protocol exists to avoid.
+//   - a click, and the legacy whole-path drag, place a pointer at an exact
+//     spot. A stale rectangle there is a click in the wrong place.
+func mirrorReuseLookup(kind, phase string) bool {
+	switch kind {
+	case "scroll", "key":
+		return true
+	case "drag":
+		return phase == "move" || phase == "end"
+	}
+	return false
+}
+
 // mirrorServeInput injects one forwarded viewer event using the daemon's granted
 // backend, then replies ok/error.
 func mirrorServeInput(conn net.Conn, payload string) {
@@ -430,8 +455,7 @@ func mirrorServeInput(conn net.Conn, payload string) {
 	// under a fixed pointer; keys don't use geometry at all. Both can reuse a
 	// recent lookup. A click or drag places the pointer at an exact spot, so
 	// those always re-resolve — landing one on a stale rect is a wrong click.
-	reuse := ev.Kind == "scroll" || ev.Kind == "key"
-	w, err := mirrorFindWindow(b, ev.ID, reuse)
+	w, err := mirrorFindWindow(b, ev.ID, mirrorReuseLookup(ev.Kind, ev.Phase))
 	if err != nil {
 		fmt.Fprintln(conn, "error: window gone")
 		return
@@ -445,8 +469,28 @@ func mirrorServeInput(conn net.Conn, payload string) {
 		_ = b.focus(w)
 		_ = b.clickN(w, ev.X, ev.Y, count, ev.Button == "right")
 	case "drag":
-		_ = b.focus(w)
-		_ = b.drag(w, ev.Path)
+		switch ev.Phase {
+		case "":
+			// Legacy: the viewer buffered the whole gesture and sent it after
+			// the pointer lifted. Replayed at scripted speed.
+			_ = b.focus(w)
+			_ = b.drag(w, ev.Path)
+		case "begin":
+			_ = b.focus(w)
+			_ = b.dragPhase(w, "down", ev.X, ev.Y)
+		case "move":
+			// Points accumulated since the last send, in order. Each is posted
+			// as its own drag event so the target sees the real path rather
+			// than a jump to wherever the finger ended up.
+			for _, p := range ev.Path {
+				_ = b.dragPhase(w, "move", p[0], p[1])
+			}
+		case "end":
+			for _, p := range ev.Path {
+				_ = b.dragPhase(w, "move", p[0], p[1])
+			}
+			_ = b.dragPhase(w, "up", ev.X, ev.Y)
+		}
 	case "scroll":
 		if mirrorScrollStartsGesture(ev.ID) {
 			_ = b.focus(w)
@@ -475,6 +519,14 @@ func atoiOr(s string, def int) int {
 // treating screen sharing as "service restarting."
 const mirrorDialTimeout = 2 * time.Second
 
+// errMirrorUnavailable marks a capture failure that carries NO information
+// about whether capture can work: the daemon was restarting, or its socket
+// wasn't there yet. Callers must not read it as evidence against a codec — a
+// daemon bounce lasts about a second, and treating it as "this machine cannot
+// encode H.264" silently drops every open pane to JPEG for the rest of its
+// life. Wrapped, so the underlying dial error is still available.
+var errMirrorUnavailable = errors.New("screen-sharing service starting — retry")
+
 // startMirrorCapture (session side) dials the daemon's mirror socket and returns
 // a winHelper streaming the window's frames from the daemon (sh.reminal context).
 // The helper reads the same framed format as the direct exec path, so the
@@ -490,7 +542,7 @@ func startMirrorCapture(id string, maxWidth, quality, fps int, codec string) (*w
 	}
 	conn, err := net.DialTimeout("unix", sock, mirrorDialTimeout)
 	if err != nil {
-		return nil, fmt.Errorf("screen-sharing service starting — retry: %w", err)
+		return nil, fmt.Errorf("%w: %w", errMirrorUnavailable, err)
 	}
 	line := fmt.Sprintf("capture %s %d %d %d\n", id, maxWidth, quality, fps)
 	if codec == "h264" {

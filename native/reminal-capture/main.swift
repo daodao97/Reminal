@@ -73,6 +73,36 @@ if args.count >= 2, args[1] == "scroll" {
     exit(0)
 }
 
+// Drag-phase subcommand: `reminal-capture drag <down|move|up> <x> <y>` posts ONE
+// step of a live drag. Split into phases because a drag used to be shipped as a
+// whole path after the finger lifted and replayed at scripted speed — nothing
+// tracked the pointer, and the playback bore no relation to how the user
+// actually moved. The mouse button is system state, not process state: a
+// `down` posted here stays down after this process exits, so the later `move`
+// and `up` invocations continue the same drag. That is also why `reminal
+// permissions`/releaseInput exist to unstick a button if a gesture is cut off.
+if args.count >= 2, args[1] == "drag" {
+    guard args.count >= 5, let x = Double(args[3]), let y = Double(args[4]) else {
+        FileHandle.standardError.write(Data("usage: reminal-capture drag <down|move|up> <x> <y>\n".utf8))
+        exit(2)
+    }
+    let type: CGEventType
+    switch args[2] {
+    case "down": type = .leftMouseDown
+    case "move": type = .leftMouseDragged
+    case "up":   type = .leftMouseUp
+    default:
+        FileHandle.standardError.write(Data("drag phase must be down|move|up\n".utf8))
+        exit(2)
+    }
+    let src = CGEventSource(stateID: .hidSystemState)
+    if let e = CGEvent(mouseEventSource: src, mouseType: type,
+                       mouseCursorPosition: CGPoint(x: x, y: y), mouseButton: .left) {
+        e.post(tap: .cghidEventTap)
+    }
+    exit(0)
+}
+
 // Permission subcommand: `reminal-capture request` asks ScreenCaptureKit for
 // shareable content purely to surface the Screen Recording (TCC) prompt, then
 // reports. `reminal permissions` runs this via `open`ing the reminal.app, so the

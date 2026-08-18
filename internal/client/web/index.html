@@ -7437,6 +7437,55 @@
         return { fx: clamp01((cx - fr.left) / fr.width), fy: clamp01((cy - fr.top) / fr.height) };
       }
       function frac(e) { return fracAt(e.clientX, e.clientY); }
+      // Live drag. A drag used to be buffered whole and sent once the pointer
+      // lifted, then replayed host-side at scripted speed — so nothing moved
+      // under your finger and the playback had no relation to how you moved.
+      // Now the press, the movement and the release each go as they happen.
+      // Points still batch on the same timer as scrolling, because the host
+      // pays a process spawn per event and flooding it just rebuilds the
+      // backlog that made scrolling overshoot.
+      // Only when the host says it understands the phases: a host expecting
+      // the batched form would press and release once per chunk.
+      function dragPhasesOK() { return !!(lastHostInfo && lastHostInfo.drag_phases); }
+      let dragAcc = [], dragTimer = null, dragLive = false;
+      // The host spawns a process per point, so a batch has to stay within the
+      // interval that produced it or the backlog just rebuilds — a 120Hz
+      // pointer emits twice what a 60Hz one does for the same finger movement.
+      // Thin to at most this many, always keeping the last: an app interpolates
+      // between drag points anyway, so the path's shape survives while the
+      // per-batch cost stays bounded by the sender's rate, not the device's.
+      const DRAG_MAX_PER_BATCH = 3;
+      function thinDragPoints(pts) {
+        if (pts.length <= DRAG_MAX_PER_BATCH) return pts;
+        const out = [], step = (pts.length - 1) / (DRAG_MAX_PER_BATCH - 1);
+        for (let i = 0; i < DRAG_MAX_PER_BATCH - 1; i++) out.push(pts[Math.round(i * step)]);
+        out.push(pts[pts.length - 1]);
+        return out;
+      }
+      function flushDragMoves() {
+        dragTimer = null;
+        if (!dragLive || !dragAcc.length) return;
+        sendWin('window_input', { id: pane.w.id, kind: 'drag', phase: 'move', path: thinDragPoints(dragAcc) });
+        dragAcc = [];
+      }
+      function dragBegin(p) {
+        dragLive = true; dragAcc = [];
+        sendWin('window_input', { id: pane.w.id, kind: 'drag', phase: 'begin', x: p.fx, y: p.fy });
+      }
+      function dragMove(p) {
+        if (!dragLive) return;
+        dragAcc.push([p.fx, p.fy]);
+        if (!dragTimer) dragTimer = setTimeout(flushDragMoves, 50);
+      }
+      function dragEnd(p) {
+        if (!dragLive) return;
+        if (dragTimer) { clearTimeout(dragTimer); dragTimer = null; }
+        const tail = thinDragPoints(dragAcc); dragAcc = []; dragLive = false;
+        // The release carries whatever movement hadn't been flushed, so the
+        // gesture can't end at a stale point.
+        sendWin('window_input', { id: pane.w.id, kind: 'drag', phase: 'end', x: p.fx, y: p.fy, path: tail });
+      }
+
       // Batch rapid wheel / two-finger scroll deltas into one send per frame so
       // the host isn't flooded (each scroll is an osascript/xdotool call).
       let scrollAcc = { dx: 0, dy: 0 }, scrollAt = { fx: 0.5, fy: 0.5 }, scrollTimer = null;
@@ -7501,6 +7550,12 @@
         pane.cursorEl.classList.remove('grabbing');
         dragMode = false;
         const dp = dragPath; dragPath = null;
+        if (dragLive) {
+          // Already streaming — just release, wherever the finger ended.
+          const last = (dp && dp.length) ? dp[dp.length - 1] : (pane.cursor || { fx: 0.5, fy: 0.5 });
+          dragEnd(last);
+          return (dp && dp.length >= 2) ? 'drag' : 'tap';
+        }
         if (send && dp && dp.length >= 2) { sendWin('window_input', { id: pane.w.id, kind: 'drag', path: dp.map(p => [p.fx, p.fy]) }); return 'drag'; }
         return 'tap';
       }
@@ -7530,6 +7585,9 @@
         // the grab, with a haptic tick where supported.
         longPress = setTimeout(() => {
           longPress = null; dragMode = true; dragPath = [{ fx: pane.cursor.fx, fy: pane.cursor.fy }];
+          // The grab IS the press — send it now rather than reconstructing it
+          // from the path after the finger lifts.
+          if (dragPhasesOK()) dragBegin(pane.cursor);
           pane.cursorEl.classList.add('grabbing');
           if (navigator.vibrate) navigator.vibrate(25);
         }, 450);
@@ -7564,6 +7622,13 @@
         if (Math.abs(e.clientX - sx) > 6 || Math.abs(e.clientY - sy) > 6) moved = true;
         if (e.pointerType === 'mouse') {
           if (path && path.length < 300) path.push(frac(e));
+          // A mouse has no long-press grab: the drag starts the moment the
+          // button is down and the pointer has actually moved.
+          if (mouseBtn === 0 && moved && dragPhasesOK()) {
+            const f = frac(e);
+            if (!dragLive) dragBegin(path && path.length ? path[0] : f);
+            else dragMove(f);
+          }
           return;
         }
         if (!pane.cursor) return;
@@ -7574,6 +7639,7 @@
         lastX = e.clientX; lastY = e.clientY;
         place();
         if (dragMode && dragPath && dragPath.length < 400) dragPath.push({ fx: pane.cursor.fx, fy: pane.cursor.fy });
+        if (dragMode && dragPhasesOK()) dragMove(pane.cursor);
       });
 
       function endPointer(e) {
@@ -7604,6 +7670,7 @@
         if (e.pointerType === 'mouse') wkey.focus();
         if (e.pointerType === 'mouse') {
           if (mouseBtn === 2) click(frac(e), 'right');                  // right button → context click
+          else if (dragLive) dragEnd(frac(e));
           else if (mouseBtn === 0 && moved && path && path.length > 1) sendWin('window_input', { id: pane.w.id, kind: 'drag', path: path.map(p => [p.fx, p.fy]) });
           else if (mouseBtn === 0 && dur <= 600) click(frac(e));
           path = null;

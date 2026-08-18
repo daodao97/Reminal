@@ -335,6 +335,22 @@ e($.%s);`, x, y, btn, count, down, up)
 	return jxaEvents(body)
 }
 
+// dragPhase posts one step of a LIVE drag: press, move, release, each as its
+// own event as the finger produces it. The batched drag below replays a whole
+// path after the fact, which is why a drag never tracked the pointer. The
+// button is system-wide state, so these separate calls compose into one
+// continuous gesture as far as the target app is concerned.
+func (darwinWindows) dragPhase(w winInfo, phase string, fx, fy float64) error {
+	p, err := captureHelperPath()
+	if err != nil {
+		return err
+	}
+	x := w.X + int(fx*float64(w.W))
+	y := w.Y + int(fy*float64(w.H))
+	_, err = run(p, "drag", phase, strconv.Itoa(x), strconv.Itoa(y))
+	return err
+}
+
 func (darwinWindows) drag(w winInfo, pts [][2]float64) error {
 	if len(pts) == 0 {
 		return nil

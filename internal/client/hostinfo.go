@@ -91,6 +91,12 @@ type HostInfo struct {
 	// "unknown/unsupported" (nil, e.g. a platform without a sampler, or the
 	// very first Linux sample that has no delta yet) from a genuine 0%.
 	CPUPercent *float64 `json:"cpu_pct,omitempty"`
+	// DragPhases says this host accepts a drag as begin/move/end events while
+	// the pointer is still down, instead of one whole path after it lifts.
+	// Advertised rather than assumed: a viewer that sent phased events to a
+	// host expecting the batched form would press and release once per chunk —
+	// a burst of clicks instead of a drag. Absent (old host) → batched.
+	DragPhases bool `json:"drag_phases,omitempty"`
 }
 
 // gatherHostInfo collects the cross-platform basics, then lets the per-OS hook
@@ -101,6 +107,10 @@ func gatherHostInfo() HostInfo {
 		OS:   friendlyOS(runtime.GOOS),
 		Arch: runtime.GOARCH,
 		CPUs: runtime.NumCPU(),
+		// Only the macOS daemon injects drags phase by phase so far; the other
+		// backends still replay a path, and telling a viewer otherwise would
+		// turn every drag there into a stutter of clicks.
+		DragPhases: runtime.GOOS == "darwin",
 	}
 	if name, err := os.Hostname(); err == nil {
 		h.Hostname = name
