@@ -86,12 +86,12 @@ func TestResolveActiveByPortStillWorks(t *testing.T) {
 
 func TestParseDuration(t *testing.T) {
 	ok := map[string]time.Duration{
-		"30m":    30 * time.Minute,
-		"12h":    12 * time.Hour,
-		"1d":     24 * time.Hour,
-		"2w":     14 * 24 * time.Hour,
-		"1h30m":  90 * time.Minute,
-		"90s":    90 * time.Second,
+		"30m":   30 * time.Minute,
+		"12h":   12 * time.Hour,
+		"1d":    24 * time.Hour,
+		"2w":    14 * 24 * time.Hour,
+		"1h30m": 90 * time.Minute,
+		"90s":   90 * time.Second,
 	}
 	for in, want := range ok {
 		got, err := parseDuration(in)

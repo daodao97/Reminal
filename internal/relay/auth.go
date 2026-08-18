@@ -15,7 +15,7 @@ package relay
 // control of the session (via its pin_hash / reattach token) so it won't route
 // a viewer into a session no agent is holding.
 type authState struct {
-	pinHash      string // legacy credential; superseded by token (see server.go)
-	token        string // high-entropy reattach credential; empty on legacy sessions
+	pinHash     string // legacy credential; superseded by token (see server.go)
+	token       string // high-entropy reattach credential; empty on legacy sessions
 	agentAuthed bool
 }
