@@ -6163,13 +6163,23 @@
       const tnow = performance.now();
       if (p.frameTimes) while (p.frameTimes.length && tnow - p.frameTimes[0] > 1000) p.frameTimes.shift();
       const fps = p.frameTimes ? p.frameTimes.length : 0;
-      // Capture source, stamped by the agent on each frame: "native" = the
-      // ScreenCaptureKit helper (fast path), "shot" = per-frame screencapture
-      // fallback. Surfaced here so "why is it slow" is diagnosable at a glance.
-      // On the fallback path the agent stamps WHY native capture is unavailable
-      // (locked screen and windows on other Spaces are the usual reasons).
+      // A still screen sends nothing, so 0 fps is the honest reading for a
+      // perfectly healthy pane — and on its own it reads as "this is broken",
+      // which is exactly how it got reported. Say which of the two it is: a
+      // pane that has shown a frame and is not stalled is idle, not dead.
+      // (A stream that has actually failed puts its error over the pane.)
+      const rate = fps > 0 ? fps + ' fps'
+        : p.gotFrame ? 'idle \u00b7 sent on change'
+        : '0 fps';
+      // Capture source, stamped by the agent on each frame: "native" = macOS's
+      // ScreenCaptureKit helper, "win32" = Windows' in-process GDI capture
+      // (that platform's native path, not a fallback), "shot" = the per-frame
+      // screenshot fallback. Surfaced here so "why is it slow" is diagnosable
+      // at a glance. Only the true fallback carries a reason — and only where a
+      // native path exists to have fallen back from.
       const cap = p.capSrc === 'h264' ? 'Native · H.264 video'
         : p.capSrc === 'native' ? 'Native · ScreenCaptureKit'
+        : p.capSrc === 'win32' ? 'Native · Windows GDI'
         : p.capSrc === 'shot' ? ('Screenshot fallback' + (p.capErr ? ' · ' + escapeHtml(p.capErr) : '')) : '\u2014';
       // Video health, shown only once something has actually gone wrong: gaps
       // mean access units were lost in flight, errors mean the decoder itself
@@ -6184,7 +6194,7 @@
         + health
         + '<div class="row"><span class="k">Encryption</span><span class="v">' + enc + '</span></div>'
         + '<div class="row"><span class="k">Resolution</span><span class="v">' + res + '</span></div>'
-        + '<div class="row"><span class="k">Frame rate</span><span class="v">' + fps + ' fps</span></div>';
+        + '<div class="row"><span class="k">Frame rate</span><span class="v">' + rate + '</span></div>';
     }
 
     // sendWin sends a window_* control frame. If obj is provided it's

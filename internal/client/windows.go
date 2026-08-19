@@ -1252,6 +1252,11 @@ type winStream struct {
 	w    winInfo
 	stop <-chan struct{}
 	ack  <-chan uint64
+	// forceSend makes the next capture ship whatever the change detector
+	// thinks, and bypasses the relay pacing while it does. Raised for a viewer
+	// that has joined an in-flight stream and has no picture at all; cleared
+	// only once a frame has actually gone out.
+	forceSend bool
 	// keyReq is raised by a viewer that saw a sequence gap and needs a fresh
 	// IDR to resync its decoder (see requestWindowKey).
 	keyReq *atomic.Bool
@@ -1376,9 +1381,7 @@ func (s *winStream) run() {
 		s.negotiateCodec()
 		// A viewer lost sync (gap in the sequence): re-key before capturing, so
 		// the very next AU it receives is a self-contained entry point.
-		if s.keyReq != nil && s.keyReq.Swap(false) && s.helper != nil && s.codec == "h264" {
-			s.helper.rekey()
-		}
+		s.noteKeyRequest()
 		start := time.Now()
 		f, err := s.capture()
 		switch {
@@ -1410,7 +1413,10 @@ func (s *winStream) run() {
 			}
 		default:
 			s.fails = 0
-			changed := s.detectChange(f.Data)
+			// forceSend stays raised until a frame actually goes out (see
+			// dispatch): a viewer with nothing on screen is not served by a
+			// send that the pacing throttle then drops.
+			changed := s.detectChange(f.Data) || s.forceSend
 			if len(f.Data) > 0 {
 				s.lastImg = f.Data
 			}
@@ -1871,6 +1877,39 @@ func (s *winStream) captureFailure(conn *websocket.Conn, err error) bool {
 // and a sink will take it, or an unproven channel is due a probe), else a
 // heartbeat when it's time. All send-rate decisions live in the sink resolution
 // here — nowhere else.
+// noteKeyRequest folds a pending "I need an entry point" request into the
+// stream's state. It is raised by a viewer that lost sync, and by
+// startWindowStream when a SECOND viewer opens a window already being streamed.
+//
+// H.264 answers it by re-keying: deltas are useless without the frames they
+// were built from. JPEG has nothing to re-key — every frame is already a
+// self-contained entry point — but the newcomer still has to RECEIVE one, and
+// frames are only sent when the picture changes. On a still window that is
+// never. Honouring the request only for h264 (and swallowing it otherwise) is
+// what left a phone joining an in-flight stream on "Connecting…" indefinitely
+// while everyone already watching saw the window fine.
+func (s *winStream) noteKeyRequest() {
+	if s.keyReq == nil || !s.keyReq.Swap(false) {
+		return
+	}
+	if s.helper != nil && s.codec == "h264" {
+		s.helper.rekey()
+		return
+	}
+	s.forceSend = true
+}
+
+// wsFrameDue reports whether the relay copy of a frame may go out now. Pacing
+// keeps a steady stream cheap, but it must not apply to a viewer that has no
+// picture at all: throttled out, its forced frame is dropped and it waits for
+// the next change, which on a still window never comes.
+func (s *winStream) wsFrameDue(vc, confirmed int, now time.Time) bool {
+	if !wsSinkNeeded(vc, confirmed) {
+		return false
+	}
+	return s.forceSend || now.Sub(s.lastWSFrame) >= wsFrameMinInterval
+}
+
 func (s *winStream) dispatch(conn *websocket.Conn, changed bool) {
 	confirmed, probing, _ := s.a.rtcSinks()
 	vc := s.a.framesWantedBy()
@@ -1886,7 +1925,7 @@ func (s *winStream) dispatch(conn *websocket.Conn, changed bool) {
 	}
 
 	probeDue := len(probing) > 0 && time.Since(s.lastProbe) >= winProbeFrame
-	wsDue := wsSinkNeeded(vc, len(confirmed)) && time.Since(s.lastWSFrame) >= wsFrameMinInterval
+	wsDue := s.wsFrameDue(vc, len(confirmed), time.Now())
 
 	var sinks winSinks
 	if changed {
@@ -1903,6 +1942,8 @@ func (s *winStream) dispatch(conn *websocket.Conn, changed bool) {
 	}
 
 	if sinks.any() && len(s.lastImg) > 0 {
+		// Served. Anything still waiting will raise the flag again.
+		s.forceSend = false
 		s.sendFrame(conn, sinks)
 		return
 	}
@@ -1926,14 +1967,26 @@ const winDCMaxMsg = 192 << 10
 
 // sendFrame stamps and ships the newest frame to exactly the resolved sinks.
 func (s *winStream) sendFrame(conn *websocket.Conn, sinks winSinks) {
+	// Capture source, shown in the (i) popover. "shot" means the slow
+	// per-frame path and invites the question "why"; the answer lives in
+	// capErr. Windows is neither: its in-process GDI capture IS the native
+	// path, the only one it has. Stamped as such, the popover was reporting
+	// "Screenshot fallback · capture helper is macOS-only" on every Windows
+	// pane — an internal detail, describing a helper Windows is not supposed
+	// to have, phrased as a fault. Alongside an idle stream's honest 0 fps it
+	// read as a broken mirror, which is how it was reported.
 	capSrc := "shot"
-	if s.capNative {
+	switch {
+	case s.capNative:
 		capSrc = "native"
+	case runtime.GOOS == "windows":
+		capSrc = "win32"
 	}
 	capErr := ""
-	if !s.capNative && s.helperErr != "" {
-		// Why we're on the slow path — shown in the (i) popover. Bounded: SCK
-		// error strings can ramble.
+	// Only explain the fallback where a native path exists to have fallen back
+	// FROM. Off darwin, "capture helper is macOS-only" is the design, not news.
+	if !s.capNative && s.helperErr != "" && runtime.GOOS == "darwin" {
+		// Bounded: SCK error strings can ramble.
 		capErr = s.helperErr
 		if len(capErr) > 120 {
 			capErr = capErr[:120] + "…"
