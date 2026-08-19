@@ -57,6 +57,8 @@ var (
 	w32ProcPrintWindow                   = w32User32.NewProc("PrintWindow")
 	w32ProcSendInput                     = w32User32.NewProc("SendInput")
 	w32ProcGetSystemMetrics              = w32User32.NewProc("GetSystemMetrics")
+	w32ProcWindowFromPoint               = w32User32.NewProc("WindowFromPoint")
+	w32ProcGetAncestor                   = w32User32.NewProc("GetAncestor")
 
 	w32ProcCreateCompatibleDC = w32Gdi32.NewProc("CreateCompatibleDC")
 	w32ProcCreateDIBSection   = w32Gdi32.NewProc("CreateDIBSection")
@@ -327,11 +329,19 @@ func (win32Windows) focus(w winInfo) error {
 	if err != nil {
 		return err
 	}
+	w32RaiseHWND(hwnd)
+	return nil
+}
+
+// w32RaiseHWND brings one window to the foreground. Split out of focus() so the
+// desktop path can raise a window it resolved by POINT rather than by id (see
+// w32UnblockForeground).
+func w32RaiseHWND(hwnd uintptr) {
 	if r, _, _ := w32ProcIsIconic.Call(hwnd); r != 0 {
 		_, _, _ = w32ProcShowWindow.Call(hwnd, w32SWRestore)
 	}
 	if fg, _, _ := w32ProcGetForegroundWindow.Call(); fg == hwnd {
-		return nil // already frontmost — keep per-keystroke focus calls cheap
+		return // already frontmost — keep per-keystroke focus calls cheap
 	}
 	// Windows refuses SetForegroundWindow from a background process (the
 	// foreground-lock rules: only the thread that owns the current foreground
@@ -371,7 +381,6 @@ func (win32Windows) focus(w winInfo) error {
 	if attached {
 		_, _, _ = w32ProcAttachThreadInput.Call(tid, cur, 0)
 	}
-	return nil
 }
 
 // ---- app launcher -----------------------------------------------------------

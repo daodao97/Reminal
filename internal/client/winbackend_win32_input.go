@@ -146,6 +146,11 @@ func (c win32Windows) clickN(w winInfo, fx, fy float64, count int, right bool) e
 	}
 	_ = c.focus(w) // no-op for displays and already-foreground windows
 	x, y := w32Point(w, fx, fy)
+	if isDisplayID(w.ID) {
+		// Desktop view has no window to raise, so an elevated window holding
+		// focus would swallow this click and every one after it.
+		w32UnblockForeground(x, y)
+	}
 	down, up := uint32(w32MouseEventFLeftDown), uint32(w32MouseEventFLeftUp)
 	if right {
 		down, up = w32MouseEventFRightDown, w32MouseEventFRightUp
@@ -178,6 +183,9 @@ func (c win32Windows) drag(w winInfo, pts [][2]float64) error {
 	}
 	_ = c.focus(w)
 	x, y := w32Point(w, pts[0][0], pts[0][1])
+	if isDisplayID(w.ID) {
+		w32UnblockForeground(x, y)
+	}
 	if err := w32SendInputs([]w32Input{w32MouseMoveInput(x, y)}); err != nil {
 		return err
 	}

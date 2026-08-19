@@ -111,3 +111,44 @@ func describeWindow(hwnd uintptr) string {
 	}
 	return "an elevated window"
 }
+
+// gaRoot is GetAncestor's GA_ROOT: the top-level window a child belongs to.
+const gaRoot = 2
+
+// w32UnblockForeground breaks the deadlock an elevated window creates for the
+// DESKTOP view, where there is no target window to raise and so nothing to
+// dislodge it (win32Windows.focus is a no-op for displays).
+//
+// The deadlock: while an elevated window holds the foreground, every injected
+// event is discarded, so the click that would ordinarily raise the window under
+// the cursor never arrives. The whole desktop stops responding — not one window
+// — and no amount of clicking can recover it, because clicking is the thing
+// that stopped working.
+//
+// The way out is that only INJECTION is restricted. Changing the foreground is
+// not: raising a reachable window succeeds even while an elevated one holds it,
+// which was confirmed on the reporting machine (an elevated System Properties
+// held focus; raising Chrome took it, and input started landing again).
+//
+// So: when the foreground is out of reach, raise whatever reachable window the
+// click is aimed at, and let the click follow. Only ever called when input
+// would otherwise be dropped — with nothing blocking, an injected click already
+// activates what it lands on, and interfering would just fight the user.
+// Clicking the elevated window ITSELF stays impossible; Windows means it.
+func w32UnblockForeground(x, y int) {
+	fg, _, _ := w32ProcGetForegroundWindow.Call()
+	if fg == 0 || !windowOutOfReach(fg) {
+		return
+	}
+	hwnd, _, _ := w32ProcWindowFromPoint.Call(uintptr(uint32(int32(x))) | uintptr(uint32(int32(y)))<<32)
+	if hwnd == 0 {
+		return
+	}
+	if root, _, _ := w32ProcGetAncestor.Call(hwnd, gaRoot); root != 0 {
+		hwnd = root
+	}
+	if hwnd == fg || windowOutOfReach(hwnd) {
+		return // aimed at the blocker itself: nothing to do, and nothing that can be done
+	}
+	w32RaiseHWND(hwnd)
+}
