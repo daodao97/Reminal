@@ -5,7 +5,7 @@
 
 package client
 
-// Unix ptys have no equivalent of conhost's PowerShell shim: an erase-scrollback
-// on the stream is something the app genuinely emitted (`clear`), so it passes
-// through to the host terminal untouched — see hostMirror.
-const stripEraseScrollback = false
+// A Unix pty relays its shell and nothing else: an erase-scrollback or an input
+// mode on the stream is something the app genuinely asked for, so it reaches the
+// host terminal untouched — see hostMirror.
+const filterHostMirror = false

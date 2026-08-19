@@ -191,6 +191,18 @@ func (a *Agent) handleControlConn(conn net.Conn) {
 			}
 		}()
 		return
+	case line == "quit":
+		// `reminal kill`, asked politely. Killing the agent outright is a
+		// TerminateProcess on Windows — no signal, no handler, no defers — so
+		// the host terminal is never handed back: raw mode stays on, and any
+		// mode the session left set keeps mangling every keystroke at the
+		// user's prompt. Unwinding Run() instead ends the shell through exactly
+		// the path a clean exit takes, restoring the terminal on the way out.
+		// The CLI still escalates to a hard kill if we don't die.
+		_, _ = fmt.Fprintln(conn, "ok")
+		_ = conn.Close()
+		a.requestShutdown()
+		return
 	case line == "pause":
 		// `reminal stop` on Windows: no SIGUSR1 there, so the pause-broadcast
 		// request rides the control socket instead. Same effect as the Unix

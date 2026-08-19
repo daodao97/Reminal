@@ -145,9 +145,12 @@ type Agent struct {
 	// stdout. Set when Run() puts the local terminal into raw-attached mode
 	// so the user can drive the shell from the agent's terminal directly.
 	localActive bool
-	// hostEscape closes when the host user presses Ctrl-]; the main loop
-	// treats it the same as a graceful shutdown signal so defers still run.
-	hostEscape chan struct{}
+	// hostEscape closes when the host user presses Ctrl-] (or `reminal kill`
+	// asks over the control socket); the main loop treats it the same as a
+	// graceful shutdown signal so defers still run. Close it through
+	// requestShutdown — more than one goroutine can reach for it.
+	hostEscape     chan struct{}
+	hostEscapeOnce sync.Once
 
 	// startedAt is set once in Run() and used to keep session.Active's
 	// started_at stable when we rewrite the file on viewer-count changes.
@@ -2434,6 +2437,15 @@ func (a *Agent) pumpPTY() {
 	}
 }
 
+// requestShutdown asks Run() to wind the session down the graceful way: it
+// returns, its defers close the PTY (which ends the shell) and hand the host
+// terminal back — raw mode off, session chrome cleared, leaked modes reset.
+// Idempotent, and safe from any goroutine: Ctrl-] and the control socket's
+// "quit" both land here, and either may arrive first.
+func (a *Agent) requestShutdown() {
+	a.hostEscapeOnce.Do(func() { close(a.hostEscape) })
+}
+
 // pumpHostStdin reads the agent's local terminal stdin and writes each chunk
 // straight into the PTY — making the host terminal an interactive shell, same
 // as a `reminal connect` session would be. Ctrl-] (telnet's traditional
@@ -2474,11 +2486,7 @@ func (a *Agent) pumpHostStdin() {
 				}
 				if a.paused.Load() {
 					// Second Ctrl-] (already paused) — fully exit.
-					select {
-					case <-a.hostEscape:
-					default:
-						close(a.hostEscape)
-					}
+					a.requestShutdown()
 					return
 				}
 				// First Ctrl-]: stop broadcasting but keep the

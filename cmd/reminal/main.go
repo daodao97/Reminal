@@ -891,7 +891,13 @@ func runNotify(message string) error {
 // control socket. Used by every `reminal <verb>` that needs the agent to
 // take action. Returns the payload after "ok " on success, "" if the
 // reply is just "ok\n", or an error if the reply starts with "error:".
-func sendControl(pid int, cmd string) (string, error) {
+//
+// An optional timeout bounds the exchange. Most verbs want no deadline — a
+// `reminal send` of a large file legitimately takes a while — but anything on
+// the path to killing a session needs one: a hung agent still has a listening
+// socket, so the dial succeeds and the read would otherwise block forever,
+// letting an unresponsive agent refuse its own termination.
+func sendControl(pid int, cmd string, timeout ...time.Duration) (string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", err
@@ -902,6 +908,9 @@ func sendControl(pid int, cmd string) (string, error) {
 		return "", fmt.Errorf("connect to agent: %w", err)
 	}
 	defer conn.Close()
+	if len(timeout) > 0 && timeout[0] > 0 {
+		_ = conn.SetDeadline(time.Now().Add(timeout[0]))
+	}
 	if _, err := fmt.Fprintln(conn, cmd); err != nil {
 		return "", err
 	}
@@ -1821,6 +1830,21 @@ func terminateAgent(a session.Active) error {
 	defer func() { _ = session.ClearActive(a.ID) }()
 
 	pid := a.PID
+	// Ask first. A foreground agent owns the terminal it was started in — raw
+	// mode, and whatever modes the session turned on — and only the agent
+	// itself can hand that back. On Unix SIGTERM gives it the chance; on
+	// Windows termination is abrupt (no signal reaches a Go process, no defer
+	// runs), so a killed session used to leave that terminal mangling every
+	// keystroke. The control socket is the graceful route on both.
+	if _, err := sendControl(pid, "quit", 2*time.Second); err == nil {
+		deadline := time.Now().Add(2 * time.Second)
+		for time.Now().Before(deadline) {
+			if !proc.Alive(pid) {
+				return nil // exited on its own terms, terminal restored
+			}
+			time.Sleep(50 * time.Millisecond)
+		}
+	}
 	if err := proc.Terminate(pid); err != nil {
 		if errors.Is(err, proc.ErrGone) {
 			return nil // process already gone; record cleared by the defer

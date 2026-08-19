@@ -77,6 +77,14 @@ func clearHostIndicator() {
 // command → "command not found: 997"). Disabling the mode on teardown returns
 // the terminal to a sane baseline — the same cleanup a terminal multiplexer
 // performs on exit.
+//
+// The input modes go with it. Win32 input mode (9001) and focus reporting
+// (1004) are asked for by a Windows pseudo console at start-up, and left on
+// they turn every subsequent keystroke at the user's own prompt into an escape
+// sequence. reminal no longer forwards those requests at all (see hostMirror),
+// so on Windows this is belt and braces; on any platform it also covers an app
+// inside the shell that enabled them itself and died before undoing it.
+// Disabling a mode that was never enabled is a no-op everywhere.
 func resetLeakedTermModes() {
-	fmt.Fprint(os.Stdout, "\x1b[?2031l")
+	fmt.Fprint(os.Stdout, "\x1b[?2031l\x1b[?9001l\x1b[?1004l")
 }
