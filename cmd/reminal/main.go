@@ -75,19 +75,26 @@ func main() {
 			if len(os.Args) < 4 {
 				os.Exit(2)
 			}
-			// Optional trailing cols/rows: the console size the agent measured
-			// before spawning us, so the pseudo console is built at the right
-			// size instead of being resized (and clearing the user's screen)
-			// a moment later. Absent or unparsable → the 80x24 default.
-			var cols, rows uint16
-			if len(os.Args) >= 6 {
-				c, cerr := strconv.Atoi(os.Args[4])
-				r, rerr := strconv.Atoi(os.Args[5])
-				if cerr == nil && rerr == nil && c > 0 && r > 0 && c <= math.MaxUint16 && r <= math.MaxUint16 {
-					cols, rows = uint16(c), uint16(r)
+			// Optional trailing "<cols> <rows> <cursorRow> <cursorCol>": what
+			// the agent measured about its console before spawning us, so the
+			// pseudo console is built at the right size and starts below what
+			// is already on screen instead of clearing it. Anything missing or
+			// unparsable degrades to the 80x24 default with no cursor
+			// inheritance — the pre-3.0.13 behaviour.
+			var opts pty.HolderOpts
+			dim := func(i int) uint16 {
+				if i >= len(os.Args) {
+					return 0
 				}
+				v, err := strconv.Atoi(os.Args[i])
+				if err != nil || v <= 0 || v > math.MaxUint16 {
+					return 0
+				}
+				return uint16(v)
 			}
-			if err := pty.RunHolder(os.Args[2], os.Args[3], cols, rows); err != nil {
+			opts.Cols, opts.Rows = dim(4), dim(5)
+			opts.CursorRow, opts.CursorCol = dim(6), dim(7)
+			if err := pty.RunHolder(os.Args[2], os.Args[3], opts); err != nil {
 				fmt.Fprintf(os.Stderr, "ptyhold: %v\n", err)
 				os.Exit(1)
 			}

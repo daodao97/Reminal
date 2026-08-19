@@ -61,10 +61,14 @@ func Start(shell string, env ...string) (*Session, error) {
 	// Measure the console HERE, in the agent: the holder is spawned detached
 	// (no console of its own) and would otherwise build the pseudo console at
 	// 80x24, forcing an immediate resize — which on Windows costs the user
-	// their screen and scrollback (see startDirect).
+	// their screen and scrollback (see startDirect). The cursor goes with it:
+	// it is where the banner ended, so it is where the shell must start if the
+	// banner and QR are to survive.
 	cols, rows := consoleSize()
+	curRow, curCol := consoleCursor()
 	cmd := exec.Command(exe, "__ptyhold", sock, shell,
-		strconv.Itoa(int(cols)), strconv.Itoa(int(rows)))
+		strconv.Itoa(int(cols)), strconv.Itoa(int(rows)),
+		strconv.Itoa(int(curRow)), strconv.Itoa(int(curCol)))
 	// The holder composes the shell's environment from its own (shellEnv), so
 	// session-specific extras ride the holder's env block. The one-shot
 	// handshake token is stripped first: the shell has no business seeing the

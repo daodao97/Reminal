@@ -18,7 +18,7 @@ import (
 
 func main() {
 	if len(os.Args) > 3 && os.Args[1] == "__ptyhold" {
-		_ = pty.RunHolder(os.Args[2], os.Args[3], 0, 0) // 0 = size the console from our own
+		_ = pty.RunHolder(os.Args[2], os.Args[3], pty.HolderOpts{}) // zero = measure our own console
 		return
 	}
 	log, _ := os.Create(os.Getenv("USERPROFILE") + `\reminal-test\fgprobe.log`)

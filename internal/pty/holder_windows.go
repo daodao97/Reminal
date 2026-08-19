@@ -135,11 +135,15 @@ func HolderSocketPath() (string, error) {
 // agent's environment, so shellEnv() composes the same shell environment the
 // agent would have.
 //
-// cols/rows is the size to build the pseudo console at, measured by the agent
-// before it spawned us: the holder is detached and has no console to measure
-// for itself. 0 means "unknown" and lands on the 80x24 default.
-func RunHolder(sockPath, shell string, cols, rows uint16) error {
-	s, err := startDirect(shell, cols, rows)
+// opts carries what only the agent could measure — the size of the console the
+// user is looking at, and where its cursor sits — because the holder is
+// detached and has no console of its own.
+func RunHolder(sockPath, shell string, opts HolderOpts) error {
+	// A cursor position to inherit is also the decision to inherit one: it is
+	// present exactly when the launcher had a console whose content must
+	// survive (see startDirect and dsrResponder).
+	dsr := newDSRResponder(opts.CursorRow, opts.CursorCol, time.Now())
+	s, err := startDirect(shell, opts.Cols, opts.Rows, dsr != nil)
 	if err != nil {
 		return err
 	}
@@ -159,6 +163,18 @@ func RunHolder(sockPath, shell string, cols, rows uint16) error {
 
 	h := &holderState{sess: s, lastDetach: time.Now()}
 
+	// Diagnostics: REMINAL_PTY_DUMP=<path> records the pseudo console's raw
+	// output, before any filtering. What conhost emits — and when — is the one
+	// thing that cannot be reasoned out from this side of the pipe, and every
+	// Windows display bug so far has turned on it. Off unless asked for.
+	var dump *os.File
+	if path := os.Getenv("REMINAL_PTY_DUMP"); path != "" {
+		if f, ferr := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600); ferr == nil {
+			dump = f
+			defer dump.Close()
+		}
+	}
+
 	// Output pump: shell → (ring while detached) + live client. Signals exit.
 	shellDone := make(chan error, 1)
 	go func() {
@@ -166,7 +182,21 @@ func RunHolder(sockPath, shell string, cols, rows uint16) error {
 		for {
 			n, err := s.Read(buf)
 			if n > 0 {
-				h.deliver(buf[:n])
+				chunk := buf[:n]
+				if dump != nil {
+					_, _ = dump.Write(chunk)
+				}
+				// Answer the console's start-up cursor query here, closest to
+				// the console: it blocks its first paint on the reply, and
+				// nothing downstream should ever see the question.
+				out, reply := dsr.filter(chunk, time.Now())
+				if len(reply) > 0 {
+					_, _ = s.Write(reply)
+				}
+				chunk = out
+				if len(chunk) > 0 {
+					h.deliver(chunk)
+				}
 			}
 			if err != nil {
 				shellDone <- s.Wait() // reaper has (or will) record the exit

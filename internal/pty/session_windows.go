@@ -44,7 +44,7 @@ type directSession struct {
 // holder runs detached with no console of its own, so only its launcher knows
 // what the user is looking at, and getting it right here is what spares the
 // user's screen a start-up resize (see below).
-func startDirect(shell string, cols, rows uint16, env ...string) (*directSession, error) {
+func startDirect(shell string, cols, rows uint16, inheritCursor bool, env ...string) (*directSession, error) {
 	// ConPTY wiring: two anonymous pipe pairs. The pseudo console gets the
 	// input-read and output-write ends; we keep the opposite ends and expose
 	// them through Read/Write. There is no login-shell argv trick here — that
@@ -75,12 +75,28 @@ func startDirect(shell string, cols, rows uint16, env ...string) (*directSession
 	if cols == 0 || rows == 0 {
 		cols, rows = consoleSize()
 	}
+	// INHERIT_CURSOR is what stops the console taking the whole screen. Without
+	// it a pseudo console assumes it owns the terminal from the top-left: its
+	// very first paint erases the viewport (VtEngine::StartPaint → _ClearScreen,
+	// "\x1b[2J") and it anchors output at row 1 — so reminal's banner and QR,
+	// printed moments earlier, are wiped or painted over. With it, the console
+	// asks the terminal where the cursor is and starts BELOW what is already on
+	// screen, exactly as a shell started from a Unix pty does.
+	//
+	// The flag alone is not enough: conhost only skips that first-paint clear
+	// once the answer arrives (VtEngine::InheritCursor sets _firstPaint=false).
+	// The holder answers it from the position its launcher measured — see
+	// dsrResponder — so this never depends on the terminal replying in time.
+	var flags uint32
+	if inheritCursor {
+		flags |= windows.PSEUDOCONSOLE_INHERIT_CURSOR
+	}
 	var hpc windows.Handle
 	err = windows.CreatePseudoConsole(
 		windows.Coord{X: int16(cols), Y: int16(rows)},
 		windows.Handle(inRead.Fd()),
 		windows.Handle(outWrite.Fd()),
-		0,
+		flags,
 		&hpc,
 	)
 	// CreatePseudoConsole duplicates the handles it needs, so the ConPTY-side
@@ -177,6 +193,30 @@ func shellArgv(shell string) []string {
 		return []string{shell, "-NoLogo"}
 	}
 	return []string{shell}
+}
+
+// consoleCursor reports where this process's console cursor sits, as a 1-based
+// position within the visible window — the form a cursor-position report takes.
+// Returns 0,0 when there is no console to ask, which is the signal not to
+// inherit a cursor at all.
+//
+// Measured in the AGENT, right after it prints the join banner, and handed to
+// the holder: that is the row the shell must start on if the banner is to
+// survive. The holder itself is detached and has no console.
+func consoleCursor() (row, col uint16) {
+	h := windows.Handle(os.Stdout.Fd())
+	var info windows.ConsoleScreenBufferInfo
+	if err := windows.GetConsoleScreenBufferInfo(h, &info); err != nil {
+		return 0, 0
+	}
+	// Buffer coordinates → window-relative, 1-based. A console buffer is
+	// usually taller than its window, so the difference is what CPR reports.
+	r := int(info.CursorPosition.Y) - int(info.Window.Top) + 1
+	c := int(info.CursorPosition.X) - int(info.Window.Left) + 1
+	if r < 1 || c < 1 || r > math.MaxUint16 || c > math.MaxUint16 {
+		return 0, 0
+	}
+	return uint16(r), uint16(c)
 }
 
 // consoleSize reports this process's console size, or 80x24 when it has none
