@@ -654,23 +654,64 @@ func installFileAtomic(dest string, r io.Reader, dir string) error {
 	}
 	if err := os.Rename(tmpName, dest); err != nil {
 		// Windows can't replace a RUNNING executable in place — but it can
-		// RENAME one. Shuffle the live file aside and slot the new one in;
-		// the orphaned .old is cleaned up on the next upgrade (below) or by
-		// the installer.
+		// RENAME one. Shuffle the live file aside and slot the new one in.
 		if runtime.GOOS == "windows" {
-			old := dest + ".old"
-			_ = os.Remove(old) // a leftover from the previous upgrade, if any
-			if rerr := os.Rename(dest, old); rerr == nil {
-				if err2 := os.Rename(tmpName, dest); err2 == nil {
-					return nil
-				}
-				// Put the original back so the install isn't left headless.
-				_ = os.Rename(old, dest)
+			old, nerr := displacedPath(dir)
+			if nerr != nil {
+				return fmt.Errorf("install into %s: %w", dir, nerr)
 			}
+			if rerr := os.Rename(dest, old); rerr != nil {
+				return fmt.Errorf("install into %s: could not move the running binary aside: %w", dir, rerr)
+			}
+			if err2 := os.Rename(tmpName, dest); err2 != nil {
+				_ = os.Rename(old, dest) // put the original back; never leave the install headless
+				return fmt.Errorf("install into %s: %w", dir, err2)
+			}
+			// Now that the new binary is in place, retire what earlier
+			// upgrades left behind. Anything still running stays until next
+			// time — that is the whole reason these names are unique.
+			sweepDisplaced(dir)
+			return nil
 		}
 		return fmt.Errorf("install (need write access to %s): %w", dir, err)
 	}
 	return nil
+}
+
+// displacedPrefix names a binary an upgrade has shuffled aside on Windows.
+//
+// The name must be UNIQUE per upgrade. A displaced binary is very often still
+// executing — the always-on daemon, a live session's agent, and every pty
+// holder keep running from the file they were launched as, and Windows will
+// neither delete nor overwrite a file with a mapped image section. A single
+// fixed ".old" name therefore worked exactly once per machine: the second
+// upgrade found the previous one still locked, could not move the live binary
+// onto it, and failed with "Access is denied" — leaving the user stranded on
+// whatever version they had, with an error that blamed directory permissions.
+const displacedPrefix = ".reminal.old-"
+
+// displacedPath returns an unused name in dir to move the running binary to.
+func displacedPath(dir string) (string, error) {
+	stamp := time.Now().UnixNano()
+	for i := 0; i < 100; i++ {
+		p := filepath.Join(dir, fmt.Sprintf("%s%d-%d", displacedPrefix, stamp, i))
+		if _, err := os.Stat(p); os.IsNotExist(err) {
+			return p, nil
+		}
+	}
+	return "", fmt.Errorf("no free name for the displaced binary in %s", dir)
+}
+
+// sweepDisplaced deletes the binaries earlier upgrades moved aside, plus the
+// fixed-name leftover from before these names were unique. Best-effort by
+// design: one that is still running refuses to be deleted, and gets another
+// chance on the next upgrade.
+func sweepDisplaced(dir string) {
+	matches, _ := filepath.Glob(filepath.Join(dir, displacedPrefix+"*"))
+	matches = append(matches, filepath.Join(dir, "reminal.exe.old"))
+	for _, m := range matches {
+		_ = os.Remove(m)
+	}
 }
 
 // newer returns true if latest > current. Versions are dotted ints with an

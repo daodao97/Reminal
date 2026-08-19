@@ -67,13 +67,24 @@ try {
 
     $exe = Join-Path $installDir "reminal.exe"
     # A running reminal.exe can't be overwritten -- but it can be renamed aside
-    # (same trick the in-app updater uses).
+    # (same trick the in-app updater uses). The name has to be UNIQUE per
+    # install: the binary we displace is usually still executing -- the
+    # always-on daemon, any live session's agent, every pty holder -- and
+    # Windows will neither delete nor overwrite a file whose image is mapped.
+    # Reusing one fixed ".old" name worked exactly once per machine; the next
+    # upgrade found it locked and died with "Access is denied".
     if (Test-Path $exe) {
-        $old = "$exe.old"
-        Remove-Item $old -Force -ErrorAction SilentlyContinue
-        try { Move-Item $exe $old -Force -ErrorAction Stop } catch {}
+        $old = Join-Path $installDir (".reminal.old-{0}" -f [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds())
+        try { Move-Item $exe $old -Force -ErrorAction Stop }
+        catch { throw "could not move the running $exe aside: $_" }
     }
     Move-Item (Join-Path $tmp "reminal.exe") $exe -Force
+    # Retire what earlier installs displaced. Anything still running refuses,
+    # and gets swept by the install after it stops -- that is why the names
+    # are unique rather than reused.
+    Get-ChildItem -Path $installDir -Filter ".reminal.old-*" -Force -ErrorAction SilentlyContinue |
+        ForEach-Object { Remove-Item $_.FullName -Force -ErrorAction SilentlyContinue }
+    Remove-Item (Join-Path $installDir "reminal.exe.old") -Force -ErrorAction SilentlyContinue
 } finally {
     Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue
 }
