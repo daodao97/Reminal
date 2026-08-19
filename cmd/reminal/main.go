@@ -9,6 +9,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"math"
 	"net"
 	"net/url"
 	"os"
@@ -74,7 +75,19 @@ func main() {
 			if len(os.Args) < 4 {
 				os.Exit(2)
 			}
-			if err := pty.RunHolder(os.Args[2], os.Args[3]); err != nil {
+			// Optional trailing cols/rows: the console size the agent measured
+			// before spawning us, so the pseudo console is built at the right
+			// size instead of being resized (and clearing the user's screen)
+			// a moment later. Absent or unparsable → the 80x24 default.
+			var cols, rows uint16
+			if len(os.Args) >= 6 {
+				c, cerr := strconv.Atoi(os.Args[4])
+				r, rerr := strconv.Atoi(os.Args[5])
+				if cerr == nil && rerr == nil && c > 0 && r > 0 && c <= math.MaxUint16 && r <= math.MaxUint16 {
+					cols, rows = uint16(c), uint16(r)
+				}
+			}
+			if err := pty.RunHolder(os.Args[2], os.Args[3], cols, rows); err != nil {
 				fmt.Fprintf(os.Stderr, "ptyhold: %v\n", err)
 				os.Exit(1)
 			}

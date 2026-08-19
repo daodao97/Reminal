@@ -17,6 +17,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"runtime"
+	"runtime/debug"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -115,6 +116,13 @@ type Agent struct {
 	// flaw that sank the v2.3.0 position-only band (it swallowed everything between
 	// two resizes, including a fresh agent's entire history). Guarded by screenMu.
 	resizeSegs []resizeSeg
+	// hostMirror filters the PTY stream on its way to the host terminal (only
+	// the host's — viewers get the raw bytes). Touched solely by pumpPTY.
+	hostMirror hostMirror
+	// sbLen is the emulator scrollback length as of the last record(), used to
+	// spot a shrink (an app's ESC[3J) and retire the now-stale segment indices
+	// above. Guarded by screenMu.
+	sbLen int
 	// rebuildEmu is the persistent tall emulator snapshots replay history
 	// through (see rebuildView). Guarded by rebuildMu; lazily created.
 	rebuildEmu      *vt.Emulator
@@ -1947,6 +1955,7 @@ func (a *Agent) initScreen() {
 	if a.scrollbackLines > 0 {
 		a.screen.Scrollback().SetMaxLines(a.scrollbackLines)
 	}
+	a.sbLen = 0 // fresh emulator: the shrink watch starts from empty
 	scr := a.screen
 	a.screenMu.Unlock()
 	if a.buf != nil {
@@ -1976,11 +1985,31 @@ func (a *Agent) record(p []byte) {
 	a.screenMu.Lock()
 	if a.screen != nil {
 		_, _ = a.screen.Write(p)
+		a.noteScrollbackLen()
 	}
 	if enc, err := a.box.Encrypt(p); err == nil {
 		a.buf.Append(enc)
 	}
 	a.screenMu.Unlock()
+}
+
+// noteScrollbackLen watches the emulator's scrollback for a SHRINK and, on one,
+// forgets every resize segment. Segment positions are absolute scrollback
+// indices, valid only while scrollback grows (the emulator never reflows it, and
+// eviction at the cap keeps the length pinned, not shrinking). One thing does
+// shrink it: ESC[3J, erase-scrollback — rare on Unix (`clear` at the end of a
+// session), routine on Windows, where conhost's PowerShell shim emits
+// ESC[H ESC[2J ESC[3J whenever the shell blanks its whole buffer, which
+// PowerShell does on resize. Left stale, those indices point past the end of the
+// rendered history and dropResizeRepaints slices with from > to — the
+// "slice bounds out of range [12:0]" panic that killed Windows sessions the
+// moment a viewer resized. Caller holds screenMu.
+func (a *Agent) noteScrollbackLen() {
+	n := a.screen.Scrollback().Len()
+	if n < a.sbLen {
+		a.resizeSegs = nil
+	}
+	a.sbLen = n
 }
 
 // resizeSeg is one resize's repaint fingerprint: the scrollback position where its
@@ -1999,6 +2028,15 @@ func regionWords(lines []string, from, to int) []string {
 	}
 	if to > len(lines) {
 		to = len(lines)
+	}
+	// from > to is not merely a clamped range but a stale index: the caller's
+	// segment positions predate a scrollback that has since shrunk. Return
+	// nothing rather than panicking on an inverted slice — the empty word
+	// stream simply contributes no corpus, so no line can be dropped by it.
+	// (Windows: conhost's PowerShell shim emits ESC[3J on a whole-buffer clear,
+	// which empties the emulator's scrollback under absolute segment indices.)
+	if from > to {
+		return nil
 	}
 	var w []string
 	for _, l := range lines[from:to] {
@@ -2382,9 +2420,11 @@ func (a *Agent) pumpPTY() {
 			a.feedTitle(buf[:n])
 			// Mirror to the host's stdout so the user typing at the agent
 			// terminal sees the shell's output as if they had run it
-			// directly. The same bytes go into scrollback for remote viewers.
+			// directly. The same bytes go into scrollback for remote viewers —
+			// hostMirror only filters what reaches the host TERMINAL, and never
+			// modifies the chunk record() is about to take.
 			if a.localActive {
-				_, _ = os.Stdout.Write(buf[:n])
+				_, _ = os.Stdout.Write(a.hostMirror.forward(buf[:n]))
 			}
 			a.record(buf[:n])
 		}
@@ -2460,6 +2500,41 @@ func (a *Agent) pumpHostStdin() {
 	}
 }
 
+// logPanicStack appends a recovered panic and its stack to
+// ~/.reminal/panic.log. A recovered panic is invisible by design — the session
+// simply reconnects — so without this the bug that caused it leaves no trace
+// beyond a one-line notice. Best-effort: a session must never fail because its
+// crash log couldn't be written.
+func logPanicStack(what string, r interface{}) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return
+	}
+	f, err := os.OpenFile(filepath.Join(home, ".reminal", "panic.log"),
+		os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+	fmt.Fprintf(f, "\n=== %s · %s · %v\n%s\n",
+		time.Now().Format(time.RFC3339), what, r, debug.Stack())
+}
+
+// guardPanic runs fn and turns a panic into an error, tagged with what was
+// running. The connection's goroutines use it so a fault in one pump costs a
+// reconnect rather than the process — the same trade runConnection's own
+// recover makes. The stack is written to the panic log for diagnosis; the
+// error carries only the value, so the reconnect notice stays one line.
+func guardPanic(what string, fn func() error) (err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			logPanicStack(what, r)
+			err = fmt.Errorf("recovered from panic in %s: %v", what, r)
+		}
+	}()
+	return fn()
+}
+
 func (a *Agent) runConnection(shellExit <-chan struct{}) (err error) {
 	// A panic in a viewer-message handler (the read-loop dispatch below processes
 	// untrusted input) must NOT crash the agent — that would kill the shell session
@@ -2514,11 +2589,21 @@ func (a *Agent) runConnection(shellExit <-chan struct{}) (err error) {
 	var stopOnce sync.Once
 	closeStop := func() { stopOnce.Do(func() { close(stop) }) }
 
+	// Both pumps run under the same recover as runConnection itself — a defer in
+	// runConnection cannot catch a panic in the goroutines it spawns, so each
+	// needs its own. This is not theoretical: a snapshot built over a scrollback
+	// the shell had just erased panicked inside runSender and took the entire
+	// session down (host shell included) on every Windows session. Converted to
+	// an error, the same fault costs one reconnect.
 	readerDone := make(chan error, 1)
-	go func() { readerDone <- a.runReader(conn, cursorCh) }()
+	go func() {
+		readerDone <- guardPanic("agent read loop", func() error { return a.runReader(conn, cursorCh) })
+	}()
 
 	senderDone := make(chan error, 1)
-	go func() { senderDone <- a.runSender(conn, cursorCh, stop) }()
+	go func() {
+		senderDone <- guardPanic("agent send loop", func() error { return a.runSender(conn, cursorCh, stop) })
+	}()
 
 	pingStop := make(chan struct{})
 	var pingOnce sync.Once

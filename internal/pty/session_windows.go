@@ -8,11 +8,15 @@ package pty
 import (
 	"fmt"
 	"io"
+	"math"
 	"os"
+	"path/filepath"
+	"strings"
 	"sync"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
+	"golang.org/x/term"
 )
 
 type directSession struct {
@@ -34,7 +38,13 @@ type directSession struct {
 	closeErr  error
 }
 
-func startDirect(shell string, env ...string) (*directSession, error) {
+// startDirect launches shell under a fresh pseudo console. cols/rows is the
+// geometry to build that console at; 0 means "work it out from our own console,
+// or fall back to 80x24" (see consoleSize). Passing the real size matters — the
+// holder runs detached with no console of its own, so only its launcher knows
+// what the user is looking at, and getting it right here is what spares the
+// user's screen a start-up resize (see below).
+func startDirect(shell string, cols, rows uint16, env ...string) (*directSession, error) {
 	// ConPTY wiring: two anonymous pipe pairs. The pseudo console gets the
 	// input-read and output-write ends; we keep the opposite ends and expose
 	// them through Read/Write. There is no login-shell argv trick here — that
@@ -51,10 +61,23 @@ func startDirect(shell string, env ...string) (*directSession, error) {
 		return nil, err
 	}
 
-	const defaultCols, defaultRows = 80, 24
+	// Size the pseudo console to the console we're attached to, NOT to a
+	// placeholder we then resize. A ConPTY resize is not the cheap ioctl a Unix
+	// TIOCSWINSZ is: PowerShell reacts by blanking its whole buffer through the
+	// Win32 fill API, which conhost's PowerShell shim translates into
+	// "ESC[H ESC[2J ESC[3J" on the output stream (microsoft/terminal,
+	// src/host/_stream.cpp: WriteClearScreen). Those bytes are mirrored straight
+	// to the user's console, so a start-up resize wiped their screen AND their
+	// scrollback — the join banner and QR code included — which read as "reminal
+	// restarted my PowerShell and ate my history". Starting at the right size
+	// means the first applyEffectiveSize is a no-op (see Resize) and nothing is
+	// cleared at all.
+	if cols == 0 || rows == 0 {
+		cols, rows = consoleSize()
+	}
 	var hpc windows.Handle
 	err = windows.CreatePseudoConsole(
-		windows.Coord{X: defaultCols, Y: defaultRows},
+		windows.Coord{X: int16(cols), Y: int16(rows)},
 		windows.Handle(inRead.Fd()),
 		windows.Handle(outWrite.Fd()),
 		0,
@@ -91,7 +114,7 @@ func startDirect(shell string, env ...string) (*directSession, error) {
 		return fail(fmt.Errorf("attach pseudo console attribute: %w", err))
 	}
 
-	cmdline, err := windows.UTF16PtrFromString(windows.ComposeCommandLine([]string{shell}))
+	cmdline, err := windows.UTF16PtrFromString(windows.ComposeCommandLine(shellArgv(shell)))
 	if err != nil {
 		return fail(err)
 	}
@@ -133,12 +156,50 @@ func startDirect(shell string, env ...string) (*directSession, error) {
 		outPipe:  outRead,
 		proc:     pi.Process,
 		pid:      int(pi.ProcessId),
-		cols:     defaultCols,
-		rows:     defaultRows,
+		cols:     cols,
+		rows:     rows,
 		waitDone: make(chan struct{}),
 	}
 	go s.reap()
 	return s, nil
+}
+
+// shellArgv builds the child's argv. PowerShell gets -NoLogo: the session shell
+// starts inside the terminal the user is already sitting in, so re-printing the
+// version banner and copyright makes reminal look like it restarted their
+// shell. (The Unix side gets the same effect for free — a login shell prints no
+// banner.) Any other shell — cmd, a $SHELL-configured git-bash — is launched
+// exactly as configured; guessing flags for shells we don't recognise would
+// just break them.
+func shellArgv(shell string) []string {
+	switch strings.ToLower(filepath.Base(shell)) {
+	case "pwsh.exe", "pwsh", "powershell.exe", "powershell":
+		return []string{shell, "-NoLogo"}
+	}
+	return []string{shell}
+}
+
+// consoleSize reports this process's console size, or 80x24 when it has none
+// (a headless agent, or the detached holder — which is why Start measures it in
+// the AGENT process and passes the answer down).
+func consoleSize() (cols, rows uint16) {
+	const defaultCols, defaultRows = 80, 24
+	fd := int(os.Stdout.Fd())
+	if !term.IsTerminal(fd) {
+		return defaultCols, defaultRows
+	}
+	c, r, err := term.GetSize(fd)
+	if err != nil || c <= 0 || r <= 0 {
+		return defaultCols, defaultRows
+	}
+	// ConPTY takes a signed 16-bit COORD; clamp rather than wrap.
+	if c > math.MaxInt16 {
+		c = math.MaxInt16
+	}
+	if r > math.MaxInt16 {
+		r = math.MaxInt16
+	}
+	return uint16(c), uint16(r)
 }
 
 // reap waits for the shell to exit, then closes the pseudo console. That
@@ -189,6 +250,13 @@ func (s *directSession) Resize(cols, rows uint16) error {
 	defer s.mu.Unlock()
 	if s.hpcClosed {
 		return os.ErrClosed
+	}
+	if cols == s.cols && rows == s.rows {
+		// Never re-assert the size we already have. Every ResizePseudoConsole
+		// costs a full repaint and, with PowerShell attached, a buffer clear
+		// that erases the user's console scrollback (see startDirect). Callers
+		// re-apply the effective size freely; only real changes may reach here.
+		return nil
 	}
 	if err := windows.ResizePseudoConsole(s.hpc, windows.Coord{X: int16(cols), Y: int16(rows)}); err != nil {
 		return err

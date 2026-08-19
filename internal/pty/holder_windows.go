@@ -129,13 +129,17 @@ func HolderSocketPath() (string, error) {
 	return filepath.Join(home, ".reminal", fmt.Sprintf("pty-%x.sock", rnd)), nil
 }
 
-// RunHolder is the body of the hidden `reminal __ptyhold <sock> <shell>`
-// process. It returns only when the session is over (shell exited, or the
-// agent vanished past the grace window). The holder inherits the agent's
-// environment, so shellEnv() composes the same shell environment the agent
-// would have.
-func RunHolder(sockPath, shell string) error {
-	s, err := startDirect(shell)
+// RunHolder is the body of the hidden `reminal __ptyhold <sock> <shell>
+// [cols] [rows]` process. It returns only when the session is over (shell
+// exited, or the agent vanished past the grace window). The holder inherits the
+// agent's environment, so shellEnv() composes the same shell environment the
+// agent would have.
+//
+// cols/rows is the size to build the pseudo console at, measured by the agent
+// before it spawned us: the holder is detached and has no console to measure
+// for itself. 0 means "unknown" and lands on the 80x24 default.
+func RunHolder(sockPath, shell string, cols, rows uint16) error {
+	s, err := startDirect(shell, cols, rows)
 	if err != nil {
 		return err
 	}

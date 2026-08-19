@@ -17,6 +17,7 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -57,7 +58,13 @@ func Start(shell string, env ...string) (*Session, error) {
 		return nil, err
 	}
 
-	cmd := exec.Command(exe, "__ptyhold", sock, shell)
+	// Measure the console HERE, in the agent: the holder is spawned detached
+	// (no console of its own) and would otherwise build the pseudo console at
+	// 80x24, forcing an immediate resize — which on Windows costs the user
+	// their screen and scrollback (see startDirect).
+	cols, rows := consoleSize()
+	cmd := exec.Command(exe, "__ptyhold", sock, shell,
+		strconv.Itoa(int(cols)), strconv.Itoa(int(rows)))
 	// The holder composes the shell's environment from its own (shellEnv), so
 	// session-specific extras ride the holder's env block. The one-shot
 	// handshake token is stripped first: the shell has no business seeing the
@@ -202,6 +209,16 @@ func (s *Session) Write(p []byte) (int, error) {
 }
 
 func (s *Session) Resize(cols, rows uint16) error {
+	s.mu.Lock()
+	unchanged := s.cols == cols && s.rows == rows
+	s.mu.Unlock()
+	if unchanged {
+		// Don't even ask. A ConPTY resize repaints, and with PowerShell
+		// attached it also wipes the host console's screen and scrollback
+		// (see startDirect) — so a re-assertion of the current size is not
+		// the harmless no-op it is on Unix. The holder screens for this too.
+		return nil
+	}
 	var payload [4]byte
 	binary.LittleEndian.PutUint16(payload[0:], cols)
 	binary.LittleEndian.PutUint16(payload[2:], rows)

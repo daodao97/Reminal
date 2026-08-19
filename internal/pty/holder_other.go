@@ -9,6 +9,6 @@ import "errors"
 
 // RunHolder is the Windows ConPTY holder (`reminal __ptyhold`); Unix keeps
 // the PTY in-process (exec-based hot restart needs no holder).
-func RunHolder(sockPath, shell string) error {
+func RunHolder(sockPath, shell string, cols, rows uint16) error {
 	return errors.New("__ptyhold is Windows-only")
 }
