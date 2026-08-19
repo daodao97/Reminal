@@ -315,6 +315,37 @@ func (a *Agent) handleWindowCtl(encData string) {
 	}
 }
 
+// inputBlockNoticeEvery bounds how often the same obstruction is announced. An
+// input event arrives per mouse MOVE, so an unbounded notice would bury the
+// session in a message about the one thing it cannot do.
+const inputBlockNoticeEvery = 60 * time.Second
+
+// noteInputBlocked tells the session, at most occasionally, that its input is
+// going nowhere and why. Silence is the actual defect being fixed here: taps
+// that vanish read as a broken mirror, and the true cause — an elevated window
+// holding focus, which Windows will not let us inject past — is invisible from
+// the viewer and unguessable from the host.
+//
+// It goes through broadcastNotice so it lands in the terminal both sides can
+// see, with no protocol change and nothing to deploy: the viewer showing this
+// may be a browser tab from a year ago.
+func (a *Agent) noteInputBlocked(who string) {
+	if who == "" {
+		return
+	}
+	a.winMu.Lock()
+	fresh := who != a.inputBlockWho || time.Since(a.inputBlockAt) > inputBlockNoticeEvery
+	if fresh {
+		a.inputBlockWho, a.inputBlockAt = who, time.Now()
+	}
+	a.winMu.Unlock()
+	if !fresh {
+		return
+	}
+	a.broadcastNotice("\"" + who + "\" runs as administrator — Windows blocks remote input while it has focus. " +
+		"Close it, or click it on the machine itself.")
+}
+
 // updateMenuState maintains the right-click context-menu region-capture window for
 // the darwin (daemon-proxied) input path. A right-click arms a brief region grab
 // around the window so the OS-drawn menu (a separate overlapping window) shows in
@@ -370,6 +401,7 @@ func (a *Agent) handleWindowInput(encData string) {
 	if b.unsupported() != "" {
 		return
 	}
+	a.noteInputBlocked(inputBlocker(ev.ID))
 	applyWindowInput(b, &a.winInput, ev, func(w winInfo, right bool) {
 		// A right-click opens a context menu drawn as its own window (missed by
 		// capture-by-id). Snapshot this window's bounds and region-capture it

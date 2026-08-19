@@ -116,6 +116,10 @@ type Agent struct {
 	// flaw that sank the v2.3.0 position-only band (it swallowed everything between
 	// two resizes, including a fresh agent's entire history). Guarded by screenMu.
 	resizeSegs []resizeSeg
+	// inputBlockWho/At throttle the "your input is going nowhere" notice to one
+	// per obstruction per minute (see noteInputBlocked). Guarded by winMu.
+	inputBlockWho string
+	inputBlockAt  time.Time
 	// hostMirror filters the PTY stream on its way to the host terminal (only
 	// the host's — viewers get the raw bytes). Touched solely by pumpPTY.
 	hostMirror hostMirror
