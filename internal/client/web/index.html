@@ -562,6 +562,13 @@
       color: #58a6ff;
     }
     .recents-row .label { flex: 1; min-width: 0; }
+    /* The label is a real <a href="?s=…"> so ⌘-click / middle-click / "Open link
+       in new tab" work natively; stretched back over the row's own padding so
+       the whole body of the row is the link, not just the two lines of text. */
+    .recents-row a.label {
+      display: block; color: inherit; text-decoration: none;
+      margin: -8px 0 -8px -12px; padding: 8px 0 8px 12px;
+    }
     .recents-row .name { font-size: 13px; font-weight: 500; }
     .recents-row .meta { font-size: 11px; color: #8b949e; font-family: monospace; }
     .recents-row .name.placeholder { color: #8b949e; font-style: italic; font-weight: 400; }
@@ -632,6 +639,14 @@
        the id and action buttons: the label wraps (up to 2 lines) with its
        metadata beneath it, the same shape as the Recents rows. */
     .machine-session .ms-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+    /* A shell row's label block is a real <a href="?s=…">, so ⌘/Ctrl-click,
+       middle-click and "Open link in new tab" work natively. It's stretched
+       back over the row's own padding so the whole body of the row is the
+       link, not just the two lines of text. */
+    .machine-session a.ms-main {
+      color: inherit; text-decoration: none;
+      margin: -8px 0 -8px -28px; padding: 8px 0 8px 28px;
+    }
     .machine-session .ms-label {
       font-size: 13px; color: #e6edf3; line-height: 1.35; word-break: break-word;
       display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
@@ -1013,6 +1028,28 @@
       history.replaceState(null, '', location.pathname + location.search);
     }
 
+    // ---- Opening a session in its own tab -----------------------------------
+    // A URL that connects to a session on its own, used as the href behind every
+    // row in the dropdown so ⌘/Ctrl-click, middle-click and "Open link in new
+    // tab" all do the obvious thing. It carries the session id and NOTHING else:
+    // the new tab re-derives its credential locally — the owner device key from
+    // IndexedDB for a machine you own, or the remembered PIN from Recents (see
+    // historyPin) — both of which are shared across tabs of this origin. So a
+    // link that leaks (copied, bookmarked, pasted) leaks no secret.
+    // Declared up here, above every panel that paints rows, so NEW_TAB_KEY is
+    // initialised before any of them can read it.
+    function sessionHref(id) {
+      return location.pathname + '?s=' + encodeURIComponent(String(id).toUpperCase());
+    }
+    // ⌘ on Apple, Ctrl elsewhere — used only for the hover hints.
+    const NEW_TAB_KEY = /Mac|iP(hone|ad|od)/.test(navigator.platform || navigator.userAgent) ? '⌘' : 'Ctrl';
+    // "Open this somewhere other than here": ⌘/Ctrl (new tab), Shift (new
+    // window), middle-click, Alt (download). All of them mean the click was
+    // never a request to switch THIS tab's session.
+    function wantsNewTab(ev) {
+      return !!(ev.metaKey || ev.ctrlKey || ev.shiftKey || ev.altKey || ev.button === 1);
+    }
+
     // ---- Recent sessions history (localStorage, cross-tab, cross-session) ----
     // Each entry: { id, pin, name, lastSeen }. Only UNNAMED (auto-recorded)
     // sessions count against the cap of 10 most-recent, so the dropdown stays
@@ -1032,6 +1069,16 @@
     }
     function saveHistory(list) {
       try { localStorage.setItem(HISTORY_KEY, JSON.stringify(list)); } catch (_) {}
+    }
+    // The PIN this browser already remembers for a session, if any. Recents
+    // lives in localStorage, so every tab of this origin can read it — which is
+    // what lets a tab opened from a Recents row connect on its own without the
+    // PIN ever appearing in the URL.
+    function historyPin(id) {
+      if (!id) return '';
+      const up = String(id).toUpperCase();
+      const e = loadHistory().find(x => x && x.id === up);
+      return (e && e.pin) || '';
     }
     // Enforce the cap WITHOUT evicting named sessions: named entries are always
     // kept (the user deliberately labelled them, so they're not throwaway), and
@@ -1392,8 +1439,13 @@
         const row = document.createElement('div');
         const isCurrent = !!sessionId && e.id === sessionId;
         row.className = 'recents-row' + (isCurrent ? ' is-current' : '');
-        row.title = isCurrent ? 'This is the session you\'re viewing' : 'Click to connect';
-        const label = document.createElement('div');
+        row.title = (isCurrent ? 'This is the session you\'re viewing' : 'Click to connect')
+          + ' · ' + NEW_TAB_KEY + '-click opens it in a new tab';
+        // A real link, so the browser's own open-elsewhere gestures work. The
+        // PIN stays out of the URL — the opened tab reads it back out of
+        // Recents itself (see historyPin).
+        const label = document.createElement('a');
+        label.href = sessionHref(e.id);
         label.className = 'label';
         const nameEl = document.createElement('div');
         nameEl.className = 'name' + (e.name ? '' : ' placeholder');
@@ -1423,7 +1475,12 @@
         row.appendChild(label);
         row.appendChild(renameBtn);
         row.appendChild(forgetBtn);
-        row.addEventListener('click', () => {
+        row.addEventListener('click', (ev) => {
+          // A modified click belongs to the browser — it's already opening the
+          // row's link elsewhere, and connecting here too would tear down this
+          // tab's session as a side effect of asking for a second one.
+          if (wantsNewTab(ev)) return;
+          ev.preventDefault(); // don't navigate this tab away; connect in place
           // Fill inputs and start a connection to this remembered session.
           sessionInput.value = e.id;
           pinInput.value = e.pin;
@@ -1469,6 +1526,18 @@
       if (stored) {
         pinInput.value = stored;
         initialPin = stored;
+      }
+    }
+    // Still nothing, but we've connected to this session before? Use the PIN
+    // from Recents. sessionStorage above is per-tab and a new tab never inherits
+    // it, so without this a ⌘-clicked Recents row would land on a PIN prompt for
+    // a credential this browser is already holding. A stale PIN here just fails
+    // the handshake and prompts, exactly as clicking the row does.
+    if (!initialPin && initialSession) {
+      const remembered = historyPin(initialSession);
+      if (remembered) {
+        pinInput.value = remembered;
+        initialPin = remembered;
       }
     }
 
@@ -2767,9 +2836,14 @@
         }
         const addBtn = document.createElement('button');
         addBtn.className = 'machine-btn';
-        addBtn.title = 'Start a new session on this machine';
+        addBtn.title = 'Start a new session on this machine (' + NEW_TAB_KEY + '-click to start it in a new tab)';
         addBtn.innerHTML = mIcon('plus');
-        addBtn.addEventListener('click', (ev) => { ev.stopPropagation(); spawnOnMachine(b64, nameEl.textContent); });
+        addBtn.addEventListener('click', (ev) => {
+          ev.stopPropagation();
+          // The tab is opened here, synchronously, or the popup blocker kills
+          // it; a blocked open returns null and we simply spawn in place.
+          spawnOnMachine(b64, nameEl.textContent, wantsNewTab(ev) ? window.open('', '_blank') : null);
+        });
         const renameBtn = document.createElement('button');
         renameBtn.className = 'machine-btn';
         renameBtn.title = 'Rename this machine';
@@ -2956,8 +3030,12 @@
         row.className = 'machine-session' + (isCurrent ? ' is-current' : '');
         // Two-line block: the label (title/cwd, wraps up to 2 lines) over its
         // metadata (id · viewers · idle), so nothing gets crushed to an ellipsis.
-        const main = document.createElement('div');
+        // A shell row is an anchor to ?s=<id> so the browser's own "open this
+        // somewhere else" gestures work; a port-forward row isn't connectable,
+        // so it stays a plain div with no link to offer.
+        const main = document.createElement(s.kind === 'port' ? 'div' : 'a');
         main.className = 'ms-main';
+        if (s.kind !== 'port') main.href = sessionHref(s.id);
         const label = document.createElement('div');
         label.className = 'ms-label';
         label.textContent = sessionLabelWeb(s);
@@ -2983,8 +3061,16 @@
         const actions = document.createElement('div');
         actions.className = 'ms-actions';
         if (s.kind !== 'port') {
-          row.title = isCurrent ? "The session you're viewing" : 'Connect (no PIN — you own this machine)';
-          row.addEventListener('click', () => connectOwned(s.id));
+          row.title = (isCurrent ? "The session you're viewing" : 'Connect (no PIN — you own this machine)')
+            + ' · ' + NEW_TAB_KEY + '-click opens it in a new tab';
+          row.addEventListener('click', (ev) => {
+            // A modified click is the browser's to handle — it's already
+            // opening the anchor in a new tab/window, and hijacking it here
+            // would ALSO tear down this tab's session to connect in place.
+            if (wantsNewTab(ev)) return;
+            ev.preventDefault(); // don't navigate this tab away; connect in place
+            connectOwned(s.id);
+          });
           const ren = document.createElement('button');
           ren.className = 'ms-btn';
           ren.title = 'Rename this session';
@@ -3042,18 +3128,33 @@
     }
 
     // Spawn a new session on an owned machine, then connect to it.
-    async function spawnOnMachine(b64, name) {
+    //
+    // With a `tab` handle (⌘-click on the + button) the new session lands THERE
+    // instead of here. The tab must be opened synchronously inside the click or
+    // the popup blocker eats it, so it arrives blank and we point it at the
+    // session once the spawn lands — or close it again if the spawn never does,
+    // rather than leaving a stranded about:blank behind.
+    async function spawnOnMachine(b64, name, tab) {
       try {
-        setStatus('Starting a session on ' + name + '…', 'info');
+        setStatus('Starting a session on ' + name + (tab ? ' in a new tab…' : '…'), 'info');
         // DIR_SPAWN_TIMEOUT_MS covers the host's spawn budget + the directory
         // channel's owner handshake, so a slow-but-successful spawn isn't reported
         // as a failure here (which would strand a session the user was told never
         // started).
         const r = await queryDirectory(base64ToU8(b64URLToStd(b64)), { spawn: true, spawnName: '', timeout: DIR_SPAWN_TIMEOUT_MS });
-        if (!connectToSpawnedSession(r, true)) { // owner spawn → PIN-free connect
+        if (!r || !r.id) {
+          if (tab) tab.close();
           setStatus('Could not start a session on ' + name, 'error');
+          return;
         }
+        if (tab) {
+          tab.location = sessionHref(r.id); // owner tab → PIN-free connect on load
+          setStatus('Started ' + r.id + ' on ' + name + ' in a new tab', 'info');
+          return;
+        }
+        connectToSpawnedSession(r, true); // owner spawn → PIN-free connect
       } catch (e) {
+        if (tab) tab.close();
         // Reached-but-failed (host returned an error) and couldn't-reach both land
         // here; surface the host's reason when we have one rather than guessing.
         setStatus('Could not start a session on ' + name + (e && e.message && e.message !== 'timeout' ? ' (' + e.message + ')' : ''), 'error');
