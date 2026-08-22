@@ -173,6 +173,17 @@ func mirrorServeCapture(conn net.Conn, args []string) {
 		}
 		return
 	}
+	// One capture process is all macOS allows us in practice: replayd keys a
+	// stream's "application connection" by code-signing identity, so a SECOND
+	// helper process starting any stream kills the first one's with
+	// "application connection being interrupted" — a window view and the
+	// windows-list previews could never coexist. Every capture therefore runs
+	// inside one long-lived `reminal-capture serve` process, multiplexed by
+	// stream id. The spawn-per-capture path below survives only for a helper
+	// binary that predates serve mode (a REMINAL_CAPTURE_HELPER dev override).
+	if capMux.serve(conn, helper, id, w, q, fps, codec) {
+		return
+	}
 	cargs := []string{id, w, q, fps}
 	if codec != "" {
 		cargs = append(cargs, codec)
@@ -257,15 +268,307 @@ func (w *capWriter) String() string {
 // sentinel as an absurd frame length and simply ends its read loop — exactly
 // what it did before this existed — so the addition is backward compatible.
 func writeMirrorError(conn net.Conn, msg string) {
+	_ = conn.SetWriteDeadline(time.Now().Add(2 * time.Second))
+	_, _ = conn.Write(errFrameBytes(msg))
+}
+
+// errFrameBytes builds that error frame as bytes, for the paths that go
+// through a muxConn queue instead of writing a conn directly.
+func errFrameBytes(msg string) []byte {
 	if len(msg) > 480 {
 		msg = msg[:480]
 	}
+	b := make([]byte, 8+len(msg))
+	binary.BigEndian.PutUint32(b[0:4], winErrFrameMagic)
+	binary.BigEndian.PutUint32(b[4:8], uint32(len(msg)))
+	copy(b[8:], msg)
+	return b
+}
+
+// ---- multiplexed capture: one helper process, every stream ------------------
+
+// capMux is the daemon's one long-lived capture helper. See the comment at its
+// call site in mirrorServeCapture for why concurrent helper PROCESSES cannot
+// exist (replayd's per-identity connection), which is the whole reason this
+// multiplexer does.
+var capMux captureMux
+
+type captureMux struct {
+	mu          sync.Mutex
+	stdin       io.WriteCloser      // helper's command channel; nil = not running
+	conns       map[uint32]*muxConn // sid → the session conn its frames go to
+	nextSID     uint32
+	unsupported bool // helper binary predates serve mode — use the legacy path
+}
+
+// muxConn fans one stream's frames from the shared demux loop out to its
+// session conn. The bounded queue and dedicated writer exist so one slow or
+// stalled session can never block the demux loop — that loop feeds EVERY
+// stream. Overflow ends this stream (the session just reconnects) instead of
+// stalling the rest.
+//
+// Teardown discipline: ONLY the demux goroutine — the sole sender — may close
+// frames (end/fail); closing it from the session side would race demux's
+// sends, and send-on-closed-channel panics. The session side signals quit
+// instead, which just stops the writer.
+type muxConn struct {
+	conn     net.Conn
+	frames   chan []byte
+	quit     chan struct{}
+	endOnce  sync.Once
+	quitOnce sync.Once
+}
+
+// end closes the frame queue; writeLoop drains what's left and closes the conn.
+// Demux goroutine only — see the type comment.
+func (mc *muxConn) end() { mc.endOnce.Do(func() { close(mc.frames) }) }
+
+// fail tells the session why (best effort — the queue may be full) and ends.
+// Demux goroutine only.
+func (mc *muxConn) fail(msg string) {
+	select {
+	case mc.frames <- errFrameBytes(msg):
+	default:
+	}
+	mc.end()
+}
+
+// stopDraining is the session side's teardown: the session is gone, stop
+// writing to it. The sid is already out of m.conns by then, so demux stops
+// feeding frames; any straggler already in flight fills the buffer harmlessly.
+func (mc *muxConn) stopDraining() { mc.quitOnce.Do(func() { close(mc.quit) }) }
+
+func (mc *muxConn) writeLoop() {
+	// Closing the conn on the way out is what unblocks the command reader in
+	// serve() when the stream ended helper-side, so cleanup converges from
+	// either direction.
+	defer mc.conn.Close()
+	for {
+		select {
+		case b, ok := <-mc.frames:
+			if !ok {
+				return // drained — a closed channel yields its buffer first
+			}
+			_ = mc.conn.SetWriteDeadline(time.Now().Add(15 * time.Second))
+			if _, err := mc.conn.Write(b); err != nil {
+				return
+			}
+		case <-mc.quit:
+			return
+		}
+	}
+}
+
+// serve runs one capture stream over the shared helper, blocking until the
+// stream or the session is done (it owns conn, like the legacy path). Returns
+// false — with nothing yet written to conn — when the helper binary doesn't
+// speak serve mode, so the caller can fall back to spawning it per capture.
+func (m *captureMux) serve(conn net.Conn, helper, id, w, q, fps, codec string) bool {
+	m.mu.Lock()
+	if m.unsupported {
+		m.mu.Unlock()
+		return false
+	}
+	if m.stdin == nil && !m.startLocked(helper) {
+		m.mu.Unlock()
+		return false
+	}
+	m.nextSID++ // never reused across helper restarts, so stale commands can't cross streams
+	sid := m.nextSID
+	mc := &muxConn{conn: conn, frames: make(chan []byte, 64), quit: make(chan struct{})}
+	m.conns[sid] = mc
+	m.mu.Unlock()
+
+	go mc.writeLoop()
+	if codec == "" {
+		codec = "jpeg"
+	}
+	m.command(fmt.Sprintf("start %d %s %s %s %s %s", sid, id, w, q, fps, codec))
+
+	// Read session→daemon commands until the session drops the conn: "key"
+	// (force an IDR) forwards with this stream's sid. Old sessions never write,
+	// so this blocks straight to EOF — the pure lifeline it always was.
+	sc := bufio.NewScanner(conn)
+	sc.Buffer(make([]byte, 256), 256)
+	for sc.Scan() {
+		if strings.TrimSpace(sc.Text()) == "key" {
+			m.command(fmt.Sprintf("key %d", sid))
+		}
+	}
+
+	m.mu.Lock()
+	delete(m.conns, sid)
+	m.mu.Unlock()
+	mc.stopDraining()
+	m.command(fmt.Sprintf("stop %d", sid)) // helper ignores an already-ended sid
+	return true
+}
+
+// command sends one line to the helper. A dead helper (stdin nilled by the
+// demux loop) makes this a no-op — its streams are already being failed.
+func (m *captureMux) command(line string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.stdin != nil {
+		_, _ = io.WriteString(m.stdin, line+"\n")
+	}
+}
+
+// startLocked launches `reminal-capture serve` and waits for its hello — the
+// sid-0 READY frame a serve helper writes within milliseconds of starting. A
+// pre-serve binary argv-parses "serve" as a window id and dies with usage
+// instead, writing nothing (its death, not a timer, resolves the probe:
+// process-liveness checks can't be trusted here — an exited child is a zombie
+// until reaped, and a zombie still signals as alive). Called with m.mu held;
+// only capture starts stall behind it, and only while a helper comes up.
+func (m *captureMux) startLocked(helper string) bool {
+	cmd := exec.Command(helper, "serve")
+	cmd.Stderr = &lineLogger{prefix: "reminal: "}
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		return false
+	}
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		_ = stdin.Close()
+		return false
+	}
+	if err := cmd.Start(); err != nil {
+		return false
+	}
+	ready := make(chan struct{})
+	dead := make(chan struct{})
+	go m.demux(stdout, cmd, stdin, ready, dead)
+	select {
+	case <-ready:
+		m.stdin = stdin
+		if m.conns == nil {
+			m.conns = make(map[uint32]*muxConn)
+		}
+		return true
+	case <-dead:
+		// Died without a hello — demux latches m.unsupported off the exit code
+		// (it needs m.mu for that, which we hold; it gets there right after we
+		// return). This capture falls back to the legacy path either way.
+		return false
+	case <-time.After(2 * time.Second):
+		// No hello, not dead: something is wedged. Kill it and fall back this
+		// once, WITHOUT latching — a transient wedge must not cost concurrent
+		// capture until the daemon restarts.
+		_ = cmd.Process.Kill()
+		return false
+	}
+}
+
+// demux is the helper's single reader: [uint32 sid][uint32 len][payload] outer
+// frames, payload forwarded verbatim (it is the exact inner framing sessions
+// already parse), len 0 meaning "sid's stream ended". Runs until the helper
+// dies or desyncs; then every live stream is failed and the next capture
+// starts a fresh helper. Closes ready on the first outer frame (the hello) and
+// dead when the helper is gone.
+func (m *captureMux) demux(stdout io.Reader, cmd *exec.Cmd, stdin io.WriteCloser, ready, dead chan struct{}) {
+	br := bufio.NewReaderSize(stdout, 512*1024)
+	sawHello := false
 	var hdr [8]byte
-	binary.BigEndian.PutUint32(hdr[0:4], winErrFrameMagic)
-	binary.BigEndian.PutUint32(hdr[4:8], uint32(len(msg)))
-	_ = conn.SetWriteDeadline(time.Now().Add(2 * time.Second))
-	_, _ = conn.Write(hdr[:])
-	_, _ = io.WriteString(conn, msg)
+	for {
+		if _, err := io.ReadFull(br, hdr[:]); err != nil {
+			break
+		}
+		if !sawHello {
+			sawHello = true
+			close(ready)
+		}
+		sid := binary.BigEndian.Uint32(hdr[0:4])
+		n := binary.BigEndian.Uint32(hdr[4:8])
+		if n == 0 {
+			m.endStream(sid)
+			continue
+		}
+		if n > 16*1024*1024 {
+			break // framing desync — kill and restart the helper
+		}
+		buf := make([]byte, n)
+		if _, err := io.ReadFull(br, buf); err != nil {
+			break
+		}
+		m.mu.Lock()
+		mc := m.conns[sid]
+		m.mu.Unlock()
+		if mc == nil {
+			continue // the hello (sid 0), or a stopped stream's late frames
+		}
+		select {
+		case mc.frames <- buf:
+		default:
+			// This session stopped draining. Ending its stream (it will
+			// reconnect) beats stalling every other stream behind it.
+			m.endStream(sid)
+		}
+	}
+	_ = stdin.Close()
+	if cmd.Process != nil {
+		_ = cmd.Process.Kill()
+	}
+	err := cmd.Wait()
+	// Usage (exit 2) with no hello = a pre-serve binary, not a crash.
+	var exit *exec.ExitError
+	preServe := !sawHello && errors.As(err, &exit) && exit.ExitCode() == 2
+	// Wake a startLocked probe BEFORE taking m.mu — it waits holding that lock.
+	close(dead)
+	m.mu.Lock()
+	if preServe && !m.unsupported {
+		m.unsupported = true
+		fmt.Fprintln(os.Stderr, "reminal: capture helper predates serve — one process per capture (no concurrent streams)")
+	}
+	// Only the ACTIVE helper's demux may fail streams: a probe helper that
+	// never registered must not touch conns a fresh helper now serves.
+	var orphans map[uint32]*muxConn
+	if m.stdin == stdin {
+		m.stdin = nil
+		orphans = m.conns
+		m.conns = make(map[uint32]*muxConn)
+	}
+	m.mu.Unlock()
+	for _, mc := range orphans {
+		mc.fail("capture service restarted")
+	}
+}
+
+// endStream detaches sid; its writeLoop drains and closes the session conn.
+func (m *captureMux) endStream(sid uint32) {
+	m.mu.Lock()
+	mc := m.conns[sid]
+	delete(m.conns, sid)
+	m.mu.Unlock()
+	if mc != nil {
+		mc.end()
+	}
+}
+
+// lineLogger relays a child's stderr into the daemon's log one prefixed line
+// at a time, bounded per line so a misbehaving child can't grow daemon memory.
+// This is how a serve helper's "capture <id> ended: <why>" reasons — which
+// exist nowhere else — reach daemon.log.
+type lineLogger struct {
+	mu     sync.Mutex
+	prefix string
+	buf    []byte
+}
+
+func (l *lineLogger) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	for _, c := range p {
+		if c == '\n' {
+			fmt.Fprintf(os.Stderr, "%s%s\n", l.prefix, l.buf)
+			l.buf = l.buf[:0]
+			continue
+		}
+		if len(l.buf) < 4096 {
+			l.buf = append(l.buf, c)
+		}
+	}
+	return len(p), nil
 }
 
 // mirrorScreencaptureLoop is the no-native-helper fallback: poll screencapture at

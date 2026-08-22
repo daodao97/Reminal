@@ -189,6 +189,43 @@ func die(_ msg: String) -> Never {
     exit(1)
 }
 
+// ---- shared stream plumbing (one-shot mode AND `serve`) --------------------
+// Declared before the `serve` dispatch below: in a main.swift, top-level `let`s
+// only initialize when their line executes, and serve mode never returns — so
+// anything it touches must already exist by then.
+
+// frameByteBudget bounds each JPEG so its base64-in-JSON envelope stays well
+// under every browser's DataChannel maxMessageSize (140_000 × 1.34 + overhead
+// ≈ 188 KiB < Chrome's 256 KiB). See the encode loop in FrameOutput.
+let frameByteBudget = 140_000
+
+let ciContext = CIContext(options: [.useSoftwareRenderer: false])
+let stdoutHandle = FileHandle.standardOutput
+
+// encodeJPEG compresses cg at the given quality via ImageIO's hardware path.
+func encodeJPEG(_ cg: CGImage, _ quality: Double) -> Data? {
+    let out = NSMutableData()
+    guard let dest = CGImageDestinationCreateWithData(out, "public.jpeg" as CFString, 1, nil) else { return nil }
+    CGImageDestinationAddImage(dest, cg, [kCGImageDestinationLossyCompressionQuality: quality] as CFDictionary)
+    guard CGImageDestinationFinalize(dest) else { return nil }
+    return out as Data
+}
+
+// Frame flags for h264 framing (JPEG mode has no flag byte).
+let flagH264Delta: UInt8 = 1
+let flagH264Key: UInt8 = 2
+
+// errFrameMagic mirrors winErrFrameMagic on the Go side: a reserved length
+// prefix marking an out-of-band error frame (why the stream is ending) rather
+// than a picture.
+let errFrameMagic: UInt32 = 0xFFFF_FFFF
+
+// Multi-stream server subcommand: `reminal-capture serve` hosts EVERY capture
+// in this one process — see runServeMode below for the protocol and for why
+// (replayd kills concurrent streams from same-identity sibling processes).
+if args.count >= 2, args[1] == "serve" {
+    runServeMode() // never returns
+}
 
 // Parent lifeline + command channel: the agent holds our stdin pipe open; EOF
 // means it's gone — including deaths that skip its cleanup (SIGKILL, crash, or
@@ -302,13 +339,11 @@ if args.count >= 2, args[1] == "vdisplay" {
 
 // Target: a CGWindowID for one window, or "display:<CGDirectDisplayID>" for a
 // whole desktop (the agent lists displays as pseudo-windows with that id form).
-var windowID: UInt32 = 0
-var displayID: UInt32 = 0
-if args.count >= 2, args[1].hasPrefix("display:"), let d = UInt32(args[1].dropFirst("display:".count)) {
-    displayID = d
-} else if args.count >= 2, let w = UInt32(args[1]) {
-    windowID = w
-} else {
+// Validated here so a typo'd invocation gets usage instead of "window 0 not
+// found"; the actual lookup happens in resolveCaptureTarget.
+let targetSpec = args.count >= 2 ? args[1] : ""
+if UInt32(targetSpec) == nil,
+   !(targetSpec.hasPrefix("display:") && UInt32(targetSpec.dropFirst("display:".count)) != nil) {
     FileHandle.standardError.write(Data("usage: reminal-capture <windowID|display:ID> [maxWidth] [quality] [fps] [jpeg|h264]\n".utf8))
     exit(2)
 }
@@ -319,22 +354,6 @@ let quality = args.count >= 4 ? (Double(args[3]) ?? 45) / 100.0 : 0.45
 let fps = args.count >= 5 ? max(1, min(120, Int(args[4]) ?? 60)) : 60
 let useH264 = args.count >= 6 && args[5] == "h264"
 
-// frameByteBudget bounds each JPEG so its base64-in-JSON envelope stays well
-// under every browser's DataChannel maxMessageSize (140_000 × 1.34 + overhead
-// ≈ 188 KiB < Chrome's 256 KiB). See the encode loop in FrameOutput.
-let frameByteBudget = 140_000
-
-let ciContext = CIContext(options: [.useSoftwareRenderer: false])
-let stdoutHandle = FileHandle.standardOutput
-
-// encodeJPEG compresses cg at the given quality via ImageIO's hardware path.
-func encodeJPEG(_ cg: CGImage, _ quality: Double) -> Data? {
-    let out = NSMutableData()
-    guard let dest = CGImageDestinationCreateWithData(out, "public.jpeg" as CFString, 1, nil) else { return nil }
-    CGImageDestinationAddImage(dest, cg, [kCGImageDestinationLossyCompressionQuality: quality] as CFDictionary)
-    guard CGImageDestinationFinalize(dest) else { return nil }
-    return out as Data
-}
 // Serialize writes: the sample handler queue is single-threaded here, but keep a
 // dedicated lock so a future multi-output setup can't interleave frame bytes.
 let writeLock = NSLock()
@@ -360,10 +379,6 @@ func writeFramed(_ payload: Data, flag: UInt8?) {
     }
 }
 
-// Frame flags for h264 framing (JPEG mode has no flag byte).
-let flagH264Delta: UInt8 = 1
-let flagH264Key: UInt8 = 2
-
 // ---- H.264 encoder: VideoToolbox low-latency session → Annex-B access units ----
 //
 // Why H.264 instead of per-frame JPEG: temporal compression. Measured on a
@@ -376,8 +391,19 @@ final class H264Encoder {
     private let lock = NSLock()
     private var forceNextKey = true // first frame must be an IDR regardless
     private var lastBuffer: CVPixelBuffer? // retained for static-window re-key
+    // Injected so the encoder serves both one-shot mode (stdout framing, die on
+    // failure) and one `serve` stream (sid-framed output; failure ends only
+    // that stream). queue is the SAME queue the stream's sample handler runs
+    // on — all submissions must share it, see requestKey.
+    private let queue: DispatchQueue
+    private let sink: (Data, UInt8) -> Void
+    private let fatal: (String) -> Void
 
-    init?(width: Int, height: Int, fps: Int) {
+    init?(width: Int, height: Int, fps: Int, queue: DispatchQueue,
+          sink: @escaping (Data, UInt8) -> Void, fatal: @escaping (String) -> Void) {
+        self.queue = queue
+        self.sink = sink
+        self.fatal = fatal
         // Low-latency rate control (hardware-only mode: no B-frames, no frame
         // delay, bitrate honored per-frame). If the machine's encoder doesn't
         // support it, fall back to a regular realtime session.
@@ -456,7 +482,7 @@ final class H264Encoder {
         let cached = lastBuffer
         lock.unlock()
         guard let cached else { return } // no frame yet: the first one is a key anyway
-        sampleQueue.async {
+        queue.async {
             guard let copy = Self.copyPixelBuffer(cached) else { return } // next live frame keys instead
             self.lock.lock()
             self.forceNextKey = false
@@ -504,7 +530,7 @@ final class H264Encoder {
             self.emit(sampleBuffer)
         }
         if status != noErr {
-            die("h264 encode failed: \(status)") // agent restarts / falls back to jpeg
+            fatal("h264 encode failed: \(status)") // agent restarts / falls back to jpeg
         }
     }
 
@@ -562,7 +588,7 @@ final class H264Encoder {
             }
         }
         guard !out.isEmpty else { return }
-        writeFramed(out, flag: isKey ? flagH264Key : flagH264Delta)
+        sink(out, isKey ? flagH264Key : flagH264Delta)
     }
 }
 
@@ -570,6 +596,19 @@ final class H264Encoder {
 
 // ---- stream output: encode changed frames to JPEG and emit them ----
 final class FrameOutput: NSObject, SCStreamOutput, SCStreamDelegate {
+    private let quality: Double
+    private let encoder: H264Encoder? // set = h264 mode; frames bypass JPEG
+    private let emit: (Data, UInt8?) -> Void // one JPEG frame (flag nil)
+    private let stopped: (String) -> Void // the stream ended, with the reason
+
+    init(quality: Double, encoder: H264Encoder?,
+         emit: @escaping (Data, UInt8?) -> Void, stopped: @escaping (String) -> Void) {
+        self.quality = quality
+        self.encoder = encoder
+        self.emit = emit
+        self.stopped = stopped
+    }
+
     func stream(_ stream: SCStream, didOutputSampleBuffer sampleBuffer: CMSampleBuffer, of type: SCStreamOutputType) {
         guard type == .screen else { return }
 
@@ -589,7 +628,7 @@ final class FrameOutput: NSObject, SCStreamOutput, SCStreamDelegate {
 
         // h264 mode: hand the BGRA buffer straight to VideoToolbox — no CGImage,
         // no JPEG. The encoder emits framed Annex-B AUs itself.
-        if let enc = h264Encoder {
+        if let enc = encoder {
             enc.encode(pixelBuffer)
             return
         }
@@ -610,77 +649,110 @@ final class FrameOutput: NSObject, SCStreamOutput, SCStreamDelegate {
             data = encodeJPEG(cgImage, q)
         }
         guard let jpeg = data, !jpeg.isEmpty else { return }
-        writeFramed(jpeg, flag: nil)
+        emit(jpeg, nil)
     }
 
     func stream(_ stream: SCStream, didStopWithError error: Error) {
-        die("stream stopped: \(error.localizedDescription)")
+        stopped("stream stopped: \(error.localizedDescription)")
     }
+}
+
+// CaptureFailure is a why-not message with the Error conformance Result wants.
+struct CaptureFailure: Error { let message: String }
+
+// resolveCaptureTarget looks spec up — a CGWindowID, or "display:<id>" — in
+// fresh shareable content and delivers a filter plus the target's size in
+// points, or the message saying why not. Async because SCShareableContent is;
+// done may run on an arbitrary queue.
+func resolveCaptureTarget(_ spec: String,
+                          _ done: @escaping (Result<(filter: SCContentFilter, srcW: Double, srcH: Double), CaptureFailure>) -> Void) {
+    var windowID: UInt32 = 0
+    var displayID: UInt32 = 0
+    if spec.hasPrefix("display:"), let d = UInt32(spec.dropFirst("display:".count)) {
+        displayID = d
+    } else if let w = UInt32(spec) {
+        windowID = w
+    } else {
+        done(.failure(CaptureFailure(message: "bad capture target \(spec)")))
+        return
+    }
+    SCShareableContent.getExcludingDesktopWindows(false, onScreenWindowsOnly: true) { content, error in
+        if let error {
+            done(.failure(CaptureFailure(message: "shareable content (screen recording permission?): \(error.localizedDescription)")))
+            return
+        }
+        if displayID != 0 {
+            guard let display = content?.displays.first(where: { $0.displayID == displayID }) else {
+                done(.failure(CaptureFailure(message: "display \(displayID) not found")))
+                return
+            }
+            // Whole desktop: everything on the display — windows, menu bar, cursor.
+            done(.success((SCContentFilter(display: display, excludingWindows: []),
+                           Double(display.width), Double(display.height))))
+        } else {
+            guard let window = content?.windows.first(where: { $0.windowID == windowID }) else {
+                done(.failure(CaptureFailure(message: "window \(windowID) not found")))
+                return
+            }
+            done(.success((SCContentFilter(desktopIndependentWindow: window),
+                           Double(window.frame.width), Double(window.frame.height))))
+        }
+    }
+}
+
+// buildStreamConfig sizes and configures one stream for its target.
+func buildStreamConfig(filter: SCContentFilter, srcW: Double, srcH: Double,
+                       maxWidth: Int, fps: Int) -> SCStreamConfiguration {
+    let config = SCStreamConfiguration()
+
+    // Output size in PIXELS. Scale the target to maxWidth wide (never up past its
+    // native retina resolution), preserving aspect — SCStream does the downscale in
+    // hardware, so there's no full-res intermediate to decode like the sips path.
+    let pointW = max(1.0, srcW)
+    let pointH = max(1.0, srcH)
+    var scale = 2.0
+    if #available(macOS 14.0, *) { scale = filter.pointPixelScale > 0 ? Double(filter.pointPixelScale) : 2.0 }
+    let nativeW = pointW * scale
+    let outW = min(Double(maxWidth), nativeW)
+    let outH = outW * (pointH / pointW)
+    // EVEN dimensions, always. H.264 4:2:0 subsamples chroma 2x2, so an odd width
+    // or height can't be represented directly — the encoder pads to even and
+    // signals a crop, and hardware decoders (Android MediaCodec especially) are
+    // unreliable on that path: it renders as speckles and edge garbage. Real
+    // windows hit this constantly once scaled to maxWidth: a 1728x1117 desktop
+    // becomes 1100x711, a 1020x669 window becomes 1100x721. Rounding down to even
+    // costs at most one pixel of height and keeps the stream on the crop-to-16
+    // path every 1080p video already exercises. JPEG mode is unaffected by the
+    // parity but shares the size, and one pixel there is invisible.
+    config.width = max(2, Int(outW.rounded()) & ~1)
+    config.height = max(2, Int(outH.rounded()) & ~1)
+    config.minimumFrameInterval = CMTime(value: 1, timescale: CMTimeScale(fps)) // ceiling; idle frames are skipped
+    config.pixelFormat = kCVPixelFormatType_32BGRA
+    config.queueDepth = 5
+    config.showsCursor = true
+    return config
 }
 
 // ---- locate the target (one window, or a whole display) ----
 let sema = DispatchSemaphore(value: 0)
-var targetWindow: SCWindow?
-var targetDisplay: SCDisplay?
-var contentErr: Error?
-SCShareableContent.getExcludingDesktopWindows(false, onScreenWindowsOnly: true) { content, error in
-    contentErr = error
-    if displayID != 0 {
-        targetDisplay = content?.displays.first(where: { $0.displayID == displayID })
-    } else {
-        targetWindow = content?.windows.first(where: { $0.windowID == windowID })
-    }
-    sema.signal()
-}
+var resolved: Result<(filter: SCContentFilter, srcW: Double, srcH: Double), CaptureFailure>!
+resolveCaptureTarget(targetSpec) { resolved = $0; sema.signal() }
 sema.wait()
-if let contentErr { die("shareable content (screen recording permission?): \(contentErr.localizedDescription)") }
-
-let filter: SCContentFilter
-let srcW: Double, srcH: Double
-if displayID != 0 {
-    guard let display = targetDisplay else { die("display \(displayID) not found") }
-    // Whole desktop: everything on the display — windows, menu bar, cursor.
-    filter = SCContentFilter(display: display, excludingWindows: [])
-    srcW = Double(display.width)
-    srcH = Double(display.height)
-} else {
-    guard let window = targetWindow else { die("window \(windowID) not found") }
-    filter = SCContentFilter(desktopIndependentWindow: window)
-    srcW = Double(window.frame.width)
-    srcH = Double(window.frame.height)
+let target: (filter: SCContentFilter, srcW: Double, srcH: Double)
+switch resolved! {
+case .failure(let e): die(e.message)
+case .success(let t): target = t
 }
 
 // ---- configure + start capture ----
-let config = SCStreamConfiguration()
-
-// Output size in PIXELS. Scale the target to maxWidth wide (never up past its
-// native retina resolution), preserving aspect — SCStream does the downscale in
-// hardware, so there's no full-res intermediate to decode like the sips path.
-let pointW = max(1.0, srcW)
-let pointH = max(1.0, srcH)
-var scale = 2.0
-if #available(macOS 14.0, *) { scale = filter.pointPixelScale > 0 ? Double(filter.pointPixelScale) : 2.0 }
-let nativeW = pointW * scale
-let outW = min(Double(maxWidth), nativeW)
-let outH = outW * (pointH / pointW)
-// EVEN dimensions, always. H.264 4:2:0 subsamples chroma 2x2, so an odd width
-// or height can't be represented directly — the encoder pads to even and
-// signals a crop, and hardware decoders (Android MediaCodec especially) are
-// unreliable on that path: it renders as speckles and edge garbage. Real
-// windows hit this constantly once scaled to maxWidth: a 1728x1117 desktop
-// becomes 1100x711, a 1020x669 window becomes 1100x721. Rounding down to even
-// costs at most one pixel of height and keeps the stream on the crop-to-16
-// path every 1080p video already exercises. JPEG mode is unaffected by the
-// parity but shares the size, and one pixel there is invisible.
-config.width = max(2, Int(outW.rounded()) & ~1)
-config.height = max(2, Int(outH.rounded()) & ~1)
-config.minimumFrameInterval = CMTime(value: 1, timescale: CMTimeScale(fps)) // ceiling; idle frames are skipped
-config.pixelFormat = kCVPixelFormatType_32BGRA
-config.queueDepth = 5
-config.showsCursor = true
+let config = buildStreamConfig(filter: target.filter, srcW: target.srcW, srcH: target.srcH,
+                               maxWidth: maxWidth, fps: fps)
 
 if useH264 {
-    guard let enc = H264Encoder(width: config.width, height: config.height, fps: fps) else {
+    guard let enc = H264Encoder(width: config.width, height: config.height, fps: fps,
+                                queue: sampleQueue,
+                                sink: { writeFramed($0, flag: $1) },
+                                fatal: { die($0) }) else {
         // No usable H.264 encoder on this machine: exit non-zero so the agent
         // falls back to requesting a JPEG stream instead.
         die("h264: VTCompressionSession unavailable")
@@ -688,8 +760,10 @@ if useH264 {
     h264Encoder = enc
 }
 
-let output = FrameOutput()
-let stream = SCStream(filter: filter, configuration: config, delegate: output)
+let output = FrameOutput(quality: quality, encoder: h264Encoder,
+                         emit: { writeFramed($0, flag: $1) },
+                         stopped: { die($0) })
+let stream = SCStream(filter: target.filter, configuration: config, delegate: output)
 do {
     try stream.addStreamOutput(output, type: .screen, sampleHandlerQueue: sampleQueue)
 } catch {
@@ -702,3 +776,229 @@ stream.startCapture { error in
 // SCStream delivers frames on its own queue; keep the process alive until the
 // agent kills it (stream stop) or the pipe closes.
 CFRunLoopRun()
+
+// ---- serve mode: every capture in ONE process --------------------------------
+//
+// Why: replayd (ScreenCaptureKit's backing daemon) keys a capture client's
+// "application connection" by code-signing identity, not by process. The moment
+// a second reminal-capture process started ANY stream, the first one's died with
+// "application connection being interrupted" — one window view plus the windows-
+// list previews, or two viewers, could never coexist. Streams inside one process
+// coexist fine (verified: display + window side by side, none dropped), so the
+// daemon keeps a single `serve` process alive and multiplexes every capture
+// through it. Same binary, same sh.reminal-signed identity — the one existing
+// Screen Recording grant covers it; nothing new prompts.
+//
+// stdin, line-based (EOF exits — the same parent-lifeline contract as one-shot):
+//   start <sid> <target> <maxWidth> <quality> <fps> <jpeg|h264>
+//   stop <sid>
+//   key <sid>          (h264: force an immediate IDR)
+// stdout: [uint32 BE sid][uint32 BE len][payload] where payload is byte-for-byte
+// what one-shot mode writes (frames, or a writeMirrorError-style error frame)
+// and len 0 marks end-of-stream for sid. The daemon strips the outer header and
+// forwards payload verbatim, so sessions parse one unchanged format.
+
+// ServeOut is the shared, serialized stdout writer for serve mode.
+final class ServeOut {
+    private let lock = NSLock()
+
+    // send writes one outer frame. A write failure means the daemon is gone —
+    // exit, taking every stream along (the daemon restarts us on demand).
+    func send(_ sid: UInt32, _ payload: Data) {
+        var hdr = Data(capacity: 8)
+        withUnsafeBytes(of: sid.bigEndian) { hdr.append(contentsOf: $0) }
+        withUnsafeBytes(of: UInt32(payload.count).bigEndian) { hdr.append(contentsOf: $0) }
+        lock.lock()
+        defer { lock.unlock() }
+        do {
+            try stdoutHandle.write(contentsOf: hdr)
+            if !payload.isEmpty { try stdoutHandle.write(contentsOf: payload) }
+        } catch {
+            exit(0)
+        }
+    }
+
+    // frame wraps one captured frame in the inner framing sessions parse —
+    // identical bytes to one-shot writeFramed.
+    func frame(_ sid: UInt32, _ payload: Data, flag: UInt8?) {
+        var inner = Data(capacity: payload.count + 5)
+        withUnsafeBytes(of: UInt32(payload.count + (flag != nil ? 1 : 0)).bigEndian) { inner.append(contentsOf: $0) }
+        if let flag { inner.append(flag) }
+        inner.append(payload)
+        send(sid, inner)
+    }
+
+    // error emits the out-of-band error frame telling the session WHY its
+    // stream is ending — the same shape the daemon's writeMirrorError produces.
+    func error(_ sid: UInt32, _ msg: String) {
+        let text = Data(msg.prefix(480).utf8)
+        var inner = Data(capacity: text.count + 8)
+        withUnsafeBytes(of: errFrameMagic.bigEndian) { inner.append(contentsOf: $0) }
+        withUnsafeBytes(of: UInt32(text.count).bigEndian) { inner.append(contentsOf: $0) }
+        inner.append(text)
+        send(sid, inner)
+    }
+
+    // end marks sid's stream over (outer len 0); the daemon closes that session's conn.
+    func end(_ sid: UInt32) { send(sid, Data()) }
+}
+
+// MuxStream is one live capture inside the serve process: its SCStream, its
+// optional encoder, and a dead-latch so late sample callbacks and duplicate
+// teardowns (helper error racing a daemon stop) are harmless.
+final class MuxStream {
+    let sid: UInt32
+    let spec: String
+    fileprivate var encoder: H264Encoder?
+    private let out: ServeOut
+    private let queue: DispatchQueue // sample handler + all encoder submissions
+    private let onEnd: (UInt32) -> Void
+    private var stream: SCStream?
+    private var output: FrameOutput?
+    private let lock = NSLock()
+    private var dead = false
+
+    init(sid: UInt32, spec: String, out: ServeOut, onEnd: @escaping (UInt32) -> Void) {
+        self.sid = sid
+        self.spec = spec
+        self.out = out
+        self.onEnd = onEnd
+        queue = DispatchQueue(label: "reminal.capture.\(sid)")
+    }
+
+    private func markDead() -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        if dead { return false }
+        dead = true
+        return true
+    }
+
+    private var isDead: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return dead
+    }
+
+    // begin starts capturing a resolved target. Any failure is reported the way
+    // the one-shot helper's die() reached sessions: same message, in-band.
+    func begin(filter: SCContentFilter, srcW: Double, srcH: Double,
+               maxWidth: Int, quality: Double, fps: Int, h264: Bool) {
+        if isDead { return }
+        let config = buildStreamConfig(filter: filter, srcW: srcW, srcH: srcH, maxWidth: maxWidth, fps: fps)
+        if h264 {
+            guard let enc = H264Encoder(width: config.width, height: config.height, fps: fps,
+                                        queue: queue,
+                                        sink: { [weak self] d, f in self?.emit(d, f) },
+                                        fatal: { [weak self] m in self?.fail(m) }) else {
+                fail("h264: VTCompressionSession unavailable")
+                return
+            }
+            encoder = enc
+        }
+        let fo = FrameOutput(quality: quality, encoder: encoder,
+                             emit: { [weak self] d, f in self?.emit(d, f) },
+                             stopped: { [weak self] m in self?.fail(m) })
+        output = fo
+        let s = SCStream(filter: filter, configuration: config, delegate: fo)
+        stream = s
+        do {
+            try s.addStreamOutput(fo, type: .screen, sampleHandlerQueue: queue)
+        } catch {
+            fail("addStreamOutput: \(error.localizedDescription)")
+            return
+        }
+        s.startCapture { [weak self] error in
+            if let error { self?.fail("startCapture: \(error.localizedDescription)") }
+        }
+    }
+
+    private func emit(_ payload: Data, _ flag: UInt8?) {
+        if isDead { return }
+        out.frame(sid, payload, flag: flag)
+    }
+
+    // fail ends the stream, telling the session why (in-band error frame) and
+    // the daemon log too (stderr line, relayed by the daemon — the reason only
+    // exists here). Safe from any queue; the first caller wins.
+    func fail(_ msg: String) {
+        guard markDead() else { return }
+        FileHandle.standardError.write(Data("capture \(spec) ended: \(msg)\n".utf8))
+        out.error(sid, msg)
+        out.end(sid)
+        stream?.stopCapture { _ in }
+        onEnd(sid)
+    }
+
+    // shutdown tears the stream down silently — the daemon asked (session gone).
+    func shutdown() {
+        guard markDead() else { return }
+        stream?.stopCapture { _ in }
+    }
+}
+
+func runServeMode() -> Never {
+    let out = ServeOut()
+    let control = DispatchQueue(label: "reminal.capture.serve")
+    var streams: [UInt32: MuxStream] = [:] // control-queue confined
+
+    // handle runs on the control queue. Unknown commands are ignored, so future
+    // daemon verbs and this helper stay compatible in both directions.
+    func handle(_ fields: [Substring]) {
+        switch fields.first {
+        case "start":
+            guard fields.count >= 7, let sid = UInt32(fields[1]) else { return }
+            let spec = String(fields[2])
+            let maxWidth = Int(fields[3]) ?? 1100
+            let quality = (Double(String(fields[4])) ?? 45) / 100.0
+            let fps = max(1, min(120, Int(fields[5]) ?? 60))
+            let h264 = fields[6] == "h264"
+            let ms = MuxStream(sid: sid, spec: spec, out: out,
+                               onEnd: { sid in control.async { streams.removeValue(forKey: sid) } })
+            streams[sid] = ms
+            resolveCaptureTarget(spec) { result in
+                control.async {
+                    guard streams[sid] === ms else { return } // stopped while resolving
+                    switch result {
+                    case .failure(let e):
+                        ms.fail(e.message)
+                    case .success(let t):
+                        ms.begin(filter: t.filter, srcW: t.srcW, srcH: t.srcH,
+                                 maxWidth: maxWidth, quality: quality, fps: fps, h264: h264)
+                    }
+                }
+            }
+        case "stop":
+            guard fields.count >= 2, let sid = UInt32(fields[1]) else { return }
+            streams.removeValue(forKey: sid)?.shutdown()
+        case "key":
+            guard fields.count >= 2, let sid = UInt32(fields[1]) else { return }
+            streams[sid]?.encoder?.requestKey()
+        default:
+            break
+        }
+    }
+
+    // Hello: one sid-0 frame announcing "this binary speaks serve". The daemon
+    // probes on it — a PRE-serve binary argv-parses "serve" as a window id and
+    // dies with usage, writing nothing to stdout, and process-liveness checks
+    // can't tell (a zombie still signals as alive). sid 0 is never allocated,
+    // so the daemon's demux drops the payload unread beyond its arrival.
+    out.send(0, Data("READY".utf8))
+
+    // Command loop on the main thread — availableData, not read(upToCount:),
+    // for the same reason as the one-shot lifeline reader: on a pipe the latter
+    // sits on lines until EOF.
+    var pending = Data()
+    while true {
+        let d = FileHandle.standardInput.availableData
+        if d.isEmpty { exit(0) } // EOF — the daemon is gone; streams die with us
+        pending.append(d)
+        while let nl = pending.firstIndex(of: 0x0A) {
+            let line = String(data: pending[pending.startIndex..<nl], encoding: .utf8) ?? ""
+            pending = Data(pending[pending.index(after: nl)...])
+            let fields = line.split(separator: " ")
+            if !fields.isEmpty { control.async { handle(fields) } }
+        }
+    }
+}
