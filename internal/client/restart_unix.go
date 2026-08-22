@@ -76,6 +76,11 @@ const (
 	// netpoller had registered with kqueue/epoll causes the runtime to
 	// crash on its next poll cycle with EBADF.
 	envResumePTYFD = "REMINAL_RESUME_PTY_FD"
+	// envResumeHeadless preserves the session's headless mode across the
+	// exec (same var the Windows handoff uses). Without it a restarted
+	// background session came back believing it was foreground: listed as
+	// such, and printing host-terminal chrome at a terminal it doesn't have.
+	envResumeHeadless = "REMINAL_RESUME_HEADLESS"
 )
 
 // LoadResumeState reads REMINAL_RESUME=1 + the surrounding env vars
@@ -110,6 +115,8 @@ func LoadResumeState() (*ResumeState, error) {
 		return nil, fmt.Errorf("resume: failed to open inherited pty fd %d", ptyFD)
 	}
 
+	headless := os.Getenv(envResumeHeadless) == "1"
+
 	// Scrub env so nothing downstream (the shell we never spawn, any
 	// child commands, `reminal info` from inside it) sees these.
 	_ = os.Unsetenv(envResume)
@@ -119,6 +126,7 @@ func LoadResumeState() (*ResumeState, error) {
 	_ = os.Unsetenv(envResumeToken)
 	_ = os.Unsetenv(envResumePTYFD)
 	_ = os.Unsetenv(envResumeStartedAt)
+	_ = os.Unsetenv(envResumeHeadless)
 
 	return &ResumeState{
 		SessionID: id,
@@ -126,6 +134,7 @@ func LoadResumeState() (*ResumeState, error) {
 		PinHash:   pinHash,
 		Token:     token,
 		StartedAt: startedAt,
+		Headless:  headless,
 		PTY:       pty.Attach(ptyFile),
 	}, nil
 }
@@ -184,6 +193,13 @@ func (a *Agent) executeRestart() error {
 		return fmt.Errorf("clear cloexec on pty fd %d: %w", ptyFD, errno)
 	}
 
+	// Unlike the Windows handoff (a NEW process, which can't adopt the old
+	// console and so forces localActive sessions headless), Exec keeps the
+	// same terminal — the mode simply carries over as it is.
+	headlessEnv := "0"
+	if a.headless {
+		headlessEnv = "1"
+	}
 	env := append(os.Environ(),
 		envResume+"=1",
 		envResumeSessionID+"="+a.sessionID,
@@ -192,6 +208,7 @@ func (a *Agent) executeRestart() error {
 		envResumeToken+"="+a.token,
 		envResumePTYFD+"="+strconv.Itoa(ptyFD),
 		envResumeStartedAt+"="+strconv.FormatInt(a.startedAt.Unix(), 10),
+		envResumeHeadless+"="+headlessEnv,
 	)
 
 	if err := syscall.Exec(exe, []string{exe}, env); err != nil {
