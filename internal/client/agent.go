@@ -2596,6 +2596,19 @@ func (a *Agent) runConnection(shellExit <-chan struct{}) (err error) {
 	// once; later reconnects are no-ops.
 	a.signalRegistered()
 
+	// The relay only pushes viewer-count updates when a viewer connects or
+	// disconnects, so a count carried across an agent reconnect can be stale in
+	// either direction — most damagingly stale-high: the last viewer left while
+	// we were offline, its TypeClosed died with the old socket, and runSender
+	// would trust the ghost count and stream every PTY chunk to a relay with
+	// nobody attached (each one a billable Durable Object request). Start every
+	// connection at zero and let viewers prove they're there: any viewer that
+	// survived our blip re-sends TypeResume the moment the relay announces
+	// agent_online, which reopens the sender gate (see runReader).
+	a.viewerSizeMu.Lock()
+	a.viewerCount = 0
+	a.viewerSizeMu.Unlock()
+
 	cursorCh := make(chan uint64, 4)
 	stop := make(chan struct{})
 	var stopOnce sync.Once
@@ -2743,6 +2756,19 @@ func (a *Agent) runReader(conn *websocket.Conn, cursorCh chan uint64) error {
 			if cursor > a.buf.NextSeq() {
 				cursor = 0
 			}
+			// A resume can only come from a live, authed viewer, so it also
+			// reopens the sender gate after a reconnect: viewers that survived
+			// our blip never re-auth (no TypeConnected fires for them), but
+			// every one of them re-sends TypeResume when the relay announces
+			// agent_online. Bump BEFORE pushing the cursor — runSender checks
+			// the count as soon as the cursor lands, and seeing zero would make
+			// it drop this viewer's only replay request on the floor. The next
+			// TypeConnected/TypeClosed restores the exact count.
+			a.viewerSizeMu.Lock()
+			if a.viewerCount < 1 {
+				a.viewerCount = 1
+			}
+			a.viewerSizeMu.Unlock()
 			pushCursor(cursorCh, cursor)
 		case protocol.TypeKexInit:
 			// A viewer is asking us to run the PIN-authenticated EKE.
@@ -2894,7 +2920,9 @@ func (a *Agent) runReader(conn *websocket.Conn, cursorCh chan uint64) error {
 }
 
 // runSender waits for a resume from the viewer, then streams buffered output
-// from that point. It keeps streaming new chunks as they're appended.
+// from that point. It keeps streaming new chunks as they're appended — but only
+// while at least one viewer is attached; with none it parks until the next
+// resume rather than pushing chunks the relay would forward to nobody.
 func (a *Agent) runSender(conn *websocket.Conn, cursorCh <-chan uint64, stop <-chan struct{}) error {
 	notify := a.buf.Notify()
 	var cursor uint64
@@ -2909,6 +2937,17 @@ func (a *Agent) runSender(conn *websocket.Conn, cursorCh <-chan uint64, stop <-c
 				cursor = c
 				sending = true
 			}
+		}
+
+		// Every message the relay's Durable Object receives is a billable
+		// request, and with no viewers it forwards terminal output to no one —
+		// an unwatched `claude` session used to burn tens of thousands of DO
+		// requests an hour this way. Park until the next TypeResume; scrollback
+		// keeps accumulating, and a returning viewer catches up from its cursor
+		// (or the snapshot below) exactly as on any reattach.
+		if a.currentViewerCount() == 0 {
+			sending = false
+			continue
 		}
 
 		// Fresh attach (or a viewer that fell behind past what we still
