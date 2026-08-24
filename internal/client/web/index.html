@@ -2397,6 +2397,10 @@
     let authed = false;       // received auth_ok
     let agentLive = false;    // agent is currently connected on the relay
     let lastSeq = 0;          // highest seq we've received from agent
+    // While nonzero (a deadline), this viewer is owed a fresh snapshot paint —
+    // set on any fresh attach / refresh, cleared when a wipe-signature frame
+    // lands. Gates the stale-tag dedup bypass in the data handler.
+    let awaitingSnapshotUntil = 0;
     let sessionId = '';
     let pinValue = '';
     let manualClose = false;  // user clicked Disconnect; do not auto-reconnect
@@ -3840,6 +3844,7 @@
         // so the old view stays put until the clean one lands — no blank flash,
         // and the input line is never momentarily missing.
         lastSeq = 0;
+        awaitingSnapshotUntil = Date.now() + 15000;
         sendResume();
       }, 450);
     }
@@ -3910,6 +3915,7 @@
         sessionId = s;
         term.reset();
       }
+      if (lastSeq === 0) awaitingSnapshotUntil = Date.now() + 15000;
       pinValue = p;
       // cryptoKey is established asynchronously by the EKE handshake
       // (see sendKexInit / completeKex) inside openSocket → ws.onmessage.
@@ -4333,15 +4339,30 @@
           // lastSeq — could be never. We detect "agent restarted" by
           // seq going dramatically backward (or seq 1 explicitly) and
           // reset lastSeq before processing.
+          let staleTagged = false;
           if (typeof msg.seq === 'number') {
             if (msg.seq === 1 || msg.seq + 32 < lastSeq) {
               lastSeq = 0;
             } else if (msg.seq <= lastSeq) {
-              break;
+              // A snapshot is tagged with the seq of the newest entry it
+              // covers, so caught-up viewers drop it. But a viewer that just
+              // attached to a STREAMING session gets live frames before its
+              // snapshot — they advance lastSeq past the snapshot's tag, and
+              // this drop then swallowed the one frame that paints history:
+              // black screen, only new output, until a resize made the app
+              // repaint itself. While a fresh paint is owed, stale-tagged
+              // frames go through decrypt so the snapshot (identified by its
+              // ED2+ED3 wipe prefix) can land; non-snapshots still drop below.
+              if (Date.now() >= awaitingSnapshotUntil) break;
+              staleTagged = true;
             }
           }
           try {
             const bytes = await decrypt(cryptoKey, msg.data);
+            if (awaitingSnapshotUntil) {
+              if (hasWipeSignature(bytes)) awaitingSnapshotUntil = 0; // the owed paint arrived
+              else if (staleTagged) break; // stale and not the snapshot — a true duplicate
+            }
             if (typeof msg.seq === 'number' && msg.seq > lastSeq) lastSeq = msg.seq;
             // Batch into the per-frame write queue instead of writing
             // each chunk immediately. On refresh the agent dumps the
