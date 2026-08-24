@@ -338,7 +338,6 @@
     #sessdock {
       display: none;
       position: fixed;
-      right: 8px;
       flex-direction: column;
       gap: 2px;
       min-width: 210px;
@@ -373,7 +372,7 @@
       font-size: 11px;
       font-family: Menlo, Monaco, "Courier New", monospace;
     }
-    /* The item under the finger mid-drag / hovered: unmissable. */
+    /* The item under the finger mid-drag: unmissable. */
     .sessdock-item.active { background: #1f6feb; }
     .sessdock-item.active .name, .sessdock-item.active .meta { color: #fff; }
     .sessdock-item.is-current { box-shadow: inset 3px 0 0 #1f6feb; }
@@ -1248,7 +1247,7 @@
     // Fill the login inputs with a session's creds and dial it, closing the
     // current one first when switching. Same path the Recent rows use.
     function connectToSession(id, pin) {
-      if (!id || !pin) return;
+      if (!id) return; // pin may be '' — owner-handshake sessions dial PIN-free
       sessionInput.value = id;
       pinInput.value = pin;
       const rec = document.getElementById('recents'); if (rec) rec.open = false;
@@ -1473,103 +1472,123 @@
     // ---- Mobile session dock (see #sessdock CSS) -------------------------
     // One-gesture switching on the keybar's ≡ toggle: drag it up, the recents
     // dock appears, slide onto a session, release to connect. A plain TAP is
-    // untouched — it still hides/shows the key bar (that handler suppresses
-    // itself after a drag, below). Fed from the FULL history — unlike the
-    // dropdown it does not exclude sessions shown under Machines cards,
-    // because its whole job is fast switching to any known session.
+    // untouched — it still hides/shows the key bar (its click handler ignores
+    // the click a drag release synthesizes, via sessdockLastDragEnd). Fed from
+    // the FULL history — unlike the dropdown it does not exclude sessions
+    // shown under Machines cards, because its whole job is fast switching to
+    // any known session.
     const sessdockEl = document.getElementById('sessdock');
     const sessdockHandle = document.getElementById('keybar-toggle');
+    // Same element as the keybar consts further down — those are in TDZ here.
+    const sessdockKeybar = document.getElementById('keybar');
+
+    // Where the keybar's top edge is — the dock's floor. Hidden keybar
+    // (desktop-wide) means the floor is the viewport bottom.
+    function keybarTop() {
+      return sessdockKeybar.offsetParent
+        ? sessdockKeybar.getBoundingClientRect().top
+        : window.innerHeight;
+    }
 
     // The dock sits just above the keybar, whose top moves with wrapping,
     // collapse, and the soft keyboard — so position comes from the live rect,
     // re-run via ResizeObserver + viewport events, not a hardcoded offset.
+    // Reads before writes: the style assignments invalidate layout.
     function positionSessdock() {
       if (!sessdockEl.classList.contains('open')) return;
-      const kb = document.getElementById('keybar');
-      const kbTop = kb && kb.offsetParent !== null
-        ? kb.getBoundingClientRect().top
-        : window.innerHeight; // keybar hidden (desktop-wide) — bottom edge
-      const h = sessdockEl.getBoundingClientRect().height;
+      const kbTop = keybarTop();
+      const r = sessdockEl.getBoundingClientRect();
+      const hr = sessdockHandle.getBoundingClientRect();
       // Never rise past the header: the dock lives strictly in the band
       // between header bottom and the keybar.
-      sessdockEl.style.top = Math.max(sessdockTopLimit(), kbTop - 12 - h) + 'px';
+      const top = Math.max(headerBottom(), kbTop - 12 - r.height);
       // Anchor horizontally to the toggle itself — it's only right-pinned
       // while the keybar overflows; with the bar collapsed it sits at the
       // LEFT, and a right-fixed dock would appear across the screen from the
       // thumb that's dragging. Clamped inside the viewport either way.
-      const tr = sessdockHandle.getBoundingClientRect();
-      const dw = sessdockEl.getBoundingClientRect().width;
-      let right = window.innerWidth - tr.right;
-      right = Math.max(8, Math.min(right, window.innerWidth - 8 - dw));
+      const right = Math.max(8, Math.min(window.innerWidth - hr.right,
+                                         window.innerWidth - 8 - r.width));
+      sessdockEl.style.top = top + 'px';
       sessdockEl.style.right = right + 'px';
     }
-
-    // The highest the dock may reach — just under the header.
-    function sessdockTopLimit() {
-      const hd = document.querySelector('header');
-      return (hd ? hd.getBoundingClientRect().bottom : 0) + 8;
-    }
-    if (window.ResizeObserver && document.getElementById('keybar')) {
-      new ResizeObserver(positionSessdock).observe(document.getElementById('keybar'));
-    }
+    if (window.ResizeObserver) new ResizeObserver(positionSessdock).observe(sessdockKeybar);
     if (window.visualViewport) visualViewport.addEventListener('resize', positionSessdock);
     window.addEventListener('resize', positionSessdock);
 
     // At most this many items, ever — the dock is a thumb-flick switcher, not
     // the full history (that's the dropdown). Fewer still if the screen is
-    // short: openSessdock trims from the bottom until the dock fits between
-    // the header and the handle, so items never run behind either.
+    // short: openSessdock drops trailing items until the dock fits between
+    // the header and the keybar, so items never run behind either.
     const SESSDOCK_MAX = 6;
+
+    // machineLabel is an owned machine's display name — shared with the
+    // Machines panel so the fallback can't drift between the two.
+    function machineLabel(rec, b64) {
+      return rec.name || 'machine ' + b64.slice(0, 6) + '…';
+    }
 
     // The dock's candidate pool: every LIVE session on every machine this
     // device owns (from the Machines panel's cached fills — all reminal
     // instances, not just ones this browser has visited), merged with the
     // Recents history (PIN sessions on machines we don't own). Deduped by id,
-    // freshest first — an owned session's freshness is its host-side idle
-    // time, a history entry's is when this browser last connected. Refreshed
-    // asynchronously (the owned-machines store is IndexedDB) into a snapshot
-    // so opening the dock stays synchronous under the finger.
+    // freshest first. Refreshed asynchronously (the owned-machines store is
+    // IndexedDB) into a snapshot so opening the dock stays synchronous under
+    // the finger; single-flight, since refreshes fire from every Recents
+    // render and can otherwise overlap during reconnect storms.
     let sessdockPool = [];
+    let sessdockPoolBusy = false;
+    let sessdockPoolAgain = false;
     async function refreshSessdockPool() {
-      const now = Date.now();
-      const pool = [];
-      const seen = new Set();
-      // History indexed by id: a session known to BOTH stores merges the two
-      // freshness signals (host-side activity vs when this browser last
-      // connected) as their MAX — either one being recent makes the session
-      // relevant. Preferring only the host idle buried the session the user
-      // JUST connected to whenever it sat quiet on its machine.
-      const hist = new Map(loadHistory().map(e => [e.id, e]));
-      try {
-        const store = await loadOwnedMachines();
-        for (const b64 of Object.keys(store)) {
-          const rec = store[b64];
-          if (rec.pendingRevoke || !Array.isArray(rec.sessions)) continue;
-          const machine = rec.name || 'machine ' + b64.slice(0, 6) + '…';
-          for (const s of rec.sessions) {
-            if (s.kind === 'port' || killedSessionIds.has(s.id) || seen.has(s.id)) continue;
-            seen.add(s.id);
-            pool.push({
-              id: s.id, owned: true, label: sessionLabelWeb(s), sub: machine,
-              fresh: Math.max(now - (s.idle_secs || 0) * 1000, hist.get(s.id)?.lastSeen || 0),
-            });
-          }
-        }
-      } catch (_) {} // no owned-machine data — the dock still has Recents
-      for (const e of loadHistory()) {
-        if (seen.has(e.id)) continue;
-        seen.add(e.id);
-        pool.push({
-          id: e.id, pin: e.pin, label: e.name, placeholder: !e.name,
-          sub: fmtAgo(e.lastSeen), fresh: e.lastSeen || 0,
-        });
+      if (sessdockPoolBusy) {
+        sessdockPoolAgain = true;
+        return;
       }
-      // The session being VIEWED is by definition the most recent — pin it
-      // first outright rather than trusting two clocks (host idle vs local
-      // lastSeen) to agree on that.
-      for (const p of pool) if (sessionId && p.id === sessionId) p.fresh = Infinity;
-      pool.sort((a, b) => b.fresh - a.fresh);
-      sessdockPool = pool;
+      sessdockPoolBusy = true;
+      try {
+        do {
+          sessdockPoolAgain = false;
+          const now = Date.now();
+          const pool = [];
+          const seen = new Set();
+          // ORDER IS CONNECT RECENCY, nothing cleverer: the sessions this
+          // browser connected to, most recent first (their history lastSeen).
+          // Host-side idle looked smart and was wrong — an always-active
+          // agent outranked the session the user just left. Activity only
+          // breaks ties among never-connected sessions, which sort after
+          // everything the user has actually visited.
+          const history = loadHistory();
+          const hist = new Map(history.map(e => [e.id, e]));
+          try {
+            const store = await loadOwnedMachines();
+            for (const b64 of Object.keys(store)) {
+              const rec = store[b64];
+              if (rec.pendingRevoke || !Array.isArray(rec.sessions)) continue;
+              for (const s of rec.sessions) {
+                if (s.kind === 'port' || killedSessionIds.has(s.id) || seen.has(s.id)) continue;
+                seen.add(s.id);
+                pool.push({
+                  id: s.id, owned: true, label: sessionLabelWeb(s), machine: machineLabel(rec, b64),
+                  last: hist.get(s.id)?.lastSeen || 0,
+                  act: now - (s.idle_secs || 0) * 1000,
+                });
+              }
+            }
+          } catch (_) {} // no owned-machine data — the dock still has Recents
+          for (const e of history) {
+            if (seen.has(e.id)) continue;
+            seen.add(e.id);
+            pool.push({ id: e.id, pin: e.pin, label: e.name, last: e.lastSeen || 0, act: 0 });
+          }
+          // Current session first outright (it is the most recent connect by
+          // definition, whatever the clocks say), then connect recency, then
+          // host activity for the never-connected tail.
+          pool.sort((a, b) => (b.id === sessionId) - (a.id === sessionId)
+            || b.last - a.last || b.act - a.act);
+          sessdockPool = pool;
+        } while (sessdockPoolAgain);
+      } finally {
+        sessdockPoolBusy = false;
+      }
     }
 
     function buildSessdockItems() {
@@ -1578,113 +1597,108 @@
         const item = document.createElement('div');
         const isCurrent = !!sessionId && e.id === sessionId;
         item.className = 'sessdock-item' + (isCurrent ? ' is-current' : '');
-        item.dataset.id = e.id;
-        item.dataset.pin = e.pin || '';
-        item.dataset.owned = e.owned ? '1' : '';
+        item._entry = e; // the release handler wants the entry, not a DOM round-trip
         const name = document.createElement('div');
-        name.className = 'name' + (e.placeholder ? ' placeholder' : '');
+        name.className = 'name' + (e.label ? '' : ' placeholder');
         name.textContent = e.label || '(unnamed session)';
         const meta = document.createElement('div');
         meta.className = 'meta';
-        meta.textContent = e.id + ' · ' + (isCurrent ? 'current' : e.sub);
+        // Formatted at render time — the pool snapshot can be minutes old.
+        meta.textContent = e.id + ' · '
+          + (isCurrent ? 'current' : e.machine || fmtAgo(e.last));
         item.appendChild(name);
         item.appendChild(meta);
-        // Tap-mode path: dock was opened by a tap, items behave like buttons.
-        item.addEventListener('click', () => { closeSessdock(); sessdockConnect(item); });
         sessdockEl.appendChild(item);
       }
     }
 
     function openSessdock() {
-      refreshSessdockPool(); // async — lands for the NEXT open; this one uses the snapshot
       if (sessdockPool.length === 0) return; // nothing to offer
       buildSessdockItems();
       sessdockEl.classList.add('open');
       // Height budget: drop trailing (oldest) items until the whole dock fits
       // above the keybar without touching the header. Keep at least one.
-      const kb = document.getElementById('keybar');
-      const kbTop = kb ? kb.getBoundingClientRect().top : window.innerHeight;
-      const avail = kbTop - 12 - sessdockTopLimit();
-      while (sessdockEl.children.length > 1 && sessdockEl.getBoundingClientRect().height > avail) {
-        sessdockEl.removeChild(sessdockEl.lastChild);
+      // Arithmetic from one measurement — a measure-inside-remove loop would
+      // force a reflow per iteration, mid-gesture.
+      const avail = keybarTop() - 12 - headerBottom();
+      const h = sessdockEl.getBoundingClientRect().height;
+      if (h > avail && sessdockEl.children.length > 1) {
+        const per = sessdockEl.firstChild.offsetHeight + 2; // + the flex gap
+        const drop = Math.min(sessdockEl.children.length - 1, Math.ceil((h - avail) / per));
+        for (let i = 0; i < drop; i++) sessdockEl.removeChild(sessdockEl.lastChild);
       }
       positionSessdock(); // needs the final rendered height
+      // The dock is static for the rest of the gesture — cache each item's
+      // box once, so the pointermove hit-test is plain arithmetic instead of
+      // an elementFromPoint layout flush per move event.
+      sessdockHits = [...sessdockEl.children].map(el => {
+        const r = el.getBoundingClientRect();
+        return { el, top: r.top, bottom: r.bottom, left: r.left, right: r.right };
+      });
     }
     function closeSessdock() {
       sessdockEl.classList.remove('open');
+      sessdockHits = [];
+      sessdockActiveItem = null;
     }
 
-    // Same switches the panel rows do: an owned machine's session connects
-    // PIN-free via the owner handshake; a history entry fills the inputs and
-    // dials with its remembered PIN.
-    function sessdockConnect(item) {
-      if (!item || (sessionId && item.dataset.id === sessionId)) return;
-      if (item.dataset.owned === '1') {
-        connectOwned(item.dataset.id);
-        return;
-      }
-      sessionInput.value = item.dataset.id;
-      pinInput.value = item.dataset.pin;
-      if (sessionId && sessionId !== item.dataset.id) userDisconnect();
-      startConnect();
+    // Same dials the panel rows use: an owned machine's session connects
+    // PIN-free via the owner handshake; a history entry with its remembered
+    // PIN (possibly '' — those dial PIN-free the same way).
+    function sessdockConnect(e) {
+      if (sessionId && e.id === sessionId) return; // already here
+      if (e.owned) connectOwned(e.id);
+      else connectToSession(e.id, e.pin);
     }
 
-    // The gesture. Pointer capture keeps every move on the toggle, and
-    // elementFromPoint finds which item the finger is over — so the finger
-    // never has to be ON the dock, just pointing at it. No preventDefault on
+    // The gesture. Pointer capture keeps every move on the toggle, and the
+    // cached item boxes say which session the finger is over — it never has
+    // to be ON the dock, just pointing at it. No preventDefault on
     // pointerdown: a plain tap must still produce the click the hide/show
     // handler listens for; touch-action:none (CSS) already owns the drag.
-    let sessdockDrag = null; // { startY, dragged }
-    let sessdockSwallowClick = false; // a drag just ended — eat its click
+    let sessdockGesture = null; // { startY, tried } while the pointer is down
+    let sessdockLastDragEnd = -1; // when a drag last released — see the ≡ click handler
+    let sessdockHits = []; // cached item boxes while open
+    let sessdockActiveItem = null; // the item under the finger
+
     function sessdockItemAt(x, y) {
-      const el = document.elementFromPoint(x, y);
-      return el && el.closest('.sessdock-item');
+      const hit = sessdockHits.find(h => y >= h.top && y < h.bottom && x >= h.left && x <= h.right);
+      return hit ? hit.el : null;
     }
-    if (sessdockHandle) {
-      sessdockHandle.addEventListener('pointerdown', (e) => {
-        sessdockHandle.setPointerCapture(e.pointerId);
-        sessdockDrag = { startY: e.clientY, dragged: false };
-      });
-      sessdockHandle.addEventListener('pointermove', (e) => {
-        if (!sessdockDrag) return;
-        if (!sessdockDrag.dragged && sessdockDrag.startY - e.clientY > 8) {
-          sessdockDrag.dragged = true;
-          openSessdock();
-        }
-        if (sessdockDrag.dragged) {
-          const over = sessdockItemAt(e.clientX, e.clientY);
-          for (const it of sessdockEl.children) it.classList.toggle('active', it === over);
-        }
-      });
-      sessdockHandle.addEventListener('pointerup', (e) => {
-        if (!sessdockDrag) return;
-        const wasDrag = sessdockDrag.dragged;
-        sessdockDrag = null;
-        if (!wasDrag) return; // plain tap — the click handler does hide/show
-        sessdockSwallowClick = true; // the drag's synthesized click is not a tap
-        const target = sessdockItemAt(e.clientX, e.clientY);
-        closeSessdock();
-        if (target) sessdockConnect(target); // released on a session → go
-      });
-      sessdockHandle.addEventListener('pointercancel', () => { sessdockDrag = null; closeSessdock(); });
-      // Registered before the hide/show click handler, so after a drag the
-      // synthesized click is stopped here and the keybar doesn't also toggle.
-      sessdockHandle.addEventListener('click', (e) => {
-        if (!sessdockSwallowClick) return;
-        sessdockSwallowClick = false;
-        e.stopImmediatePropagation();
-        e.preventDefault();
-      });
-      // Tap-to-pick housekeeping: anything pressed outside the dock closes it
-      // (the dock can be left open by a drag released on empty space… it
-      // can't — drags always close it — but items are click-connectable too,
-      // and this keeps any stray open state dismissible).
-      document.addEventListener('pointerdown', (e) => {
-        if (!sessdockEl.classList.contains('open')) return;
-        if (e.target === sessdockHandle || sessdockHandle.contains(e.target)) return;
-        if (!sessdockEl.contains(e.target)) closeSessdock();
-      }, true);
-    }
+    sessdockHandle.addEventListener('pointerdown', (e) => {
+      sessdockHandle.setPointerCapture(e.pointerId);
+      sessdockGesture = { startY: e.clientY, tried: false };
+      // Refresh in the dead travel before the 8px threshold — by the time the
+      // dock opens, the pool is usually current.
+      refreshSessdockPool();
+    });
+    sessdockHandle.addEventListener('pointermove', (e) => {
+      const g = sessdockGesture;
+      if (!g) return;
+      if (!g.tried && g.startY - e.clientY > 8) {
+        g.tried = true;
+        openSessdock();
+      }
+      if (!sessdockEl.classList.contains('open')) return;
+      const over = sessdockItemAt(e.clientX, e.clientY);
+      if (over === sessdockActiveItem) return;
+      if (sessdockActiveItem) sessdockActiveItem.classList.remove('active');
+      sessdockActiveItem = over;
+      if (over) over.classList.add('active');
+    });
+    sessdockHandle.addEventListener('pointerup', (e) => {
+      const g = sessdockGesture;
+      sessdockGesture = null;
+      if (!g || !g.tried) return; // plain tap — the toggle's own click handler acts
+      sessdockLastDragEnd = e.timeStamp; // its synthesized click is not a tap
+      const target = sessdockItemAt(e.clientX, e.clientY);
+      closeSessdock();
+      if (target) sessdockConnect(target._entry); // released on a session → go
+    });
+    sessdockHandle.addEventListener('pointercancel', () => {
+      sessdockGesture = null;
+      closeSessdock();
+    });
 
     function renderRecents() {
       refreshSessdockPool(); // piggyback: every store change re-renders Recents
@@ -3089,7 +3103,7 @@
         head.className = 'machine-head';
         const nameEl = document.createElement('span');
         nameEl.className = 'machine-name';
-        nameEl.textContent = rec.name || 'machine ' + b64.slice(0, 6) + '…';
+        nameEl.textContent = machineLabel(rec, b64);
         const dot = document.createElement('span');
         dot.className = 'machine-dot spin';
         dot.title = 'refreshing…';
@@ -5050,7 +5064,10 @@
         try { fitAddon.fit(); if (agentLive) sendResize(); } catch (__) {}
       }
     }
-    keybarToggle.addEventListener('click', () => {
+    keybarToggle.addEventListener('click', (e) => {
+      // A dock drag that just released synthesizes a click on this button
+      // too — that was the session-switch gesture, not a hide-the-bar tap.
+      if (e.timeStamp - sessdockLastDragEnd < 400) return;
       const hiddenNow = keybar.classList.contains('collapsed');
       localStorage.setItem(KEYBAR_HIDDEN_KEY, hiddenNow ? '0' : '1');
       applyKeybarState();
