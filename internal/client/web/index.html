@@ -327,6 +327,56 @@
     }
     /* Collapsed state — only the toggle button is visible; all keys hidden. */
     #keybar.collapsed > :not(#keybar-toggle) { display: none; }
+
+    /* Mobile session dock, driven by the keybar's ≡ toggle: TAP keeps its
+       old job (hide/show the key bar); DRAG UP raises the recent-sessions
+       dock with your thumb — slide onto a session and let go to connect.
+       One continuous gesture, entirely in the thumb zone, instead of the
+       two-tap trip to the header dropdown (the hardest reach on a phone).
+       No extra chrome: the toggle is already sticky at the keybar's right
+       edge. Management (rename/forget) stays in the dropdown. */
+    #sessdock {
+      display: none;
+      position: fixed;
+      right: 8px;
+      flex-direction: column;
+      gap: 2px;
+      min-width: 210px;
+      max-width: 75vw;
+      padding: 6px;
+      background: #161b22;
+      border: 1px solid #30363d;
+      border-radius: 12px;
+      box-shadow: 0 8px 28px rgba(0, 0, 0, 0.5);
+      z-index: 49;
+      user-select: none;
+      -webkit-user-select: none;
+    }
+    #sessdock.open { display: flex; }
+    .sessdock-item {
+      padding: 9px 12px; /* ≥44px tall with the two text lines — HIG target */
+      border-radius: 8px;
+      cursor: pointer;
+      -webkit-tap-highlight-color: transparent;
+    }
+    .sessdock-item .name {
+      color: #e6edf3;
+      font-size: 13px;
+      font-weight: 600;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .sessdock-item .name.placeholder { color: #8b949e; font-weight: 400; }
+    .sessdock-item .meta {
+      color: #8b949e;
+      font-size: 11px;
+      font-family: Menlo, Monaco, "Courier New", monospace;
+    }
+    /* The item under the finger mid-drag / hovered: unmissable. */
+    .sessdock-item.active { background: #1f6feb; }
+    .sessdock-item.active .name, .sessdock-item.active .meta { color: #fff; }
+    .sessdock-item.is-current { box-shadow: inset 3px 0 0 #1f6feb; }
     #keybar-toggle {
       /* Pinned to the right edge of the visible scroll viewport so the
          user never has to swipe to find "hide bar". */
@@ -334,6 +384,9 @@
       right: 0;
       background: #161b22;
       box-shadow: -8px 0 8px -4px #161b22;
+      /* Its vertical drag is the session-dock gesture (see #sessdock) —
+         never the keybar's horizontal scroll. */
+      touch-action: none;
     }
 
     /* Jump-to-bottom pill — appears bottom-right when the user has
@@ -950,6 +1003,7 @@
        then UI controls. Arrows + Backspace are marked data-repeat so
        a long press auto-repeats — essential for paging history or
        deleting a line one char at a time. -->
+  <div id="sessdock"></div>
   <div id="keybar">
     <button data-key="up" data-repeat title="Previous in history">↑</button>
     <button data-key="down" data-repeat title="Next in history">↓</button>
@@ -1412,6 +1466,155 @@
       if (s < 86400) return Math.floor(s / 3600) + 'h ago';
       return Math.floor(s / 86400) + 'd ago';
     }
+    // ---- Mobile session dock (see #sessdock CSS) -------------------------
+    // One-gesture switching on the keybar's ≡ toggle: drag it up, the recents
+    // dock appears, slide onto a session, release to connect. A plain TAP is
+    // untouched — it still hides/shows the key bar (that handler suppresses
+    // itself after a drag, below). Fed from the FULL history — unlike the
+    // dropdown it does not exclude sessions shown under Machines cards,
+    // because its whole job is fast switching to any known session.
+    const sessdockEl = document.getElementById('sessdock');
+    const sessdockHandle = document.getElementById('keybar-toggle');
+
+    // The dock sits just above the keybar, whose top moves with wrapping,
+    // collapse, and the soft keyboard — so position comes from the live rect,
+    // re-run via ResizeObserver + viewport events, not a hardcoded offset.
+    function positionSessdock() {
+      if (!sessdockEl.classList.contains('open')) return;
+      const kb = document.getElementById('keybar');
+      const kbTop = kb && kb.offsetParent !== null
+        ? kb.getBoundingClientRect().top
+        : window.innerHeight; // keybar hidden (desktop-wide) — bottom edge
+      const h = sessdockEl.getBoundingClientRect().height;
+      // Never rise past the header: the dock lives strictly in the band
+      // between header bottom and the keybar.
+      sessdockEl.style.top = Math.max(sessdockTopLimit(), kbTop - 12 - h) + 'px';
+    }
+
+    // The highest the dock may reach — just under the header.
+    function sessdockTopLimit() {
+      const hd = document.querySelector('header');
+      return (hd ? hd.getBoundingClientRect().bottom : 0) + 8;
+    }
+    if (window.ResizeObserver && document.getElementById('keybar')) {
+      new ResizeObserver(positionSessdock).observe(document.getElementById('keybar'));
+    }
+    if (window.visualViewport) visualViewport.addEventListener('resize', positionSessdock);
+    window.addEventListener('resize', positionSessdock);
+
+    // At most this many items, ever — the dock is a thumb-flick switcher, not
+    // the full history (that's the dropdown). Fewer still if the screen is
+    // short: openSessdock trims from the bottom until the dock fits between
+    // the header and the handle, so items never run behind either.
+    const SESSDOCK_MAX = 6;
+
+    function buildSessdockItems() {
+      sessdockEl.innerHTML = '';
+      for (const e of loadHistory().slice(0, SESSDOCK_MAX)) {
+        const item = document.createElement('div');
+        const isCurrent = !!sessionId && e.id === sessionId;
+        item.className = 'sessdock-item' + (isCurrent ? ' is-current' : '');
+        item.dataset.id = e.id;
+        item.dataset.pin = e.pin;
+        const name = document.createElement('div');
+        name.className = 'name' + (e.name ? '' : ' placeholder');
+        name.textContent = e.name || '(unnamed session)';
+        const meta = document.createElement('div');
+        meta.className = 'meta';
+        meta.textContent = e.id + (isCurrent ? ' · current' : ' · ' + fmtAgo(e.lastSeen));
+        item.appendChild(name);
+        item.appendChild(meta);
+        // Tap-mode path: dock was opened by a tap, items behave like buttons.
+        item.addEventListener('click', () => { closeSessdock(); sessdockConnect(item); });
+        sessdockEl.appendChild(item);
+      }
+    }
+
+    function openSessdock() {
+      if (loadHistory().length === 0) return; // nothing to offer
+      buildSessdockItems();
+      sessdockEl.classList.add('open');
+      // Height budget: drop trailing (oldest) items until the whole dock fits
+      // above the keybar without touching the header. Keep at least one.
+      const kb = document.getElementById('keybar');
+      const kbTop = kb ? kb.getBoundingClientRect().top : window.innerHeight;
+      const avail = kbTop - 12 - sessdockTopLimit();
+      while (sessdockEl.children.length > 1 && sessdockEl.getBoundingClientRect().height > avail) {
+        sessdockEl.removeChild(sessdockEl.lastChild);
+      }
+      positionSessdock(); // needs the final rendered height
+    }
+    function closeSessdock() {
+      sessdockEl.classList.remove('open');
+    }
+
+    // Same switch the dropdown row does: fill the inputs, release the live
+    // socket cleanly, dial the new session in place.
+    function sessdockConnect(item) {
+      if (!item || (sessionId && item.dataset.id === sessionId)) return;
+      sessionInput.value = item.dataset.id;
+      pinInput.value = item.dataset.pin;
+      if (sessionId && sessionId !== item.dataset.id) userDisconnect();
+      startConnect();
+    }
+
+    // The gesture. Pointer capture keeps every move on the toggle, and
+    // elementFromPoint finds which item the finger is over — so the finger
+    // never has to be ON the dock, just pointing at it. No preventDefault on
+    // pointerdown: a plain tap must still produce the click the hide/show
+    // handler listens for; touch-action:none (CSS) already owns the drag.
+    let sessdockDrag = null; // { startY, dragged }
+    let sessdockSwallowClick = false; // a drag just ended — eat its click
+    function sessdockItemAt(x, y) {
+      const el = document.elementFromPoint(x, y);
+      return el && el.closest('.sessdock-item');
+    }
+    if (sessdockHandle) {
+      sessdockHandle.addEventListener('pointerdown', (e) => {
+        sessdockHandle.setPointerCapture(e.pointerId);
+        sessdockDrag = { startY: e.clientY, dragged: false };
+      });
+      sessdockHandle.addEventListener('pointermove', (e) => {
+        if (!sessdockDrag) return;
+        if (!sessdockDrag.dragged && sessdockDrag.startY - e.clientY > 8) {
+          sessdockDrag.dragged = true;
+          openSessdock();
+        }
+        if (sessdockDrag.dragged) {
+          const over = sessdockItemAt(e.clientX, e.clientY);
+          for (const it of sessdockEl.children) it.classList.toggle('active', it === over);
+        }
+      });
+      sessdockHandle.addEventListener('pointerup', (e) => {
+        if (!sessdockDrag) return;
+        const wasDrag = sessdockDrag.dragged;
+        sessdockDrag = null;
+        if (!wasDrag) return; // plain tap — the click handler does hide/show
+        sessdockSwallowClick = true; // the drag's synthesized click is not a tap
+        const target = sessdockItemAt(e.clientX, e.clientY);
+        closeSessdock();
+        if (target) sessdockConnect(target); // released on a session → go
+      });
+      sessdockHandle.addEventListener('pointercancel', () => { sessdockDrag = null; closeSessdock(); });
+      // Registered before the hide/show click handler, so after a drag the
+      // synthesized click is stopped here and the keybar doesn't also toggle.
+      sessdockHandle.addEventListener('click', (e) => {
+        if (!sessdockSwallowClick) return;
+        sessdockSwallowClick = false;
+        e.stopImmediatePropagation();
+        e.preventDefault();
+      });
+      // Tap-to-pick housekeeping: anything pressed outside the dock closes it
+      // (the dock can be left open by a drag released on empty space… it
+      // can't — drags always close it — but items are click-connectable too,
+      // and this keeps any stray open state dismissible).
+      document.addEventListener('pointerdown', (e) => {
+        if (!sessdockEl.classList.contains('open')) return;
+        if (e.target === sessdockHandle || sessdockHandle.contains(e.target)) return;
+        if (!sessdockEl.contains(e.target)) closeSessdock();
+      }, true);
+    }
+
     function renderRecents() {
       const root = document.getElementById('recents-list');
       if (!root) return;
