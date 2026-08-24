@@ -1147,13 +1147,17 @@
       });
     }
     function rememberSession(id, pin) {
-      if (!id || !pin) return;
+      // pin '' is a valid entry: owner (PIN-free) connects go through auth_ok
+      // with no PIN, and they must land in Recents too — otherwise sessions on
+      // other owned machines never show up here or in the session dock built
+      // from this store. An empty pin never overwrites a known one.
+      if (!id) return;
       const list = loadHistory();
       const existingIdx = list.findIndex(e => e.id === id);
       const existing = existingIdx >= 0 ? list[existingIdx] : null;
       const entry = {
         id: id.toUpperCase(),
-        pin: pin,
+        pin: pin || existing?.pin || '',
         name: existing?.name || '',
         lastSeen: Date.now(),
       };
@@ -1489,6 +1493,15 @@
       // Never rise past the header: the dock lives strictly in the band
       // between header bottom and the keybar.
       sessdockEl.style.top = Math.max(sessdockTopLimit(), kbTop - 12 - h) + 'px';
+      // Anchor horizontally to the toggle itself — it's only right-pinned
+      // while the keybar overflows; with the bar collapsed it sits at the
+      // LEFT, and a right-fixed dock would appear across the screen from the
+      // thumb that's dragging. Clamped inside the viewport either way.
+      const tr = sessdockHandle.getBoundingClientRect();
+      const dw = sessdockEl.getBoundingClientRect().width;
+      let right = window.innerWidth - tr.right;
+      right = Math.max(8, Math.min(right, window.innerWidth - 8 - dw));
+      sessdockEl.style.right = right + 'px';
     }
 
     // The highest the dock may reach — just under the header.
@@ -1508,20 +1521,62 @@
     // the header and the handle, so items never run behind either.
     const SESSDOCK_MAX = 6;
 
+    // The dock's candidate pool: every LIVE session on every machine this
+    // device owns (from the Machines panel's cached fills — all reminal
+    // instances, not just ones this browser has visited), merged with the
+    // Recents history (PIN sessions on machines we don't own). Deduped by id,
+    // freshest first — an owned session's freshness is its host-side idle
+    // time, a history entry's is when this browser last connected. Refreshed
+    // asynchronously (the owned-machines store is IndexedDB) into a snapshot
+    // so opening the dock stays synchronous under the finger.
+    let sessdockPool = [];
+    async function refreshSessdockPool() {
+      const now = Date.now();
+      const pool = [];
+      const seen = new Set();
+      try {
+        const store = await loadOwnedMachines();
+        for (const b64 of Object.keys(store)) {
+          const rec = store[b64];
+          if (rec.pendingRevoke || !Array.isArray(rec.sessions)) continue;
+          const machine = rec.name || 'machine ' + b64.slice(0, 6) + '…';
+          for (const s of rec.sessions) {
+            if (s.kind === 'port' || killedSessionIds.has(s.id) || seen.has(s.id)) continue;
+            seen.add(s.id);
+            pool.push({
+              id: s.id, owned: true, label: sessionLabelWeb(s), sub: machine,
+              fresh: now - (s.idle_secs || 0) * 1000,
+            });
+          }
+        }
+      } catch (_) {} // no owned-machine data — the dock still has Recents
+      for (const e of loadHistory()) {
+        if (seen.has(e.id)) continue;
+        seen.add(e.id);
+        pool.push({
+          id: e.id, pin: e.pin, label: e.name, placeholder: !e.name,
+          sub: fmtAgo(e.lastSeen), fresh: e.lastSeen || 0,
+        });
+      }
+      pool.sort((a, b) => b.fresh - a.fresh);
+      sessdockPool = pool;
+    }
+
     function buildSessdockItems() {
       sessdockEl.innerHTML = '';
-      for (const e of loadHistory().slice(0, SESSDOCK_MAX)) {
+      for (const e of sessdockPool.slice(0, SESSDOCK_MAX)) {
         const item = document.createElement('div');
         const isCurrent = !!sessionId && e.id === sessionId;
         item.className = 'sessdock-item' + (isCurrent ? ' is-current' : '');
         item.dataset.id = e.id;
-        item.dataset.pin = e.pin;
+        item.dataset.pin = e.pin || '';
+        item.dataset.owned = e.owned ? '1' : '';
         const name = document.createElement('div');
-        name.className = 'name' + (e.name ? '' : ' placeholder');
-        name.textContent = e.name || '(unnamed session)';
+        name.className = 'name' + (e.placeholder ? ' placeholder' : '');
+        name.textContent = e.label || '(unnamed session)';
         const meta = document.createElement('div');
         meta.className = 'meta';
-        meta.textContent = e.id + (isCurrent ? ' · current' : ' · ' + fmtAgo(e.lastSeen));
+        meta.textContent = e.id + ' · ' + (isCurrent ? 'current' : e.sub);
         item.appendChild(name);
         item.appendChild(meta);
         // Tap-mode path: dock was opened by a tap, items behave like buttons.
@@ -1531,7 +1586,8 @@
     }
 
     function openSessdock() {
-      if (loadHistory().length === 0) return; // nothing to offer
+      refreshSessdockPool(); // async — lands for the NEXT open; this one uses the snapshot
+      if (sessdockPool.length === 0) return; // nothing to offer
       buildSessdockItems();
       sessdockEl.classList.add('open');
       // Height budget: drop trailing (oldest) items until the whole dock fits
@@ -1548,10 +1604,15 @@
       sessdockEl.classList.remove('open');
     }
 
-    // Same switch the dropdown row does: fill the inputs, release the live
-    // socket cleanly, dial the new session in place.
+    // Same switches the panel rows do: an owned machine's session connects
+    // PIN-free via the owner handshake; a history entry fills the inputs and
+    // dials with its remembered PIN.
     function sessdockConnect(item) {
       if (!item || (sessionId && item.dataset.id === sessionId)) return;
+      if (item.dataset.owned === '1') {
+        connectOwned(item.dataset.id);
+        return;
+      }
       sessionInput.value = item.dataset.id;
       pinInput.value = item.dataset.pin;
       if (sessionId && sessionId !== item.dataset.id) userDisconnect();
@@ -1616,6 +1677,7 @@
     }
 
     function renderRecents() {
+      refreshSessdockPool(); // piggyback: every store change re-renders Recents
       const root = document.getElementById('recents-list');
       if (!root) return;
       const hasMachines = !!document.querySelector('#machines-list .machine-box');
