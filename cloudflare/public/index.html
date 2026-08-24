@@ -1534,6 +1534,12 @@
       const now = Date.now();
       const pool = [];
       const seen = new Set();
+      // History indexed by id: a session known to BOTH stores merges the two
+      // freshness signals (host-side activity vs when this browser last
+      // connected) as their MAX — either one being recent makes the session
+      // relevant. Preferring only the host idle buried the session the user
+      // JUST connected to whenever it sat quiet on its machine.
+      const hist = new Map(loadHistory().map(e => [e.id, e]));
       try {
         const store = await loadOwnedMachines();
         for (const b64 of Object.keys(store)) {
@@ -1545,7 +1551,7 @@
             seen.add(s.id);
             pool.push({
               id: s.id, owned: true, label: sessionLabelWeb(s), sub: machine,
-              fresh: now - (s.idle_secs || 0) * 1000,
+              fresh: Math.max(now - (s.idle_secs || 0) * 1000, hist.get(s.id)?.lastSeen || 0),
             });
           }
         }
@@ -1558,6 +1564,10 @@
           sub: fmtAgo(e.lastSeen), fresh: e.lastSeen || 0,
         });
       }
+      // The session being VIEWED is by definition the most recent — pin it
+      // first outright rather than trusting two clocks (host idle vs local
+      // lastSeen) to agree on that.
+      for (const p of pool) if (sessionId && p.id === sessionId) p.fresh = Infinity;
       pool.sort((a, b) => b.fresh - a.fresh);
       sessdockPool = pool;
     }
@@ -2790,6 +2800,11 @@
       // We just proved ownership of this machine — remember it (keyed by machine
       // key, not session) so the Machines panel can list it and reach it later.
       try { await recordOwnedMachineWeb(machineB64); } catch (_) {}
+      // And record the SESSION in Recents: auth_ok — where PIN connects are
+      // remembered — never fires on this path, so without this an owner
+      // connect leaves no trace in the history the dropdown and the session
+      // dock rank by.
+      rememberSession(sessionId, '');
       // We're connected PIN-free → we own this machine; hide the enroll offer.
       iOwnThisMachine = true;
       if (typeof renderHost === 'function') renderHost();
