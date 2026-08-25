@@ -1575,7 +1575,10 @@
             }
           } catch (_) {} // no owned-machine data — the dock still has Recents
           for (const e of history) {
-            if (seen.has(e.id)) continue;
+            // killedSessionIds: the owned-machine loop above filters kills, but
+            // a killed session's HISTORY entry would sail through here and put
+            // a dead session back in the dock.
+            if (seen.has(e.id) || killedSessionIds.has(e.id)) continue;
             seen.add(e.id);
             pool.push({ id: e.id, pin: e.pin, label: e.name, last: e.lastSeen || 0, act: 0 });
           }
@@ -1707,7 +1710,9 @@
       const hasMachines = !!document.querySelector('#machines-list .machine-box');
       // Drop sessions already shown under an owned-machine card — they'd be
       // duplicates (e.g. the current session appears in its machine's card).
-      const list = loadHistory().filter(e => !ownedSessionIds.has(e.id));
+      // Killed sessions stay out too: the kill flow forgets them from history,
+      // but another tab's stale copy or a racing render must not revive one.
+      const list = loadHistory().filter(e => !ownedSessionIds.has(e.id) && !killedSessionIds.has(e.id));
       if (list.length === 0) {
         // Only show the recents hint when there are no Machines cards above it,
         // otherwise it reads as a redundant second empty-state.
@@ -3487,6 +3492,12 @@
         // Remember it as killed so it stays out of the list through any racing
         // re-query / cached snapshot / reconnect, and drop it from the cache now.
         killedSessionIds.add(id);
+        // A killed session is gone for good (ids are never reused), so its
+        // Recents entry is a dead link — and worse, removing it from the
+        // machine card alone PROMOTES that entry into "Recent sessions"
+        // (it stops being filtered as an owned-card duplicate). Forget it
+        // everywhere: history store, Recents list, and the session dock.
+        forgetSession(id);
         await withOwnedMachines(m => {
           if (m[b64] && Array.isArray(m[b64].sessions)) { m[b64].sessions = m[b64].sessions.filter(s => s.id !== id); }
           else { return false; }
