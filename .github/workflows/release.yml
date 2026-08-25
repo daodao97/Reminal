@@ -40,6 +40,21 @@ jobs:
   release:
     needs: test
     runs-on: ${{ matrix.os }}
+    # The OIDC anchor for Azure Trusted Signing: the Entra app's federated
+    # credential matches subject repo:…:environment:release-signing exactly
+    # (federated credentials don't allow wildcards, and tag refs change every
+    # release — an environment name is the one stable subject). No protection
+    # rules; it exists solely so the windows jobs can mint an Azure token.
+    environment: release-signing
+    permissions:
+      contents: write # upload release assets (workflow default, restated — job-level permissions replace it)
+      id-token: write # OIDC token for azure/login → Trusted Signing (windows)
+    defaults:
+      run:
+        # One shell across the matrix: the windows jobs run on windows-latest
+        # (where `run:` would otherwise default to pwsh) but every step below
+        # is written in bash — Git Bash provides it there.
+        shell: bash
     strategy:
       # Don't cancel sibling builds when one job races to create the release;
       # rerunning the loser is a no-op against the existing release.
@@ -64,14 +79,16 @@ jobs:
           - goos: linux
             goarch: arm64
             os: ubuntu-latest
-          # windows cross-compiles on ubuntu too — pure Go (ConPTY + Win32 via
-          # syscalls), no cgo, no native helper.
+          # windows is pure Go (ConPTY + Win32 via syscalls, no cgo) and used to
+          # cross-compile on ubuntu — it builds on a windows runner only because
+          # Authenticode signing needs signtool, which is Windows-only. Both
+          # arches build on the amd64 runner (GOARCH does the cross part).
           - goos: windows
             goarch: amd64
-            os: ubuntu-latest
+            os: windows-latest
           - goos: windows
             goarch: arm64
-            os: ubuntu-latest
+            os: windows-latest
     steps:
       - uses: actions/checkout@v4
 
@@ -157,6 +174,42 @@ jobs:
           echo "--- signature ---"
           codesign -dvvv reminal.app 2>&1 | grep -Ei "Identifier|Authority|Signature" || true
           codesign --verify --deep --strict --verbose=2 reminal.app
+
+      - name: Azure login for Trusted Signing (Windows)
+        if: matrix.goos == 'windows'
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_SIGNING_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_SIGNING_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SIGNING_SUBSCRIPTION_ID }}
+
+      - name: Sign reminal.exe (Authenticode via Trusted Signing)
+        if: matrix.goos == 'windows'
+        # Without this, Smart App Control machines block the exe outright as an
+        # unknown unsigned binary (each release is a brand-new file hash with
+        # zero reputation) and SmartScreen shows "unknown publisher" to everyone
+        # else. Signs in place; must run BEFORE the tarball is packed.
+        uses: azure/artifact-signing-action@v2
+        with:
+          endpoint: https://eus.codesigning.azure.net/
+          signing-account-name: reminal
+          certificate-profile-name: reminal-public
+          files-folder: ${{ github.workspace }}
+          files-folder-filter: exe
+          file-digest: SHA256
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
+
+      - name: Verify Authenticode signature (Windows)
+        if: matrix.goos == 'windows'
+        shell: pwsh
+        run: |
+          $s = Get-AuthenticodeSignature reminal.exe
+          $s | Format-List Status, StatusMessage, SignerCertificate
+          # UnknownError is what a valid-but-not-locally-chained cert reports on
+          # a bare runner; anything Valid is ideal. NotSigned means the signing
+          # step silently did nothing — fail loudly instead of shipping it.
+          if ($s.Status -eq 'NotSigned') { exit 1 }
 
       - name: Package
         env:
