@@ -213,6 +213,15 @@ func (darwinWindows) listApps() ([]appInfo, error) {
 			}
 		}
 	}
+	// Finder is the one app users expect that no folder scan can find: Apple
+	// ships it in /System/Library/CoreServices, which isn't worth scanning
+	// wholesale — it's full of internal .app bundles (Dock, Control Center,
+	// loginwindow…) that would drown the list in machinery nobody can
+	// meaningfully open. Special-case just Finder; `open` takes its bundle
+	// path like any other app's.
+	if _, err := os.Stat("/System/Library/CoreServices/Finder.app"); err == nil {
+		add("/System/Library/CoreServices", "Finder.app")
+	}
 	sort.Slice(apps, func(i, j int) bool {
 		return strings.ToLower(apps[i].Name) < strings.ToLower(apps[j].Name)
 	})
