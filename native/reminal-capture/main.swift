@@ -609,6 +609,10 @@ final class FrameOutput: NSObject, SCStreamOutput, SCStreamDelegate {
         self.stopped = stopped
     }
 
+    // sawLiveFrame gates the one-shot prime (see ingestPrime). Confined to the
+    // sample handler queue, which also runs the prime's ingest.
+    private var sawLiveFrame = false
+
     func stream(_ stream: SCStream, didOutputSampleBuffer sampleBuffer: CMSampleBuffer, of type: SCStreamOutputType) {
         guard type == .screen else { return }
 
@@ -625,7 +629,20 @@ final class FrameOutput: NSObject, SCStreamOutput, SCStreamDelegate {
         else { return }
 
         guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
+        sawLiveFrame = true
+        ingest(pixelBuffer)
+    }
 
+    // ingestPrime feeds a one-shot screenshot as the stream's first frame, unless
+    // a live frame already beat it there (then the picture on the wire is newer
+    // than the screenshot — sending it would step content backwards). Must run on
+    // the sample handler queue, same as every other path into the encoder.
+    func ingestPrime(_ pixelBuffer: CVPixelBuffer) {
+        if sawLiveFrame { return }
+        ingest(pixelBuffer)
+    }
+
+    private func ingest(_ pixelBuffer: CVPixelBuffer) {
         // h264 mode: hand the BGRA buffer straight to VideoToolbox — no CGImage,
         // no JPEG. The encoder emits framed Annex-B AUs itself.
         if let enc = encoder {
@@ -654,6 +671,32 @@ final class FrameOutput: NSObject, SCStreamOutput, SCStreamDelegate {
 
     func stream(_ stream: SCStream, didStopWithError error: Error) {
         stopped("stream stopped: \(error.localizedDescription)")
+    }
+}
+
+// primeFirstFrame ships the target's CURRENT pixels as the stream's first frame.
+// SCStream is change-driven — it delivers nothing until the picture changes — so
+// on a static window a (re)joining viewer had no entry point at all: the encoder
+// had no cached buffer for requestKey to re-encode, and the pane sat black until
+// the user's own click perturbed the window into repainting. A one-shot capture
+// through the same filter+configuration is the same pixels the stream would
+// deliver, taken on demand; fed through FrameOutput it takes the exact live-frame
+// path (first h264 frame is an IDR, and it becomes the requestKey cache).
+//
+// Best-effort: on failure (target minimized mid-start, capture blocked) behavior
+// simply reverts to change-driven delivery, exactly what shipped before this.
+// Pre-Sonoma there is no one-shot SCK API, so the same reversion applies.
+func primeFirstFrame(filter: SCContentFilter, config: SCStreamConfiguration,
+                     queue: DispatchQueue, output: FrameOutput) {
+    guard #available(macOS 14.0, *) else { return }
+    SCScreenshotManager.captureSampleBuffer(contentFilter: filter, configuration: config) { sampleBuffer, error in
+        guard error == nil, let sampleBuffer,
+              let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
+        // Hop to the sample handler queue: every encoder submission must share
+        // it (VTCompressionSessionEncodeFrame is not thread-safe), and it is
+        // where sawLiveFrame is confined. ARC keeps the pixel buffer alive
+        // across the hop.
+        queue.async { output.ingestPrime(pixelBuffer) }
     }
 }
 
@@ -772,6 +815,9 @@ do {
 stream.startCapture { error in
     if let error { die("startCapture: \(error.localizedDescription)") }
 }
+// A static window will never trigger the stream; hand the viewer its first
+// frame now rather than whenever the window next repaints.
+primeFirstFrame(filter: target.filter, config: config, queue: sampleQueue, output: output)
 
 // SCStream delivers frames on its own queue; keep the process alive until the
 // agent kills it (stream stop) or the pipe closes.
@@ -911,6 +957,12 @@ final class MuxStream {
         s.startCapture { [weak self] error in
             if let error { self?.fail("startCapture: \(error.localizedDescription)") }
         }
+        // A static window will never trigger the stream; hand the viewer its
+        // first frame now rather than whenever the window next repaints. This is
+        // the serve-mode path viewers actually hit when a pane opens or a stream
+        // restarts on codec renegotiation — the moments the black-until-clicked
+        // pane was reported at. A dead stream's emit() already drops the frame.
+        primeFirstFrame(filter: filter, config: config, queue: queue, output: fo)
     }
 
     private func emit(_ payload: Data, _ flag: UInt8?) {
