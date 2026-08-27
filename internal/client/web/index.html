@@ -312,6 +312,16 @@
        720px clause, so a primary-pointer flip silently erased the whole bar
        mid-session. The touchscreen never stops existing; gate on that. */
     @media (pointer: coarse), (any-pointer: coarse), (max-width: 720px) {
+      /* Chrome Android's Touch to Search fires on any tap that lands on
+         selectable, NON-interactive text (developer.chrome.com/blog/
+         tap-to-search) and slides a Google sheet over the keybar. The
+         terminal grid was already unselectable — the triggers were the app
+         chrome around it: header status text, panel rows, labels. Nothing
+         on a touch device needs native selection (terminal copy is xterm's
+         own selection + the Copy button), so make the page unselectable
+         and opt the real text inputs back in. */
+      body { -webkit-user-select: none; user-select: none; }
+      input, textarea { -webkit-user-select: text; user-select: text; }
       #keybar {
         display: flex;
         /* Single horizontal row that scrolls instead of wrapping. */
