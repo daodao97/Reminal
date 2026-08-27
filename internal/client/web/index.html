@@ -376,6 +376,68 @@
     .sessdock-item.active { background: #1f6feb; }
     .sessdock-item.active .name, .sessdock-item.active .meta { color: #fff; }
     .sessdock-item.is-current { box-shadow: inset 3px 0 0 #1f6feb; }
+
+    /* Snippet dock — the ✂ button's twin of the session dock, one button to
+       the toggle's left: DRAG UP raises stored snippets under the thumb,
+       release on one to paste it; TAP opens the same dock in manage mode
+       (rows paste on tap and gain edit/remove, plus an add row). Reuses the
+       .sessdock-item classes so the two docks can't drift apart visually. */
+    #snipdock {
+      display: none;
+      position: fixed;
+      flex-direction: column;
+      gap: 2px;
+      min-width: 210px;
+      max-width: 75vw;
+      padding: 6px;
+      background: #161b22;
+      border: 1px solid #30363d;
+      border-radius: 12px;
+      box-shadow: 0 8px 28px rgba(0, 0, 0, 0.5);
+      z-index: 49;
+      user-select: none;
+      -webkit-user-select: none;
+    }
+    #snipdock.open { display: flex; }
+    /* Snippet rows: the text block grows, buttons ride the tail. A named
+       snippet reads like a session row (label + mono command under it); an
+       unnamed one shows the command itself as the label, in mono (.cmd). */
+    #snipdock .sessdock-item { display: flex; align-items: center; gap: 6px; }
+    #snipdock .snip-label { flex: 1 1 auto; min-width: 0; }
+    #snipdock .name.cmd {
+      font-family: Menlo, Monaco, "Courier New", monospace;
+      font-weight: 500;
+    }
+    /* The command line under a name can be arbitrarily long — one ellipsized
+       line, never a wrapped paragraph mid-gesture. */
+    #snipdock .meta {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    #snipdock .row-btn {
+      flex: 0 0 auto;
+      background: none;
+      border: none;
+      color: #8b949e;
+      font-size: 14px;
+      padding: 6px 8px;
+      border-radius: 6px;
+      cursor: pointer;
+      -webkit-tap-highlight-color: transparent;
+    }
+    #snipdock .row-btn:hover, #snipdock .row-btn:active { background: #30363d; color: #e6edf3; }
+    #snipdock .snip-add .name { color: #58a6ff; font-family: inherit; font-size: 13px; font-weight: 600; }
+    #snip-btn {
+      /* Pinned just left of the toggle (its 46px width + the 4px gap), so
+         the pair rides the right edge of the scrolling bar together. */
+      position: sticky;
+      right: 50px;
+      background: #161b22;
+      box-shadow: -8px 0 8px -4px #161b22;
+      /* Vertical drag is the snippet-dock gesture — never the bar's scroll. */
+      touch-action: none;
+    }
     #keybar-toggle {
       /* Pinned to the right edge of the visible scroll viewport so the
          user never has to swipe to find "hide bar". */
@@ -1003,6 +1065,7 @@
        a long press auto-repeats — essential for paging history or
        deleting a line one char at a time. -->
   <div id="sessdock"></div>
+  <div id="snipdock"></div>
   <div id="keybar">
     <button data-key="up" data-repeat title="Previous in history">↑</button>
     <button data-key="down" data-repeat title="Next in history">↓</button>
@@ -1031,6 +1094,7 @@
     <button id="find-btn" title="Search scrollback">Find</button>
     <button id="upload-btn" title="Upload file to host's ~/Downloads/reminal/">⇪ Upload</button>
     <input type="file" id="upload-input" multiple style="display:none">
+    <button id="snip-btn" title="Snippets — drag up to paste, tap to manage">✂</button>
     <button id="keybar-toggle" title="Hide / show the key bar">≡</button>
   </div>
 
@@ -1702,6 +1766,262 @@
       sessdockGesture = null;
       closeSessdock();
     });
+
+    // ---- Snippet dock (see #snipdock CSS) --------------------------------
+    // The session dock's shape, applied to stored text: drag the ✂ button
+    // up, slide onto a snippet, release to PASTE it into the terminal — no
+    // trailing newline, pasting must never run anything by itself. A plain
+    // TAP opens the same dock in manage mode: rows paste on tap and carry
+    // edit/remove, plus an add row. Snippets live in localStorage — they're
+    // this device's muscle memory ('ls', a long claude invocation), not
+    // session state, so they follow the phone, not the host.
+    const SNIPPETS_KEY = 'reminal-snippets';
+    const snipdockEl = document.getElementById('snipdock');
+    const snipHandle = document.getElementById('snip-btn');
+
+    // Entries are { text, name? } — name is an optional display label for
+    // when the command itself is too long to recognize at a glance. The
+    // first shipped format was a bare string array; normalize on load so
+    // those keep working, and anything unrecognizable is dropped rather
+    // than rendered as "[object Object]".
+    function loadSnippets() {
+      try {
+        const v = JSON.parse(localStorage.getItem(SNIPPETS_KEY) || '[]');
+        if (!Array.isArray(v)) return [];
+        return v.map(s => {
+          if (typeof s === 'string') return s.length > 0 ? { text: s } : null;
+          if (s && typeof s.text === 'string' && s.text.length > 0) {
+            return typeof s.name === 'string' && s.name.trim() !== ''
+              ? { text: s.text, name: s.name.trim() } : { text: s.text };
+          }
+          return null;
+        }).filter(Boolean);
+      } catch (_) { return []; }
+    }
+    function saveSnippets(list) {
+      try { localStorage.setItem(SNIPPETS_KEY, JSON.stringify(list)); } catch (_) {}
+    }
+
+    // Same band as the session dock: between header bottom and keybar top,
+    // anchored to its own handle.
+    function positionSnipdock() {
+      if (!snipdockEl.classList.contains('open')) return;
+      const kbTop = keybarTop();
+      const r = snipdockEl.getBoundingClientRect();
+      const hr = snipHandle.getBoundingClientRect();
+      const top = Math.max(headerBottom(), kbTop - 12 - r.height);
+      const right = Math.max(8, Math.min(window.innerWidth - hr.right,
+                                         window.innerWidth - 8 - r.width));
+      snipdockEl.style.top = top + 'px';
+      snipdockEl.style.right = right + 'px';
+    }
+    if (window.ResizeObserver) new ResizeObserver(positionSnipdock).observe(sessdockKeybar);
+    if (window.visualViewport) visualViewport.addEventListener('resize', positionSnipdock);
+    window.addEventListener('resize', positionSnipdock);
+
+    function pasteSnippet(text) {
+      Promise.resolve(sendInput(text)).catch(() => {});
+      term.focus();
+    }
+
+    // askName is the optional second half of add/edit: a display label for a
+    // command too long to recognize at a glance. Cancel keeps what was there;
+    // empty clears it back to showing the command itself.
+    function askName(current) {
+      const name = prompt('Name (optional — shown instead of the snippet):', current || '');
+      if (name === null) return current || '';
+      return name.trim();
+    }
+
+    // Manage-mode edits rebuild in place so the dock never closes mid-session
+    // of tidying. Edited-to-empty means remove; text is stored VERBATIM
+    // otherwise — a trailing space ('cd ') is a deliberate snippet shape.
+    function buildSnipdockItems(manage) {
+      snipdockEl.innerHTML = '';
+      const snips = loadSnippets();
+      snips.forEach((snip, i) => {
+        const item = document.createElement('div');
+        item.className = 'sessdock-item snip-row';
+        item._snip = snip;
+        // Named: the label on top, the command as the small mono line under
+        // it (the session dock's name/meta shape). Unnamed: the command IS
+        // the label, in mono.
+        const label = document.createElement('div');
+        label.className = 'snip-label';
+        const name = document.createElement('div');
+        name.className = 'name' + (snip.name ? '' : ' cmd');
+        name.textContent = snip.name || snip.text;
+        label.appendChild(name);
+        if (snip.name) {
+          const meta = document.createElement('div');
+          meta.className = 'meta';
+          meta.textContent = snip.text;
+          label.appendChild(meta);
+        }
+        item.appendChild(label);
+        if (manage) {
+          const edit = document.createElement('button');
+          edit.className = 'row-btn';
+          edit.title = 'Edit';
+          edit.textContent = '✎';
+          edit.addEventListener('click', (ev) => {
+            ev.stopPropagation();
+            const next = prompt('Edit snippet:', snip.text);
+            if (next === null) return;
+            const list = loadSnippets();
+            if (next === '') {
+              list.splice(i, 1);
+            } else {
+              const name = askName(snip.name);
+              list[i] = name ? { text: next, name } : { text: next };
+            }
+            saveSnippets(list);
+            buildSnipdockItems(true);
+            positionSnipdock();
+          });
+          const del = document.createElement('button');
+          del.className = 'row-btn';
+          del.title = 'Remove';
+          del.textContent = '✕';
+          del.addEventListener('click', (ev) => {
+            ev.stopPropagation();
+            // Same guard as Recents' forget: ✕ sits a thumb-width from the
+            // paste row, and there's no undo. Identify it by its label —
+            // truncated, a 200-char one-liner isn't a readable question.
+            const what = snip.name || (snip.text.length > 60 ? snip.text.slice(0, 57) + '…' : snip.text);
+            if (!confirm('Remove snippet “' + what + '”?')) return;
+            const list = loadSnippets();
+            list.splice(i, 1);
+            saveSnippets(list);
+            buildSnipdockItems(true);
+            positionSnipdock();
+          });
+          item.appendChild(edit);
+          item.appendChild(del);
+          item.addEventListener('click', () => {
+            pasteSnippet(snip.text);
+            closeSnipdock();
+          });
+        }
+        snipdockEl.appendChild(item);
+      });
+      if (manage) {
+        const add = document.createElement('div');
+        add.className = 'sessdock-item snip-add';
+        const name = document.createElement('div');
+        name.className = 'name';
+        name.textContent = '＋ Add snippet';
+        add.appendChild(name);
+        add.addEventListener('click', (ev) => {
+          ev.stopPropagation();
+          const text = prompt('New snippet (pasted into the terminal, never run by itself):', '');
+          if (!text) return;
+          const name = askName('');
+          const list = loadSnippets();
+          list.push(name ? { text, name } : { text });
+          saveSnippets(list);
+          buildSnipdockItems(true);
+          positionSnipdock();
+        });
+        snipdockEl.appendChild(add);
+      } else if (snips.length === 0) {
+        // The drag found nothing stored: say so where the list would be, so
+        // the gesture teaches its own setup path instead of doing nothing.
+        const hint = document.createElement('div');
+        hint.className = 'sessdock-item';
+        const name = document.createElement('div');
+        name.className = 'name placeholder';
+        name.textContent = 'No snippets yet — tap ✂ to add';
+        hint.appendChild(name);
+        snipdockEl.appendChild(hint);
+      }
+    }
+
+    let snipdockHits = [];
+    let snipdockActiveItem = null;
+    let snipdockManage = false;
+
+    function openSnipdock(manage) {
+      snipdockManage = manage;
+      buildSnipdockItems(manage);
+      if (snipdockEl.children.length === 0) return;
+      snipdockEl.classList.add('open');
+      // Same height budget as the session dock: drop trailing rows until it
+      // fits between the header and the keybar.
+      const avail = keybarTop() - 12 - headerBottom();
+      const h = snipdockEl.getBoundingClientRect().height;
+      if (h > avail && snipdockEl.children.length > 1) {
+        const per = snipdockEl.firstChild.offsetHeight + 2;
+        const drop = Math.min(snipdockEl.children.length - 1, Math.ceil((h - avail) / per));
+        for (let i = 0; i < drop; i++) snipdockEl.removeChild(snipdockEl.lastChild);
+      }
+      positionSnipdock();
+      snipdockHits = [...snipdockEl.children].map(el => {
+        const r = el.getBoundingClientRect();
+        return { el, top: r.top, bottom: r.bottom, left: r.left, right: r.right };
+      });
+    }
+    function closeSnipdock() {
+      snipdockEl.classList.remove('open');
+      snipdockHits = [];
+      snipdockActiveItem = null;
+      snipdockManage = false;
+    }
+
+    // The drag gesture — a mirror of the session dock's, on its own state.
+    let snipGesture = null;
+    let snipLastDragEnd = -1;
+    function snipItemAt(x, y) {
+      const hit = snipdockHits.find(h => y >= h.top && y < h.bottom && x >= h.left && x <= h.right);
+      return hit ? hit.el : null;
+    }
+    snipHandle.addEventListener('pointerdown', (e) => {
+      if (snipdockManage) return; // manage panel open — taps belong to its rows
+      snipHandle.setPointerCapture(e.pointerId);
+      snipGesture = { startY: e.clientY, tried: false };
+    });
+    snipHandle.addEventListener('pointermove', (e) => {
+      const g = snipGesture;
+      if (!g) return;
+      if (!g.tried && g.startY - e.clientY > 8) {
+        g.tried = true;
+        openSnipdock(false);
+      }
+      if (!snipdockEl.classList.contains('open')) return;
+      const over = snipItemAt(e.clientX, e.clientY);
+      if (over === snipdockActiveItem) return;
+      if (snipdockActiveItem) snipdockActiveItem.classList.remove('active');
+      snipdockActiveItem = over;
+      if (over) over.classList.add('active');
+    });
+    snipHandle.addEventListener('pointerup', (e) => {
+      const g = snipGesture;
+      snipGesture = null;
+      if (!g || !g.tried) return; // plain tap — the click handler opens manage mode
+      snipLastDragEnd = e.timeStamp; // its synthesized click is not a tap
+      const target = snipItemAt(e.clientX, e.clientY);
+      closeSnipdock();
+      if (target && target._snip) pasteSnippet(target._snip.text);
+    });
+    snipHandle.addEventListener('pointercancel', () => {
+      snipGesture = null;
+      closeSnipdock();
+    });
+    snipHandle.addEventListener('click', (e) => {
+      if (e.timeStamp - snipLastDragEnd < 400) return; // drag release, not a tap
+      if (snipdockEl.classList.contains('open')) {
+        closeSnipdock(); // second tap toggles it away
+        return;
+      }
+      openSnipdock(true);
+    });
+    // Manage mode is a panel, not a gesture: it stays open until a paste, a
+    // second ✂ tap, or a tap anywhere outside it.
+    document.addEventListener('pointerdown', (e) => {
+      if (!snipdockManage) return;
+      if (snipdockEl.contains(e.target) || snipHandle.contains(e.target)) return;
+      closeSnipdock();
+    }, true);
 
     function renderRecents() {
       refreshSessdockPool(); // piggyback: every store change re-renders Recents
