@@ -307,9 +307,10 @@ func (h *winHelper) pushH264(f winFrame) {
 }
 
 // next returns the next unconsumed frame, blocking up to timeout for a fresh
-// one. ok is false on timeout (no new frame — the window was static this
-// interval), on stop, or when the helper died. A returned frame is always new
-// content: the helper only emits frames whose picture actually changed. In
+// one. ok is false on timeout (nothing arrived this interval — with the
+// helper's 1fps idle refresh that means the helper is stalled, not merely the
+// window static), on stop, or when the helper died. A returned frame is always
+// worth shipping: a detected change, or the helper's paced idle refresh. In
 // h264 mode frames come off a queue in decode order, and the caller MUST ship
 // every frame it takes (a skipped delta corrupts the stream — use rekey() when
 // dropping is unavoidable).

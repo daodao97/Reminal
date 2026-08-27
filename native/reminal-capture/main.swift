@@ -609,17 +609,24 @@ final class FrameOutput: NSObject, SCStreamOutput, SCStreamDelegate {
         self.stopped = stopped
     }
 
-    // sawLiveFrame gates the one-shot prime (see ingestPrime). Confined to the
-    // sample handler queue, which also runs the prime's ingest.
-    private var sawLiveFrame = false
+    // lastIngestAt stamps every frame handed to the encoder, live or refresh —
+    // it is what the idle refresh consults to decide the stream has gone quiet.
+    // Confined to the sample handler queue, like every path into ingest.
+    private var lastIngestAt = DispatchTime(uptimeNanoseconds: 0)
+    private var refreshInFlight = false // sample-queue confined
+    // refreshTimer is set on the control/start path but cancelled from wherever
+    // the stream dies (the encoder's fatal runs on the sample queue) — hence the
+    // lock, the one cross-queue touch this class has.
+    private var refreshTimer: DispatchSourceTimer?
+    private let refreshLock = NSLock()
 
     func stream(_ stream: SCStream, didOutputSampleBuffer sampleBuffer: CMSampleBuffer, of type: SCStreamOutputType) {
         guard type == .screen else { return }
 
         // Emit only frames that actually changed. SCStream tags each buffer with a
         // status; .complete means new content, .idle/.blank mean "nothing changed"
-        // — skipping those gives us native change-detection for free (no decode +
-        // signature compare in Go, no wasted bandwidth on a static window).
+        // — skipping those spares the encoder while content moves. Static windows
+        // and missed changes are covered by the 1fps idle refresh instead.
         guard let attachments = CMSampleBufferGetSampleAttachmentsArray(sampleBuffer, createIfNecessary: false)
             as? [[SCStreamFrameInfo: Any]],
             let info = attachments.first,
@@ -629,20 +636,65 @@ final class FrameOutput: NSObject, SCStreamOutput, SCStreamDelegate {
         else { return }
 
         guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
-        sawLiveFrame = true
         ingest(pixelBuffer)
     }
 
-    // ingestPrime feeds a one-shot screenshot as the stream's first frame, unless
-    // a live frame already beat it there (then the picture on the wire is newer
-    // than the screenshot — sending it would step content backwards). Must run on
-    // the sample handler queue, same as every other path into the encoder.
-    func ingestPrime(_ pixelBuffer: CVPixelBuffer) {
-        if sawLiveFrame { return }
-        ingest(pixelBuffer)
+    // startIdleRefresh floors delivery at 1fps. SCStream is change-driven — a
+    // static window delivers nothing at all — and its change detection has been
+    // unreliable in the field (panes stuck black or stale despite real changes).
+    // So don't trust it: whenever no frame arrived for a second, re-capture the
+    // target via SCScreenshotManager with the SAME filter+configuration and feed
+    // the result through the ordinary frame path. A fresh screenshot is ground
+    // truth, so a joining viewer always has a first frame within a second and
+    // any missed change self-heals within a second. This replaces the one-shot
+    // first-frame prime, which fixed only the join moment, not misses after it.
+    // While content moves the tick sees a fresh lastIngestAt and does nothing.
+    // Pre-Sonoma there is no one-shot SCK API — delivery stays change-driven.
+    func startIdleRefresh(filter: SCContentFilter, config: SCStreamConfiguration, queue: DispatchQueue) {
+        guard #available(macOS 14.0, *) else { return }
+        let t = DispatchSource.makeTimerSource(queue: queue)
+        refreshLock.lock()
+        refreshTimer = t
+        refreshLock.unlock()
+        // First fire is immediate: it IS the first frame for a static target.
+        t.schedule(deadline: .now(), repeating: .seconds(1), leeway: .milliseconds(100))
+        t.setEventHandler { [weak self] in
+            guard let self, !self.refreshInFlight,
+                  DispatchTime.now().uptimeNanoseconds &- self.lastIngestAt.uptimeNanoseconds > 900_000_000
+            else { return }
+            self.refreshInFlight = true
+            SCScreenshotManager.captureSampleBuffer(contentFilter: filter, configuration: config) { sampleBuffer, error in
+                // Hop to the sample handler queue: every encoder submission must
+                // share it (VTCompressionSessionEncodeFrame is not thread-safe).
+                // ARC keeps the pixel buffer alive across the hop.
+                queue.async {
+                    self.refreshInFlight = false
+                    guard error == nil, let sampleBuffer,
+                          let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
+                    // A live frame may have landed while the screenshot was in
+                    // flight — its picture is newer; sending the screenshot now
+                    // would step content backwards.
+                    if DispatchTime.now().uptimeNanoseconds &- self.lastIngestAt.uptimeNanoseconds < 900_000_000 { return }
+                    self.ingest(pixelBuffer)
+                }
+            }
+        }
+        t.resume()
+    }
+
+    // stopIdleRefresh ends the tick when the stream dies. Without it a dead
+    // serve-mode stream would keep taking a screenshot every second forever —
+    // emit() drops the frames, but the capture work itself never stops.
+    func stopIdleRefresh() {
+        refreshLock.lock()
+        let t = refreshTimer
+        refreshTimer = nil
+        refreshLock.unlock()
+        t?.cancel()
     }
 
     private func ingest(_ pixelBuffer: CVPixelBuffer) {
+        lastIngestAt = DispatchTime.now()
         // h264 mode: hand the BGRA buffer straight to VideoToolbox — no CGImage,
         // no JPEG. The encoder emits framed Annex-B AUs itself.
         if let enc = encoder {
@@ -671,32 +723,6 @@ final class FrameOutput: NSObject, SCStreamOutput, SCStreamDelegate {
 
     func stream(_ stream: SCStream, didStopWithError error: Error) {
         stopped("stream stopped: \(error.localizedDescription)")
-    }
-}
-
-// primeFirstFrame ships the target's CURRENT pixels as the stream's first frame.
-// SCStream is change-driven — it delivers nothing until the picture changes — so
-// on a static window a (re)joining viewer had no entry point at all: the encoder
-// had no cached buffer for requestKey to re-encode, and the pane sat black until
-// the user's own click perturbed the window into repainting. A one-shot capture
-// through the same filter+configuration is the same pixels the stream would
-// deliver, taken on demand; fed through FrameOutput it takes the exact live-frame
-// path (first h264 frame is an IDR, and it becomes the requestKey cache).
-//
-// Best-effort: on failure (target minimized mid-start, capture blocked) behavior
-// simply reverts to change-driven delivery, exactly what shipped before this.
-// Pre-Sonoma there is no one-shot SCK API, so the same reversion applies.
-func primeFirstFrame(filter: SCContentFilter, config: SCStreamConfiguration,
-                     queue: DispatchQueue, output: FrameOutput) {
-    guard #available(macOS 14.0, *) else { return }
-    SCScreenshotManager.captureSampleBuffer(contentFilter: filter, configuration: config) { sampleBuffer, error in
-        guard error == nil, let sampleBuffer,
-              let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
-        // Hop to the sample handler queue: every encoder submission must share
-        // it (VTCompressionSessionEncodeFrame is not thread-safe), and it is
-        // where sawLiveFrame is confined. ARC keeps the pixel buffer alive
-        // across the hop.
-        queue.async { output.ingestPrime(pixelBuffer) }
     }
 }
 
@@ -769,7 +795,7 @@ func buildStreamConfig(filter: SCContentFilter, srcW: Double, srcH: Double,
     // parity but shares the size, and one pixel there is invisible.
     config.width = max(2, Int(outW.rounded()) & ~1)
     config.height = max(2, Int(outH.rounded()) & ~1)
-    config.minimumFrameInterval = CMTime(value: 1, timescale: CMTimeScale(fps)) // ceiling; idle frames are skipped
+    config.minimumFrameInterval = CMTime(value: 1, timescale: CMTimeScale(fps)) // ceiling; the idle refresh floors delivery at 1fps
     config.pixelFormat = kCVPixelFormatType_32BGRA
     config.queueDepth = 5
     config.showsCursor = true
@@ -815,9 +841,10 @@ do {
 stream.startCapture { error in
     if let error { die("startCapture: \(error.localizedDescription)") }
 }
-// A static window will never trigger the stream; hand the viewer its first
-// frame now rather than whenever the window next repaints.
-primeFirstFrame(filter: target.filter, config: config, queue: sampleQueue, output: output)
+// The 1fps floor doubles as the first frame: the refresh tick fires
+// immediately, so a static window paints within its startup instead of
+// whenever it next repaints.
+output.startIdleRefresh(filter: target.filter, config: config, queue: sampleQueue)
 
 // SCStream delivers frames on its own queue; keep the process alive until the
 // agent kills it (stream stop) or the pipe closes.
@@ -957,12 +984,12 @@ final class MuxStream {
         s.startCapture { [weak self] error in
             if let error { self?.fail("startCapture: \(error.localizedDescription)") }
         }
-        // A static window will never trigger the stream; hand the viewer its
-        // first frame now rather than whenever the window next repaints. This is
-        // the serve-mode path viewers actually hit when a pane opens or a stream
-        // restarts on codec renegotiation — the moments the black-until-clicked
-        // pane was reported at. A dead stream's emit() already drops the frame.
-        primeFirstFrame(filter: filter, config: config, queue: queue, output: fo)
+        // The 1fps floor doubles as the first frame: its immediate first tick is
+        // what hands a joining viewer a picture on the serve-mode path — the
+        // moments the black-until-clicked pane was reported at (pane open, codec
+        // renegotiation restart). A dead stream's emit() already drops frames,
+        // and fail/shutdown cancel the tick itself.
+        fo.startIdleRefresh(filter: filter, config: config, queue: queue)
     }
 
     private func emit(_ payload: Data, _ flag: UInt8?) {
@@ -975,6 +1002,7 @@ final class MuxStream {
     // exists here). Safe from any queue; the first caller wins.
     func fail(_ msg: String) {
         guard markDead() else { return }
+        output?.stopIdleRefresh()
         FileHandle.standardError.write(Data("capture \(spec) ended: \(msg)\n".utf8))
         out.error(sid, msg)
         out.end(sid)
@@ -985,6 +1013,7 @@ final class MuxStream {
     // shutdown tears the stream down silently — the daemon asked (session gone).
     func shutdown() {
         guard markDead() else { return }
+        output?.stopIdleRefresh()
         stream?.stopCapture { _ in }
     }
 }

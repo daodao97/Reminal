@@ -6593,14 +6593,12 @@
       const tnow = performance.now();
       if (p.frameTimes) while (p.frameTimes.length && tnow - p.frameTimes[0] > 1000) p.frameTimes.shift();
       const fps = p.frameTimes ? p.frameTimes.length : 0;
-      // A still screen sends nothing, so 0 fps is the honest reading for a
-      // perfectly healthy pane — and on its own it reads as "this is broken",
-      // which is exactly how it got reported. Say which of the two it is: a
-      // pane that has shown a frame and is not stalled is idle, not dead.
-      // (A stream that has actually failed puts its error over the pane.)
-      const rate = fps > 0 ? fps + ' fps'
-        : p.gotFrame ? 'idle \u00b7 sent on change'
-        : '0 fps';
+      // The host floors delivery at 1fps — an idle window re-captures and
+      // re-sends once a second — so a healthy stream never reads 0. The old
+      // "idle · sent on change" wording papered over change-driven
+      // delivery, which proved unreliable; now 0 fps honestly means no frames
+      // are arriving (stalled stream, or a host from before the floor existed).
+      const rate = fps + ' fps';
       // Capture source, stamped by the agent on each frame: "native" = macOS's
       // ScreenCaptureKit helper, "win32" = Windows' in-process GDI capture
       // (that platform's native path, not a fallback), "shot" = the per-frame

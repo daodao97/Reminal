@@ -1093,9 +1093,10 @@ const streamAckIdleTimeout = 12 * time.Second
 // enough fraction of its cell to shift that cell's average past the threshold,
 // instead of being diluted to nothing by averaging over a large block. So we
 // only ever skip visually identical frames and don't drop small/colour changes.
-// An unchanged window
-// sends NO frames at all (0 fps); winHeartbeat only governs a tiny liveness
-// ping (see streamWindow) so the viewer knows the host is alive without a frame.
+// An unchanged window still sends one frame per winMinFrameInterval — change
+// detection decides which frames are worth sending EARLY, never whether a pane
+// gets frames at all; winHeartbeat only governs a tiny liveness ping (see
+// streamWindow) so the viewer knows the host is alive between frames.
 // winProbeFrame is the one exception: while a DataChannel is open but not yet
 // confirmed to carry frames, we send a real frame this often even if nothing
 // changed — otherwise a static window would never give the channel a frame to
@@ -1114,6 +1115,17 @@ const (
 	// window can sit frozen before its pane is dropped, without spending an
 	// existence check on every idle frame.
 	winLiveCheck = 1200 * time.Millisecond
+	// winMinFrameInterval floors delivery at 1fps on the subprocess capture
+	// path: after a second without a sent frame, the newest frame is re-sent
+	// even though the change detector saw nothing. Both detectors — SCK's
+	// frame status and the signature grid — have missed real changes in the
+	// field, and a miss used to freeze the pane until the next detected
+	// change. One frame per idle second bounds that to a second of staleness,
+	// and costs nothing while nobody watches: streams stop without viewers.
+	// The native helper keeps its own 1fps floor (startIdleRefresh), which
+	// additionally RE-CAPTURES rather than re-sends, so its floor also heals
+	// misses inside SCK itself.
+	winMinFrameInterval = time.Second
 )
 
 // frameSig is a coarse per-cell average of a frame across the luma (Y) and both
@@ -1399,6 +1411,19 @@ func (s *winStream) cleanup() {
 
 func (s *winStream) run() {
 	for {
+		// A closed stop channel must end the loop HERE, not wherever a blocking
+		// call happens to notice it. Every select below treats closed-stop as
+		// "return immediately" — so a replaced stream (same id reopened, see
+		// startWindowStream) with spare in-flight capacity and an alive helper
+		// never blocked at all: helper.next returned instantly on the closed
+		// channel, the capNative path has no loop floor, and the orphaned
+		// goroutine spun a full core while holding its capture stream open
+		// (observed: three replaced panes pinning an agent at 300% CPU).
+		select {
+		case <-s.stop:
+			return
+		default:
+		}
 		conn := s.a.liveConn()
 		if conn == nil {
 			return
@@ -1425,9 +1450,10 @@ func (s *winStream) run() {
 				return
 			}
 		case f.H264:
-			// Compressed-video path: every non-empty AU is new content by
-			// construction (SCK only emits changes) and MUST ship in order —
-			// drop policy lives in dispatchH264/winHelper, never here.
+			// Compressed-video path: every non-empty AU is fresh content — a
+			// detected change, or the helper's own 1fps idle refresh — and MUST
+			// ship in order; drop policy lives in dispatchH264/winHelper, never
+			// here.
 			s.fails = 0
 			if !s.checkWindow(conn, len(f.Data) > 0) {
 				return
@@ -1452,10 +1478,19 @@ func (s *winStream) run() {
 			if len(f.Data) > 0 {
 				s.lastImg = f.Data
 			}
+			// checkWindow gets the detector's honest verdict — its existence
+			// poll runs while the picture is static, and the 1fps floor below
+			// must not read as "always moving" there.
 			if !s.checkWindow(conn, changed) {
 				return
 			}
-			s.dispatch(conn, changed)
+			// Change detection is a bandwidth optimization, not a delivery
+			// contract: it has missed real changes in the field, and a miss
+			// froze the pane until the next detected change. The floor bounds
+			// any miss to a second of staleness by re-sending the newest frame
+			// after a second of silence (see winMinFrameInterval).
+			refresh := len(s.lastImg) > 0 && time.Since(s.lastSent) >= winMinFrameInterval
+			s.dispatch(conn, changed || refresh)
 		}
 		// Floor the loop period so a cheap subprocess capture with instant acks
 		// can't spin a core. The helper path self-paces (next blocks until SCK
@@ -1738,8 +1773,9 @@ func (a *Agent) activeMenu(id string) (winMenuState, bool) {
 	return m, ok
 }
 
-// capture produces the next frame. Helper path: blocks up to winHeartbeat for a
-// changed frame (an empty result = the window was static this interval; its
+// capture produces the next frame. Helper path: blocks up to winHeartbeat for
+// the next frame — a change or the helper's 1fps idle refresh (an empty result
+// therefore means the helper went quiet, not merely a static window; its
 // H264 flag still reflects the stream codec so run() takes the right branch).
 // Subprocess path (helper unavailable, or a context menu needs a region grab):
 // one screencapture JPEG, change-detected by the caller via frame signatures —
@@ -1780,8 +1816,9 @@ func (s *winStream) capture() (f winFrame, err error) {
 	return winFrame{Data: img}, cerr
 }
 
-// detectChange reports whether img is new content. The helper only ever emits
-// changed frames; the subprocess path compares coarse frame signatures.
+// detectChange reports whether img is new content. Helper frames always count
+// (it emits changes plus its own paced idle refresh); the subprocess path
+// compares coarse frame signatures.
 func (s *winStream) detectChange(img []byte) bool {
 	if len(img) == 0 {
 		return false
