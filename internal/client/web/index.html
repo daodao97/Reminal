@@ -305,8 +305,13 @@
       user-select: none;
     }
     #keybar button:active { background: #30363d; }
-    /* Touch devices and narrow screens get the bar; desktop with mouse hides it. */
-    @media (pointer: coarse), (max-width: 720px) {
+    /* Touch devices and narrow screens get the bar; desktop with mouse hides
+       it. any-pointer, not just pointer: Chrome re-elects the PRIMARY pointer
+       live (pairing a keyboard/mouse, stylus hover, desktop-mode — and its
+       heuristics shift across updates), and a wide-screen fold is past the
+       720px clause, so a primary-pointer flip silently erased the whole bar
+       mid-session. The touchscreen never stops existing; gate on that. */
+    @media (pointer: coarse), (any-pointer: coarse), (max-width: 720px) {
       #keybar {
         display: flex;
         /* Single horizontal row that scrolls instead of wrapping. */
@@ -634,7 +639,7 @@
        header, and a `right: 0` anchor often pushed the dropdown off
        the left edge of the viewport. Float it as a viewport-anchored
        panel instead so it always fits. */
-    @media (pointer: coarse), (max-width: 720px) {
+    @media (pointer: coarse), (any-pointer: coarse), (max-width: 720px) {
       .recents-list {
         position: fixed;
         top: auto;
@@ -843,7 +848,7 @@
     /* The soft-keyboard button only helps on touch (no physical keyboard); hide
        it where there's a real pointer with hover (desktop). */
     .wpane-kbd { display: none; }
-    @media (hover: none) and (pointer: coarse) { .wpane-kbd { display: inline-flex; } }
+    @media (any-pointer: coarse) { .wpane-kbd { display: inline-flex; } }
     .wpane-body { position: relative; background: #000; line-height: 0; overflow: hidden; }
     /* Standalone pane mode (?pane=): the window fills the tab. The pane keeps
        its own title bar so keyboard and info stay reachable; pop-out and close
@@ -8674,7 +8679,7 @@
     // dismissal by the visual viewport growing back while our input holds
     // focus, and release the focus to match. Touch devices only — on desktop a
     // window resize mid-typing must not eat keyboard focus.
-    if (window.visualViewport && matchMedia('(pointer: coarse)').matches) {
+    if (window.visualViewport && matchMedia('(any-pointer: coarse)').matches) {
       let vvHeight = visualViewport.height;
       visualViewport.addEventListener('resize', () => {
         const grewBy = visualViewport.height - vvHeight;
