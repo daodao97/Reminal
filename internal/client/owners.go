@@ -488,6 +488,31 @@ func IsOwner(pub ed25519.PublicKey) (bool, error) {
 	return !revoked, nil
 }
 
+// IsEnrolledOwner reports whether a pasted id is already in owners.json.
+// Unlike IsOwner above it ignores self-revocation: it gates the add-owner
+// DISCLAIMER, and re-adding an enrolled device changes nothing whether or not
+// it's revoked (AddOwner never clears a tombstone — that's `owners restore`).
+// Best-effort: any read or parse failure reads as "not enrolled", which errs
+// toward showing the warning. Works without root — the store is
+// world-readable by design (see saveOwners).
+func IsEnrolledOwner(id string) bool {
+	pub, err := parseOwnerID(id)
+	if err != nil {
+		return false
+	}
+	of, err := loadOwners()
+	if err != nil {
+		return false
+	}
+	pk := ownerID(pub)
+	for _, o := range of.Owners {
+		if o.Pubkey == pk {
+			return true
+		}
+	}
+	return false
+}
+
 // ListOwners returns the machine's enrolled owner devices.
 func ListOwners() ([]Owner, error) {
 	of, err := loadOwners()

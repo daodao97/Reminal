@@ -22,12 +22,14 @@ func needsSudoRetry(err error) bool {
 // sudoReexec re-runs this exact reminal invocation under sudo, wiring the
 // terminal through so sudo can prompt for a password interactively. The child
 // does the work and prints its own output; we return its exit status, so the
-// caller should return immediately after.
+// caller should return immediately after. extraArgs are appended to the
+// re-run — `add owner` passes "-y" so a disclaimer the human already answered
+// in THIS process is never asked twice by the child.
 //
 // Windows has no sudo-with-shared-stdio: UAC elevation spawns a NEW console
 // the user can't see our prompts in. So instead of elevating silently, tell
 // the user to re-run from an Administrator terminal.
-func sudoReexec() error {
+func sudoReexec(extraArgs ...string) error {
 	if runtime.GOOS == "windows" {
 		return errors.New("writing the machine owner store needs elevation — re-run this command from an Administrator terminal (right-click Terminal → Run as administrator)")
 	}
@@ -35,7 +37,8 @@ func sudoReexec() error {
 	if err != nil {
 		return err
 	}
-	cmd := exec.Command("sudo", append([]string{exe}, os.Args[1:]...)...)
+	args := append(append([]string{exe}, os.Args[1:]...), extraArgs...)
+	cmd := exec.Command("sudo", args...)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
 	return cmd.Run()
 }

@@ -4,10 +4,15 @@
 package main
 
 import (
+	"bufio"
 	"fmt"
+	"os"
+	"os/user"
 	"runtime"
 	"strings"
 	"time"
+
+	"golang.org/x/term"
 
 	"github.com/reminal/reminal/internal/client"
 )
@@ -37,18 +42,34 @@ func runOwn() error {
 }
 
 // runAddOwner records a pasted owner id in this machine's owners.json.
-// Usage: reminal add owner <id> [--label <name>]
+// Usage: reminal add owner <id> [--label <name>] [-y]
 // It's forgiving about paste slips: if you paste the whole suggested line, the
 // rmnl_… token is still picked out, and a bare label after the id is captured.
 func runAddOwner(args []string) error {
-	id, label := parseAddOwnerArgs(args)
+	id, label, yes := parseAddOwnerArgs(args)
 	if id == "" {
-		return fmt.Errorf("usage: reminal add owner <id> [--label <name>]")
+		return fmt.Errorf("usage: reminal add owner <id> [--label <name>] [-y]")
+	}
+
+	// The disclaimer, before anything is written. Skipped with -y, when stdin
+	// isn't a terminal (scripts), and when the device is already enrolled —
+	// re-adding grants nothing the disclaimer warns about. The label is
+	// deliberately NEVER shown here: it's attacker-typed text, and a
+	// reassuring name on a security prompt lends it exactly the trust it
+	// hasn't earned. The id is the only identity on this screen.
+	if !yes && term.IsTerminal(int(os.Stdin.Fd())) && !client.IsEnrolledOwner(id) {
+		if !confirmAddOwner(id) {
+			fmt.Println("  " + cDim("Cancelled — nothing was changed."))
+			return nil
+		}
 	}
 
 	o, res, err := client.AddOwner(id, label)
 	if needsSudoRetry(err) {
-		return sudoReexec() // writing /etc/reminal needs root — re-run under sudo
+		// Writing /etc/reminal needs root — re-run under sudo. The human
+		// already answered (or legitimately skipped) the disclaimer in this
+		// process, so the child carries -y and never asks twice.
+		return sudoReexec("-y")
 	}
 	if err != nil {
 		return err
@@ -74,6 +95,52 @@ func runAddOwner(args []string) error {
 	// it installs exactly once; the auto-escalating parent doesn't re-run it.
 	enableBackgroundHost()
 	return nil
+}
+
+// confirmAddOwner shows what enrollment actually grants and requires a typed
+// "yes". The CLI's usual confirm is Enter-to-continue, but this one hands the
+// whole machine over — the default must be cancel, and the answer deliberate.
+// The closing lines are the real security work: the plausible attack on this
+// command is social engineering ("run this one line"), so the prompt turns
+// into a verification step — the enrolling device is showing this same id on
+// its own screen (reminal own, or the browser's enroll box).
+func confirmAddOwner(id string) bool {
+	fmt.Println()
+	fmt.Println("  " + cRed("⚠  You are about to hand full control of this computer to that device."))
+	fmt.Println()
+	fmt.Println("     Once enrolled, the device with id")
+	fmt.Println()
+	fmt.Println("         " + cBold(id))
+	fmt.Println()
+	fmt.Println("     can, at any time, without a PIN and without anyone at this")
+	fmt.Println("     keyboard approving it:")
+	fmt.Println()
+	fmt.Println("       •  open new terminal sessions and run any command as " + enrolledAccountName())
+	fmt.Println("       •  attach to every existing reminal session on this machine")
+	fmt.Println("       •  view the screen and control any window")
+	fmt.Println("       •  reach this machine even when idle — enrolling installs a")
+	fmt.Println("          background host that keeps it connected")
+	fmt.Println()
+	fmt.Println("     " + cDim("Check that this id matches the one shown on YOUR device's screen."))
+	fmt.Println("     " + cDim("Only enroll a device you hold. Never paste an id someone unknown"))
+	fmt.Println("     " + cDim("sent you."))
+	fmt.Println()
+	fmt.Print("  Type yes to enroll, anything else to cancel: ")
+	line, _ := bufio.NewReader(os.Stdin).ReadString('\n')
+	return strings.EqualFold(strings.TrimSpace(line), "yes")
+}
+
+// enrolledAccountName names the account an owner's sessions would run as —
+// the login user, not root: under sudo that's SUDO_USER, never "root" (the
+// command normally runs elevated, but sessions don't).
+func enrolledAccountName() string {
+	if u := os.Getenv("SUDO_USER"); u != "" {
+		return u
+	}
+	if u, err := user.Current(); err == nil && u.Username != "" && u.Username != "root" {
+		return u.Username
+	}
+	return "your user account"
 }
 
 // enableBackgroundHost installs (idempotently) the login service that keeps this
@@ -105,12 +172,13 @@ func disableBackgroundHostIfLastOwner() {
 	_ = client.UninstallDaemonService()
 }
 
-// parseAddOwnerArgs pulls the owner id and label out of `add owner` arguments.
-// It picks the rmnl_ token as the id even if extra words came along (a stray
-// paste), but only treats trailing words as a bare label when the id was typed
-// FIRST — so it never scavenges a label out of a longer pasted line. An
-// explicit --label always wins.
-func parseAddOwnerArgs(args []string) (id, label string) {
+// parseAddOwnerArgs pulls the owner id, label, and -y out of `add owner`
+// arguments. It picks the rmnl_ token as the id even if extra words came along
+// (a stray paste), but only treats trailing words as a bare label when the id
+// was typed FIRST — so it never scavenges a label out of a longer pasted line.
+// An explicit --label always wins. -y/--yes skips the enrollment disclaimer
+// (scripts, and the sudo re-exec of an already-answered prompt).
+func parseAddOwnerArgs(args []string) (id, label string, yes bool) {
 	var positionals []string
 	for i := 0; i < len(args); i++ {
 		a := args[i]
@@ -120,6 +188,8 @@ func parseAddOwnerArgs(args []string) (id, label string) {
 			i++
 		case strings.HasPrefix(a, "--label="):
 			label = strings.TrimPrefix(a, "--label=")
+		case a == "-y" || a == "--yes":
+			yes = true
 		case strings.HasPrefix(a, "-"):
 			// ignore stray flags
 		default:
@@ -139,7 +209,7 @@ func parseAddOwnerArgs(args []string) (id, label string) {
 	if label == "" && idIdx == 0 && len(positionals) > 1 {
 		label = strings.Join(positionals[1:], " ")
 	}
-	return id, label
+	return id, label, yes
 }
 
 // runOwners lists the machine's owner devices, or renames/revokes one.

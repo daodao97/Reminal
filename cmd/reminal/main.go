@@ -503,7 +503,7 @@ func main() {
 				}
 				return
 			}
-			fmt.Fprintln(os.Stderr, "usage: reminal add owner <id> [--label <name>]")
+			fmt.Fprintln(os.Stderr, "usage: reminal add owner <id> [--label <name>] [-y]")
 			os.Exit(1)
 			return
 		case "owners":
@@ -673,7 +673,7 @@ func printHelp() {
 		{"reminal attach [id|name]", "Re-connect to a local session as a viewer (no arg -> interactive picker)"},
 		{"reminal rename [id|name] <name>", "Rename a running session (inside one, just: reminal rename <name>)"},
 		{"reminal own", "Print this device's owner id to paste into 'add owner' on a machine"},
-		{"reminal add owner <id> [--label <n>]", "Enroll a device as an owner of this machine (needs sudo)"},
+		{"reminal add owner <id> [--label <n>]", "Enroll a device as an owner of this machine (needs sudo; asks to confirm, -y skips)"},
 		{"reminal owners [rename|revoke|restore]", "List and manage this machine's owner devices"},
 		{"reminal machines [rename <id> <name>]", "List every machine you own and its live sessions"},
 		{"reminal stop [id|name|port] [-y]", "Stop the reminal layer — your shell/server keeps running"},

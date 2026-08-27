@@ -11,25 +11,31 @@ func TestParseAddOwnerArgs(t *testing.T) {
 		in        []string
 		wantID    string
 		wantLabel string
+		wantYes   bool
 	}{
-		{"bare id", []string{"rmnl_X"}, "rmnl_X", ""},
-		{"--label", []string{"rmnl_X", "--label", "My Phone"}, "rmnl_X", "My Phone"},
-		{"--label=", []string{"rmnl_X", "--label=Work"}, "rmnl_X", "Work"},
-		{"bare label after id", []string{"rmnl_X", "My", "Phone"}, "rmnl_X", "My Phone"},
-		{"--label wins over trailing", []string{"rmnl_X", "extra", "--label", "Foo"}, "rmnl_X", "Foo"},
+		{"bare id", []string{"rmnl_X"}, "rmnl_X", "", false},
+		{"--label", []string{"rmnl_X", "--label", "My Phone"}, "rmnl_X", "My Phone", false},
+		{"--label=", []string{"rmnl_X", "--label=Work"}, "rmnl_X", "Work", false},
+		{"bare label after id", []string{"rmnl_X", "My", "Phone"}, "rmnl_X", "My Phone", false},
+		{"--label wins over trailing", []string{"rmnl_X", "extra", "--label", "Foo"}, "rmnl_X", "Foo", false},
 		// A stray paste where the id isn't first: pick the id, but DON'T scavenge
 		// the leading words into a label.
-		{"id not first → no scavenged label", []string{"My", "Phone", "rmnl_X"}, "rmnl_X", ""},
-		{"whole pasted line → id only", []string{"sudo", "reminal", "add", "owner", "rmnl_X"}, "rmnl_X", ""},
-		{"no id", []string{"--label", "Foo"}, "", "Foo"},
-		{"empty", nil, "", ""},
+		{"id not first → no scavenged label", []string{"My", "Phone", "rmnl_X"}, "rmnl_X", "", false},
+		{"whole pasted line → id only", []string{"sudo", "reminal", "add", "owner", "rmnl_X"}, "rmnl_X", "", false},
+		{"no id", []string{"--label", "Foo"}, "", "Foo", false},
+		{"empty", nil, "", "", false},
+		{"-y", []string{"rmnl_X", "-y"}, "rmnl_X", "", true},
+		{"--yes", []string{"--yes", "rmnl_X"}, "rmnl_X", "", true},
+		// The sudo re-exec appends -y AFTER whatever the user typed — it must
+		// not disturb the bare-label capture.
+		{"-y appended after bare label", []string{"rmnl_X", "My", "Phone", "-y"}, "rmnl_X", "My Phone", true},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			id, label := parseAddOwnerArgs(c.in)
-			if id != c.wantID || label != c.wantLabel {
-				t.Errorf("parseAddOwnerArgs(%q) = (%q, %q), want (%q, %q)",
-					c.in, id, label, c.wantID, c.wantLabel)
+			id, label, yes := parseAddOwnerArgs(c.in)
+			if id != c.wantID || label != c.wantLabel || yes != c.wantYes {
+				t.Errorf("parseAddOwnerArgs(%q) = (%q, %q, %v), want (%q, %q, %v)",
+					c.in, id, label, yes, c.wantID, c.wantLabel, c.wantYes)
 			}
 		})
 	}
