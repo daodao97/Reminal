@@ -10,12 +10,108 @@
 <link rel="apple-touch-icon" href="/assets/icon.png">
 
 <meta property="og:type" content="website">
+<meta property="og:site_name" content="reminal">
 <meta property="og:url" content="https://reminal.app/">
 <meta property="og:title" content="reminal — your machines, in any browser">
 <meta property="og:description" content="Every window, desktop and terminal on your machines — live in any browser. Lid closed, nothing plugged in, no open ports.">
-<meta property="og:image" content="https://reminal.app/assets/lid.jpg">
+<meta property="og:image" content="https://reminal.app/poster.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="reminal streaming a Mac's windows and terminals into a phone browser">
 <meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:site" content="@harshalgajjar">
+<meta name="twitter:creator" content="@harshalgajjar">
+<meta name="twitter:image" content="https://reminal.app/poster.png">
 <meta name="theme-color" content="#0d1117">
+
+<!--
+  A @graph, not a bare SoftwareApplication node, because "reminal" is a
+  contested word: a Steam horror game, a B12 tablet and a 2020 single all rank
+  for it. Google can only prefer us for the bare brand query once it holds
+  *reminal the software* as a distinct entity, and the properties that build
+  one are name/alternateName, a stable @id per node, and sameAs pointing at
+  profiles it already trusts. Every sameAs URL below is verified to resolve —
+  a dead or wrong one dissolves the entity instead of confirming it.
+-->
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@graph": [
+    {
+      "@type": "Organization",
+      "@id": "https://reminal.app/#org",
+      "name": "reminal",
+      "alternateName": ["Reminal", "reminal.app"],
+      "url": "https://reminal.app/",
+      "logo": {
+        "@type": "ImageObject",
+        "url": "https://reminal.app/assets/icon.png",
+        "width": 1024,
+        "height": 1024
+      },
+      "founder": { "@id": "https://reminal.app/#author" },
+      "sameAs": [
+        "https://github.com/harshalgajjar/Reminal",
+        "https://alternativeto.net/software/reminal/",
+        "https://x.com/harshalgajjar"
+      ]
+    },
+    {
+      "@type": "Person",
+      "@id": "https://reminal.app/#author",
+      "name": "Harshal Gajjar",
+      "url": "https://harshalgajjar.com",
+      "sameAs": [
+        "https://github.com/harshalgajjar",
+        "https://x.com/harshalgajjar"
+      ]
+    },
+    {
+      "@type": "WebSite",
+      "@id": "https://reminal.app/#website",
+      "name": "reminal",
+      "alternateName": ["reminal.app", "Reminal"],
+      "url": "https://reminal.app/",
+      "inLanguage": "en",
+      "description": "Every window, desktop and terminal on your machines, live in any browser.",
+      "publisher": { "@id": "https://reminal.app/#org" }
+    },
+    {
+      "@type": "SoftwareApplication",
+      "@id": "https://reminal.app/#software",
+      "name": "reminal",
+      "alternateName": "Reminal",
+      "operatingSystem": "macOS, Linux, Windows",
+      "applicationCategory": "DeveloperApplication",
+      "applicationSubCategory": "Remote Desktop and Terminal Access",
+      "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" },
+      "license": "https://www.gnu.org/licenses/agpl-3.0.html",
+      "isAccessibleForFree": true,
+      "url": "https://reminal.app/",
+      "downloadUrl": "https://github.com/harshalgajjar/Reminal/releases",
+      "installUrl": "https://reminal.app/install.sh",
+      "softwareHelp": "https://github.com/harshalgajjar/Reminal",
+      "codeRepository": "https://github.com/harshalgajjar/Reminal",
+      "programmingLanguage": "Go",
+      "author": { "@id": "https://reminal.app/#author" },
+      "publisher": { "@id": "https://reminal.app/#org" },
+      "featureList": [
+        "Stream every window, desktop and terminal to any browser",
+        "Software closed-lid mode keeps a MacBook awake and rendering headlessly",
+        "End-to-end encrypted with AES-256-GCM under a per-run key",
+        "No open ports, no long-lived keys on disk, no account",
+        "Nothing to install on the device you are holding"
+      ],
+      "description": "Streams every window, desktop and terminal on your machines into any browser, with input. Software closed-lid mode keeps a MacBook awake and rendering headlessly. End-to-end encrypted, no open ports, no client, no account.",
+      "image": "https://reminal.app/poster.png",
+      "sameAs": [
+        "https://github.com/harshalgajjar/Reminal",
+        "https://alternativeto.net/software/reminal/"
+      ]
+    }
+  ]
+}
+</script>
 
 <style>
 :root{
@@ -596,6 +692,7 @@ footer a{color:var(--muted)}
       <span>reminal</span>
     </a>
     <div class="navlinks">
+      <a href="/agents/" class="hide-sm">For AI agents</a>
       <a href="#security" class="hide-sm">Security</a>
       <a href="#pro" class="hide-sm">What's coming</a>
       <a href="https://github.com/harshalgajjar/Reminal" class="ghlink"><svg class="gh" viewBox="0 0 16 16" width="16" height="16" aria-hidden="true" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.012 8.012 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg><span>GitHub</span></a>
@@ -829,6 +926,23 @@ footer a{color:var(--muted)}
   <figcaption class="reveal">The fastest SSH you'll ever configure — because there's nothing to configure.</figcaption>
 </section>
 
+<section class="wrap" id="dock">
+  <p class="eyebrow reveal">Session dock</p>
+  <h2 class="reveal">Every session, one swipe away.</h2>
+  <p class="body reveal">
+    You're on one machine and need another. Drag the keybar's <strong>≡ handle up</strong> and your live
+    sessions fan out — every machine you own plus your recents, freshest first. Slide onto one,
+    release, and you're connected: <strong>no IDs, no PINs, no typing.</strong> The shell is exactly where
+    you left it.
+  </p>
+  <figure class="frame reveal" style="max-width:700px">
+    <div class="bar"><span class="dots"><i></i><i></i><i></i></span><span class="url">claude — studio-mac → agent-7 — aws-eu-1</span><span class="live">live</span></div>
+    <video src="/assets/switch.mp4" poster="/assets/switch.jpg" muted loop playsinline preload="none"
+           aria-label="A thumb drags the keybar handle up on a phone; a dock of live sessions slides out, the thumb slides onto one and releases, and the terminal switches to that machine"></video>
+  </figure>
+  <figcaption class="reveal">One gesture from your Claude session on the MacBook to the agent on the cloud box.</figcaption>
+</section>
+
 <section class="wrap" id="fleet">
   <p class="eyebrow reveal">Your fleet</p>
   <h2 class="reveal">Own your machines. Watch them all.</h2>
@@ -942,6 +1056,7 @@ footer a{color:var(--muted)}
     <span class="footlinks">
       <a href="https://github.com/harshalgajjar/Reminal" class="ghlink"><svg class="gh" viewBox="0 0 16 16" width="16" height="16" aria-hidden="true" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.012 8.012 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg><span>GitHub</span></a>
       <a href="https://github.com/harshalgajjar/Reminal/blob/main/LICENSING.md">Licensing</a>
+      <a href="/agents/">For AI agents</a>
       <a href="/privacy">Privacy</a>
       <a href="/terms">Terms</a>
       <a href="https://github.com/harshalgajjar/Reminal/blob/main/SECURITY.md">Security</a>

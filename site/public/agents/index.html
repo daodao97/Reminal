@@ -1,0 +1,557 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>A home for long-running AI agents — Claude Code, Codex, pi | reminal</title>
+<meta name="description" content="AI agents can run for hours if you let them — and a long-running agent needs a machine that never sleeps, a view you can glance at, and a hand that can reach in. reminal keeps the Mac awake with the lid shut and puts every agent, terminal and window in any browser — with input.">
+<link rel="canonical" href="https://reminal.app/agents/">
+<link rel="icon" href="/assets/icon.png" type="image/png">
+<link rel="apple-touch-icon" href="/assets/icon.png">
+
+<meta property="og:site_name" content="reminal">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://reminal.app/agents/">
+<meta property="og:title" content="Your agents can run for hours. Give them a home.">
+<meta property="og:description" content="A machine that never sleeps (lid shut, virtual display), a view of every agent and window at a glance, and a hand that can reach in from any browser. Agent-agnostic, E2E-encrypted, open source.">
+<meta property="og:image" content="https://reminal.app/poster.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:site" content="@harshalgajjar">
+<meta name="twitter:image" content="https://reminal.app/poster.png">
+<meta name="theme-color" content="#0d1117">
+
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@graph": [
+    {
+      "@type": "WebPage",
+      "@id": "https://reminal.app/agents/#page",
+      "name": "A home for long-running AI agents",
+      "url": "https://reminal.app/agents/",
+      "isPartOf": {
+        "@id": "https://reminal.app/#website"
+      },
+      "about": {
+        "@id": "https://reminal.app/#software"
+      },
+      "publisher": {
+        "@id": "https://reminal.app/#org"
+      },
+      "inLanguage": "en"
+    },
+    {
+      "@type": "FAQPage",
+      "mainEntity": [
+        {
+          "@type": "Question",
+          "name": "How do I keep Claude Code or Codex running when I close my MacBook's lid?",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "macOS sleeps a MacBook when the lid closes unless a monitor and keyboard are attached, which kills any agent session running on it. reminal's closed-lid mode fixes this in software: it disables clamshell sleep and spins up a virtual display the moment the Mac goes headless, so the agent keeps working and every window keeps streaming into your browser. No dummy HDMI plug, no dongle. Toggle it off and everything is undone."
+          }
+        },
+        {
+          "@type": "Question",
+          "name": "Does Claude Code's /remote-control work with Codex, pi, or aider?",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "No. Each vendor's remote steers only its own agent: /remote-control mirrors a Claude Code session, and Codex pairs with the ChatGPT mobile app. reminal is agent-agnostic — it streams the terminal and the windows themselves, so anything that runs in a terminal (pi, aider, opencode, plain build scripts) is reachable from any browser."
+          }
+        },
+        {
+          "@type": "Question",
+          "name": "Can I watch several coding agents at once from my phone?",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "Yes. reminal gives you one live view of every machine you own: every session on it, what's running, and who's watching. Run Claude Code on one box and Codex on another and watch both in the same browser tab, attaching to whichever needs input."
+          }
+        },
+        {
+          "@type": "Question",
+          "name": "Does my session pass through a vendor's cloud?",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "reminal sessions are end-to-end encrypted with AES-256-GCM under a fresh key per run; the relay routes ciphertext it cannot read. There is no account and nothing to sign in to, and the relay itself is open source — you can self-host it on Cloudflare in a few minutes."
+          }
+        },
+        {
+          "@type": "Question",
+          "name": "What does reminal cost?",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "The reminal CLI is free and open source under AGPL-3.0, including the relay. A hosted tier with permanent machine names and a managed relay is coming."
+          }
+        }
+      ],
+      "@id": "https://reminal.app/agents/#faq",
+      "isPartOf": {
+        "@id": "https://reminal.app/#website"
+      }
+    }
+  ]
+}
+</script>
+
+<style>
+:root{
+  --bg:#0d1117; --surface:#161b22; --surface-2:#1c2129;
+  --line:#30363d; --line-soft:#21262d;
+  --fg:#e6edf3; --muted:#8b949e; --dim:#6e7681;
+  --accent:#58a6ff; --accent-strong:#388bfd; --accent-deep:#1f6feb;
+  --radius:12px;
+  --max:1080px;
+  --ease:cubic-bezier(.2,.7,.2,1);
+}
+*{box-sizing:border-box}
+html{-webkit-text-size-adjust:100%; scroll-behavior:smooth}
+body{
+  margin:0; background:var(--bg); color:var(--fg);
+  font:16px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Helvetica,Arial,sans-serif;
+  -webkit-font-smoothing:antialiased; overflow-x:hidden;
+}
+a{color:var(--accent); text-decoration:none}
+a:hover{text-decoration:underline}
+.wrap{max-width:var(--max); margin:0 auto; padding-left:24px; padding-right:24px; position:relative}
+code,kbd,pre{font-family:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace}
+
+.sky{position:absolute; inset:-200px 0 auto 0; height:900px; z-index:0; pointer-events:none; overflow:hidden}
+.sky i{position:absolute; display:block; border-radius:50%; filter:blur(90px)}
+.sky i:nth-child(1){
+  width:820px; height:820px; top:-300px; left:50%; margin-left:-410px;
+  background:radial-gradient(circle,rgba(31,111,235,.38) 0%,transparent 62%);
+}
+.sky i:nth-child(2){
+  width:560px; height:560px; top:40px; right:4%;
+  background:radial-gradient(circle,rgba(120,90,255,.18) 0%,transparent 62%);
+}
+.mesh{
+  position:absolute; inset:0; z-index:0; pointer-events:none;
+  background-image:
+    linear-gradient(rgba(139,148,158,.07) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(139,148,158,.07) 1px, transparent 1px);
+  background-size:56px 56px;
+  -webkit-mask-image:radial-gradient(ellipse 80% 55% at 50% 12%, #000 20%, transparent 78%);
+  mask-image:radial-gradient(ellipse 80% 55% at 50% 12%, #000 20%, transparent 78%);
+}
+
+nav{
+  position:sticky; top:0; z-index:50;
+  background:rgba(13,17,23,.82); backdrop-filter:blur(14px) saturate(150%);
+  border-bottom:1px solid var(--line-soft);
+}
+nav .wrap{display:flex; align-items:center; justify-content:space-between; height:62px; gap:16px}
+.brand{display:flex; align-items:center; gap:10px; color:var(--fg); font-weight:650; letter-spacing:-.01em}
+.brand:hover{text-decoration:none}
+.brand img{width:26px; height:26px; border-radius:7px; display:block}
+.navlinks{display:flex; align-items:center; gap:22px; font-size:14.5px}
+.navlinks a{color:var(--muted)}
+.navlinks a:hover{color:var(--fg); text-decoration:none}
+@media (max-width:640px){ .navlinks .hide-sm{display:none} }
+
+header{padding:70px 0 10px; text-align:center; position:relative}
+header .wrap{z-index:1}
+h1{
+  margin:0 auto 20px; max-width:22ch;
+  font-size:clamp(32px,5vw,54px); line-height:1.08;
+  letter-spacing:-.035em; font-weight:700;
+}
+h1 .em{
+  background:linear-gradient(110deg,#79b8ff 0%,#58a6ff 35%,#a371f7 100%);
+  -webkit-background-clip:text; background-clip:text; color:transparent;
+}
+.lede{
+  margin:0 auto; max-width:62ch; font-size:clamp(16.5px,2.1vw,19px);
+  color:var(--muted); line-height:1.65;
+}
+.lede strong{color:var(--fg); font-weight:600}
+
+.cta{margin:32px auto 0; max-width:660px}
+.cmd{
+  display:flex; align-items:center; gap:12px; text-align:left;
+  background:linear-gradient(180deg,rgba(28,33,41,.9),rgba(22,27,34,.9));
+  border:1px solid var(--line); border-radius:var(--radius);
+  padding:14px 14px 14px 18px; backdrop-filter:blur(8px);
+  box-shadow:0 8px 30px -12px rgba(0,0,0,.8), inset 0 1px 0 rgba(255,255,255,.04);
+}
+.cmd pre{margin:0; flex:1; overflow-x:auto; font-size:13.5px; color:var(--fg); scrollbar-width:none}
+.cmd pre::-webkit-scrollbar{display:none}
+.cmd .sigil{color:var(--accent); user-select:none; font-weight:600}
+.copy{
+  flex:none; background:var(--surface-2); border:1px solid var(--line); color:var(--muted);
+  font:inherit; font-size:13px; padding:7px 13px; border-radius:8px; cursor:pointer;
+  transition:color .15s, border-color .15s, background .15s;
+}
+.copy:hover{color:var(--fg); border-color:var(--dim); background:#252b34}
+.copy.done{color:#3fb950; border-color:#238636}
+.sub-cta{margin-top:14px; font-size:14.5px; color:var(--dim)}
+.sub-cta a{color:var(--muted)}
+.sub-cta a:hover{color:var(--accent)}
+
+.chips{display:flex; flex-wrap:wrap; gap:8px; justify-content:center; margin:26px auto 0; max-width:860px}
+.chip{
+  font-size:12.5px; color:var(--muted); background:rgba(22,27,34,.7);
+  border:1px solid var(--line-soft); border-radius:99px; padding:5px 12px; white-space:nowrap;
+}
+.chip b{color:var(--fg); font-weight:600}
+
+figure{margin:0}
+.frame{
+  margin:0 auto; border:1px solid var(--line); border-radius:14px; overflow:hidden;
+  background:var(--surface); line-height:0;
+  box-shadow:0 30px 80px -40px rgba(0,0,0,.95), 0 0 0 1px rgba(255,255,255,.02) inset;
+}
+.bar{
+  display:flex; align-items:center; gap:10px; padding:9px 13px; line-height:1;
+  background:linear-gradient(180deg,#1c2129,#171c23); border-bottom:1px solid var(--line-soft);
+}
+.dots{display:flex; gap:6px; flex:none}
+.dots i{width:10px; height:10px; border-radius:50%; display:block}
+.dots i:nth-child(1){background:#ff5f57} .dots i:nth-child(2){background:#febc2e} .dots i:nth-child(3){background:#28c840}
+.bar .url{
+  flex:1; text-align:center; font-family:ui-monospace,Menlo,monospace;
+  font-size:11.5px; color:var(--dim); background:#0f141a;
+  border:1px solid var(--line-soft); border-radius:6px; padding:4px 10px;
+  overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:320px; margin:0 auto;
+}
+.bar .live{
+  flex:none; font-size:11px; color:#3fb950; display:inline-flex; align-items:center; gap:5px;
+  font-weight:600; letter-spacing:.02em;
+}
+.bar .live::before{
+  content:""; width:6px; height:6px; border-radius:50%; background:#3fb950;
+  box-shadow:0 0 0 0 rgba(63,185,80,.7); animation:pulse 2s infinite;
+}
+@keyframes pulse{
+  70%{box-shadow:0 0 0 7px rgba(63,185,80,0)}
+  100%{box-shadow:0 0 0 0 rgba(63,185,80,0)}
+}
+.frame video, .frame img{width:100%; height:auto; display:block}
+figcaption{margin-top:14px; font-size:13px; color:var(--dim); text-align:center; line-height:1.55}
+
+section{padding:88px 0; border-top:1px solid var(--line-soft); position:relative}
+section:first-of-type{border-top:none}
+.eyebrow{
+  display:inline-flex; align-items:center; gap:9px;
+  font-size:12px; letter-spacing:.09em; text-transform:uppercase;
+  color:var(--accent); font-weight:650; margin:0 0 14px;
+}
+.eyebrow::before{content:""; width:22px; height:1px; background:linear-gradient(90deg,transparent,var(--accent))}
+.center .eyebrow::before{display:none}
+h2{
+  margin:0 0 16px; font-size:clamp(25px,3.6vw,36px);
+  letter-spacing:-.025em; line-height:1.16; font-weight:680; max-width:24ch;
+}
+.body{color:var(--muted); max-width:62ch; margin:0; font-size:16.5px}
+.body + .frame{margin-top:36px}
+.body strong{color:var(--fg); font-weight:600}
+.center{text-align:center}
+.center h2, .center .body{margin-left:auto; margin-right:auto}
+
+.grid{display:grid; grid-template-columns:repeat(6,1fr); gap:12px; margin-top:40px; text-align:left}
+.card{
+  background:linear-gradient(180deg,rgba(28,33,41,.7),rgba(22,27,34,.7));
+  border:1px solid var(--line-soft); border-radius:var(--radius); padding:20px 22px;
+  grid-column:span 3; position:relative; overflow:hidden;
+  transition:border-color .3s, transform .3s var(--ease);
+}
+.card:hover{border-color:#3d444d; transform:translateY(-2px)}
+.card h3{margin:0 0 7px; font-size:15px; font-weight:640; letter-spacing:-.01em}
+.card h3 code{font-size:13px; background:rgba(110,118,129,.18); padding:.12em .4em; border-radius:5px}
+.card p{margin:0; font-size:13.5px; color:var(--muted); line-height:1.6}
+@media (max-width:820px){ .grid{grid-template-columns:1fr} .card{grid-column:span 1} }
+
+.cmptable{margin-top:40px; overflow-x:auto; border:1px solid var(--line-soft); border-radius:var(--radius)}
+.cmptable table{border-collapse:collapse; width:100%; min-width:640px; font-size:14px; text-align:left}
+.cmptable th, .cmptable td{padding:12px 16px; border-top:1px solid var(--line-soft); color:var(--muted); vertical-align:top}
+.cmptable thead th{border-top:none; color:var(--fg); font-weight:640; background:rgba(28,33,41,.7); font-size:13.5px}
+.cmptable td:first-child, .cmptable th:first-child{color:var(--fg); font-weight:600; font-size:13.5px}
+.cmptable td b{color:#3fb950; font-weight:600}
+.cmptable td i{color:var(--dim); font-style:normal}
+
+.steps{list-style:none; margin:36px 0 0; padding:0; counter-reset:step; display:grid; gap:14px; max-width:680px}
+.steps li{
+  position:relative; padding:16px 18px 16px 58px;
+  background:linear-gradient(180deg,rgba(28,33,41,.7),rgba(22,27,34,.7));
+  border:1px solid var(--line-soft); border-radius:var(--radius);
+  color:var(--muted); font-size:15px; line-height:1.6;
+}
+.steps li::before{
+  counter-increment:step; content:counter(step);
+  position:absolute; left:18px; top:17px; width:26px; height:26px; border-radius:50%;
+  display:grid; place-items:center; font-size:12px; font-weight:650;
+  color:#fff; background:var(--accent-deep); border:1px solid var(--accent);
+}
+.steps b{color:var(--fg); font-weight:620}
+.steps code{background:rgba(110,118,129,.2); padding:.15em .4em; border-radius:5px; font-size:13px}
+
+.faq{max-width:760px; margin:36px auto 0; text-align:left}
+.faq details{
+  border:1px solid var(--line-soft); border-radius:var(--radius);
+  background:linear-gradient(180deg,rgba(28,33,41,.55),rgba(22,27,34,.55));
+  margin-bottom:10px; padding:0 20px;
+}
+.faq summary{
+  cursor:pointer; padding:16px 0; font-weight:620; font-size:15.5px; color:var(--fg);
+  list-style:none; display:flex; justify-content:space-between; align-items:center; gap:12px;
+}
+.faq summary::-webkit-details-marker{display:none}
+.faq summary::after{content:"+"; color:var(--dim); font-size:19px; flex:none; transition:transform .2s}
+.faq details[open] summary::after{transform:rotate(45deg)}
+.faq details p{margin:0 0 16px; color:var(--muted); font-size:14.5px; line-height:1.65}
+
+footer{border-top:1px solid var(--line-soft); padding:44px 0 60px; color:var(--dim); font-size:14px}
+footer .wrap{display:flex; flex-wrap:wrap; gap:14px 28px; align-items:center; justify-content:space-between}
+footer a{color:var(--muted)}
+.footlinks{display:flex; flex-wrap:wrap; gap:20px}
+
+@media (max-width:640px){
+  .wrap{padding-left:20px; padding-right:20px}
+  header{padding:38px 0 4px}
+  section{padding:56px 0}
+  h1{margin-bottom:16px}
+  h2{max-width:none}
+  .lede{font-size:16.5px}
+  .cta{margin-top:26px}
+  .body{font-size:16px}
+  .body + .frame{margin-top:24px}
+  figcaption{margin-top:11px}
+  footer{padding:32px 0 44px}
+  footer .wrap{gap:12px 20px}
+  .footlinks{gap:16px}
+}
+@media (prefers-reduced-motion:reduce){
+  html{scroll-behavior:auto}
+  *{animation:none !important; transition:none !important}
+}
+</style>
+</head>
+<body>
+
+<nav>
+  <div class="wrap">
+    <a class="brand" href="/">
+      <img src="/assets/icon.png" alt="" width="26" height="26">
+      <span>reminal</span>
+    </a>
+    <div class="navlinks">
+      <a href="/#security" class="hide-sm">Security</a>
+      <a href="https://github.com/harshalgajjar/Reminal">GitHub</a>
+    </div>
+  </div>
+</nav>
+
+<header>
+  <div class="sky" aria-hidden="true"><i></i><i></i></div>
+  <div class="mesh" aria-hidden="true"></div>
+
+  <div class="wrap">
+    <p class="eyebrow" style="justify-content:center; display:flex">For AI coding agents</p>
+    <h1>Your agents can run for hours. <span class="em">Give them a home.</span></h1>
+    <p class="lede">
+      Claude Code can chew on a refactor for an hour. Codex can work a queue overnight. Run them
+      that way and they stop being chats — they become <strong>resident processes</strong>, and a
+      resident process needs three things: a machine that never sleeps, a view you can glance at,
+      and a hand that can reach in when it stalls.
+      <strong>reminal is that home</strong> — every agent, terminal and window, live in any browser,
+      with the lid shut.
+    </p>
+
+    <div class="cta">
+      <div class="cmd">
+        <span class="sigil" aria-hidden="true">$</span>
+        <pre id="install"><code>curl -fsSL https://reminal.app/install.sh | sh</code></pre>
+        <button class="copy" id="copy" type="button">Copy</button>
+      </div>
+      <p class="sub-cta">Then run <code>reminal</code> and scan the QR. Windows: <code>irm https://reminal.app/install.ps1 | iex</code></p>
+    </div>
+
+    <div class="chips">
+      <span class="chip"><b>Any CLI agent</b> — or none</span>
+      <span class="chip"><b>No account</b> — the browser is the client</span>
+      <span class="chip"><b>End-to-end encrypted</b></span>
+      <span class="chip"><b>No open ports</b></span>
+      <span class="chip">Open source, AGPL-3.0</span>
+    </div>
+  </div>
+</header>
+
+<main>
+
+<section class="wrap" id="lid">
+  <p class="eyebrow">The part no remote solves</p>
+  <h2>Your agent dies when the lid closes.</h2>
+  <p class="body">
+    Both first-party remotes are clear about where the work happens: on your machine. Which means the
+    machine has to stay awake — and macOS sleeps a MacBook the moment the lid closes, unless a monitor
+    and keyboard are plugged in. The refactor stops mid-file, and your phone is a window into a dead session.
+    The usual fix is a hardware dummy HDMI plug.
+  </p>
+  <p class="body" style="margin-top:14px">
+    <strong>reminal fixes it in software.</strong> Flip on closed-lid mode and leave: it disables clamshell
+    sleep and spins up a virtual display the moment the Mac goes headless, so the agent keeps working and
+    every window keeps streaming. Toggle it off and everything is undone. Keep <code>/remote-control</code>
+    if you like it — reminal is what keeps the machine alive underneath it.
+  </p>
+  <figure class="frame">
+    <div class="bar"><span class="dots"><i></i><i></i><i></i></span><span class="url">reminal.app/?s=7f3a2c9e</span><span class="live">live</span></div>
+    <video src="/assets/lid.mp4" poster="/assets/lid.jpg" muted loop playsinline autoplay preload="metadata"
+           aria-label="A MacBook's lid folds shut — and its windows keep streaming, live and controllable, into a browser"></video>
+  </figure>
+  <figcaption>The lid shuts with nothing plugged in — and the windows keep streaming, live and controllable.</figcaption>
+</section>
+
+<section class="wrap" id="any-agent">
+  <p class="eyebrow">Agent-agnostic</p>
+  <h2>One view of every agent you run.</h2>
+  <p class="body">
+    Vendor remotes stop at their own agent. reminal streams the terminal and the windows themselves,
+    so it doesn't care what's running in them.
+  </p>
+  <div class="grid">
+    <div class="card">
+      <h3>Claude Code</h3>
+      <p><code>/remote-control</code> shows you the conversation. reminal adds the other five windows:
+      the dev server it just broke, the diff in your editor, the test suite tailing in the next pane,
+      the browser it's poking at. Watch the agent <em>and</em> the blast radius.</p>
+    </div>
+    <div class="card">
+      <h3>Codex CLI</h3>
+      <p>Codex pairing lives in the ChatGPT app, signed in. reminal needs no app and no account —
+      run <code>reminal</code>, scan the QR, and any browser on any device is a full terminal
+      on that machine.</p>
+    </div>
+    <div class="card">
+      <h3>pi · aider · opencode · anything</h3>
+      <p>No first-party remote exists for these at all. If it runs in a terminal, reminal streams it —
+      true colour, touch selection, find-in-scrollback, reconnect from another city with the shell
+      exactly where you left it.</p>
+    </div>
+    <div class="card">
+      <h3>The whole fleet</h3>
+      <p>Claude Code on the MacBook, Codex on the Linux box, a build on the Mini — one live view of
+      every machine, every session, what's running and who's watching. Attach, spawn or kill from
+      the CLI or the browser.</p>
+    </div>
+  </div>
+  <p class="body" style="margin-top:28px">
+    <strong>An agent can use the same door.</strong> Hand a session ID and PIN to an agent and it connects
+    like any other viewer — triaging an incident on one box while it patches another, with you watching
+    both in the same browser.
+  </p>
+</section>
+
+<section class="wrap center" id="compare">
+  <p class="eyebrow">Side by side</p>
+  <h2>What each remote actually covers.</h2>
+  <p class="body">
+    This is a fair fight on purpose: the first-party remotes are good at what they do.
+    They just cover one agent's conversation — not the machine.
+  </p>
+  <div class="cmptable">
+    <table>
+      <thead>
+        <tr><th></th><th>reminal</th><th>Claude Code <code>/remote-control</code></th><th>Codex remote</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>Reaches</td><td><b>Any terminal, any window, any agent</b></td><td><i>One Claude Code session</i></td><td><i>Codex sessions</i></td></tr>
+        <tr><td>Client</td><td><b>Any browser</b> — nothing to install, no account</td><td><i>Browser, signed in</i></td><td><i>ChatGPT mobile app, signed in</i></td></tr>
+        <tr><td>Lid closed / headless</td><td><b>Keeps the Mac awake</b> — software closed-lid mode, virtual display</td><td><i>Machine must stay awake</i></td><td><i>Machine must stay awake</i></td></tr>
+        <tr><td>GUI windows</td><td><b>Live at 60 fps, with input</b> — click, type, scroll, drag</td><td><i>No</i></td><td><i>Screenshots in the thread</i></td></tr>
+        <tr><td>Transport</td><td><b>End-to-end encrypted</b> — the relay routes ciphertext it can't read</td><td><i>Via Anthropic's relay</i></td><td><i>Via OpenAI's relay</i></td></tr>
+        <tr><td>Source &amp; relay</td><td><b>AGPL-3.0, self-hostable relay</b></td><td><i>Closed</i></td><td><i>Closed</i></td></tr>
+      </tbody>
+    </table>
+  </div>
+  <figcaption style="margin-top:14px">They compose: many people run <code>/remote-control</code> for the conversation and reminal for the machine.</figcaption>
+</section>
+
+<section class="wrap" id="start">
+  <p class="eyebrow">Ninety seconds</p>
+  <h2>Start a session, close the lid, walk away.</h2>
+  <ol class="steps">
+    <li><b>Install.</b> <code>curl -fsSL https://reminal.app/install.sh | sh</code> — macOS, Linux or Windows.</li>
+    <li><b>Run <code>reminal</code></b> in the terminal where your agent lives (or wrap it: <code>reminal claude</code>). It prints a session ID, a PIN and a QR code.</li>
+    <li><b>Scan the QR with your phone.</b> That browser tab is now a real terminal on your machine — and the Apps menu streams any window next to it. Close the lid; nothing stops.</li>
+  </ol>
+  <figure class="frame" style="margin-top:36px">
+    <div class="bar"><span class="dots"><i></i><i></i><i></i></span><span class="url">zsh — 2 viewers attached</span><span class="live">live</span></div>
+    <video src="/assets/setup.mp4" poster="/assets/setup.jpg" muted loop playsinline autoplay preload="metadata"
+           aria-label="A terminal runs reminal and prints a QR code; a phone scans it and joins the same session"></video>
+  </figure>
+  <figcaption>Ephemeral credentials: the ID and PIN exist only while reminal runs. Ctrl+C and they're gone.</figcaption>
+</section>
+
+<section class="wrap center" id="faq">
+  <p class="eyebrow">Questions</p>
+  <h2>The ones that come up.</h2>
+  <div class="faq">
+    <details>
+      <summary>How do I keep Claude Code or Codex running when I close my MacBook's lid?</summary>
+      <p>macOS sleeps a MacBook when the lid closes unless a monitor and keyboard are attached — which kills
+      any agent session running on it. reminal's closed-lid mode disables clamshell sleep and spins up a
+      virtual display the moment the Mac goes headless, so the agent keeps working and every window keeps
+      streaming into your browser. No dummy HDMI plug. Toggle it off and everything is undone.</p>
+    </details>
+    <details>
+      <summary>Does Claude Code's <code>/remote-control</code> work with Codex or pi?</summary>
+      <p>No. Each vendor's remote steers only its own agent. reminal streams the terminal and the windows
+      themselves, so anything that runs in a terminal — pi, aider, opencode, a plain build script —
+      is reachable from any browser.</p>
+    </details>
+    <details>
+      <summary>Can I watch several agents at once?</summary>
+      <p>Yes. <code>reminal machines</code> is one live view of every machine you own — every session,
+      what's running, who's watching. Attach to whichever needs input, from the CLI or the browser.</p>
+    </details>
+    <details>
+      <summary>Does my session pass through a vendor's cloud?</summary>
+      <p>Sessions are end-to-end encrypted with AES-256-GCM under a fresh key per run; the relay routes
+      ciphertext it cannot read and can't brute-force the PIN offline. There is no account, and the relay
+      is open source — <a href="https://github.com/harshalgajjar/Reminal">self-host it on Cloudflare</a>
+      in a few minutes. The <a href="/privacy">privacy policy</a> shows how to verify this yourself.</p>
+    </details>
+    <details>
+      <summary>What does it cost?</summary>
+      <p>The CLI is free and open source under AGPL-3.0, including the relay.
+      A hosted tier — managed relay, permanent machine names — <a href="/#pro">is coming</a>.</p>
+    </details>
+  </div>
+  <p class="sub-cta" style="margin-top:30px">
+    <a href="https://github.com/harshalgajjar/Reminal/blob/main/docs/security/architecture.md">Architecture</a> ·
+    <a href="https://github.com/harshalgajjar/Reminal/blob/main/docs/security/threat-model.md">Threat model</a> ·
+    <a href="/">Everything else reminal does →</a>
+  </p>
+</section>
+
+</main>
+
+<footer>
+  <div class="wrap">
+    <span>© <span id="year">2026</span> Harshal Gajjar · AGPL-3.0</span>
+    <span class="footlinks">
+      <a href="https://github.com/harshalgajjar/Reminal">GitHub</a>
+      <a href="https://github.com/harshalgajjar/Reminal/blob/main/LICENSING.md">Licensing</a>
+      <a href="/privacy">Privacy</a>
+      <a href="/terms">Terms</a>
+      <a href="mailto:mail@harshalgajjar.com">Contact</a>
+    </span>
+  </div>
+</footer>
+
+<script>
+document.getElementById("year").textContent = new Date().getFullYear();
+const copyBtn = document.getElementById("copy");
+copyBtn.addEventListener("click", async () => {
+  try {
+    await navigator.clipboard.writeText(document.querySelector("#install code").textContent);
+    copyBtn.textContent = "Copied"; copyBtn.classList.add("done");
+    setTimeout(() => { copyBtn.textContent = "Copy"; copyBtn.classList.remove("done"); }, 1600);
+  } catch {}
+});
+</script>
+
+</body>
+</html>

@@ -1,0 +1,42 @@
+# reminal.app
+#
+# Until this file existed, Cloudflare served a managed robots.txt in its place
+# — which carried no Sitemap: line and disallowed every AI crawler by default.
+#
+# Cloudflare PREPENDS that managed block to this file rather than replacing it,
+# so the served result contains two groups for GPTBot, ClaudeBot and
+# Google-Extended: its Disallow first, ours second. RFC 9309 says a parser
+# merges same-named groups and, for two rules of equal specificity, the least
+# restrictive wins — so Allow should take it. "Should" is doing real work in
+# that sentence, and the only way to make the intent unambiguous is to turn the
+# managed robots.txt off in the dashboard (AI Crawl Control → robots.txt).
+# Until that's done, treat the AI-crawler lines below as a statement of intent,
+# not a guarantee. The Sitemap: line is unaffected — nothing above conflicts
+# with it.
+
+User-agent: *
+Allow: /
+
+# Answer engines are a real discovery channel for a developer tool, and the
+# brand term "reminal" collides with a Steam game, a B12 supplement and a song
+# — being quotable is worth more to us than being unquoted. Nothing on this
+# site is private; the client and relay ship no telemetry either way.
+User-agent: GPTBot
+Allow: /
+
+User-agent: OAI-SearchBot
+Allow: /
+
+User-agent: ClaudeBot
+Allow: /
+
+User-agent: Claude-SearchBot
+Allow: /
+
+User-agent: PerplexityBot
+Allow: /
+
+User-agent: Google-Extended
+Allow: /
+
+Sitemap: https://reminal.app/sitemap.xml

@@ -35,6 +35,20 @@ const REDIRECTS = new Map([
   ["/releases", `${REPO}/releases`],
 ]);
 
+// Every page that lives at a directory index. Each answers 200 only with its
+// trailing slash, and ASSETS bounces the bare form there with a 307 — a
+// *temporary* redirect, which tells a crawler the no-slash URL is the real one
+// and to keep asking. Two URLs then compete for one page and neither
+// accumulates the other's signal. Listing the routes explicitly (rather than
+// slash-anything-without-a-dot) keeps a typo a clean 404 instead of a redirect
+// into one.
+const PAGES = new Set([
+  "/agents",
+  "/privacy",
+  "/terms",
+  "/guides/macbook-lid-closed",
+]);
+
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
@@ -66,6 +80,14 @@ export default {
       // 302, not 301: the install scripts move around, and a permanent
       // redirect cached in someone's shell is a bug you can't recall.
       return Response.redirect(target, 302);
+    }
+
+    // 308, not the 307 ASSETS would send: these page URLs are settled, and a
+    // permanent redirect is what folds the bare form's signal into the slashed
+    // one instead of leaving the pair split.
+    if (PAGES.has(path) && url.pathname !== `${path}/`) {
+      url.pathname = `${path}/`;
+      return Response.redirect(url.toString(), 308);
     }
 
     return env.ASSETS.fetch(request);

@@ -1,0 +1,233 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>How to keep a MacBook awake with the lid closed — every method compared (2026)</title>
+<meta name="description" content="caffeinate, pmset disablesleep, Amphetamine, dummy HDMI plugs and software virtual displays — what each one actually solves when you close a MacBook's lid, and the half of the problem most guides miss.">
+<link rel="canonical" href="https://reminal.app/guides/macbook-lid-closed/">
+<link rel="icon" href="/assets/icon.png" type="image/png">
+<meta property="og:site_name" content="reminal">
+<meta property="og:type" content="article">
+<meta property="og:url" content="https://reminal.app/guides/macbook-lid-closed/">
+<meta property="og:title" content="Keep a MacBook awake with the lid closed — every method compared">
+<meta property="og:description" content="Most guides stop at 'prevent sleep'. An awake Mac with no display still can't render its GUI. Here's the full picture: caffeinate, pmset, Amphetamine, dummy plugs, and doing it in software.">
+<meta property="og:image" content="https://reminal.app/poster.png">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:site" content="@harshalgajjar">
+<meta name="twitter:image" content="https://reminal.app/poster.png">
+<meta name="theme-color" content="#0d1117">
+
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@graph": [
+    {
+      "@type": "TechArticle",
+      "@id": "https://reminal.app/guides/macbook-lid-closed/#article",
+      "headline": "How to keep a MacBook awake with the lid closed — every method compared",
+      "url": "https://reminal.app/guides/macbook-lid-closed/",
+      "isPartOf": {
+        "@id": "https://reminal.app/#website"
+      },
+      "about": {
+        "@id": "https://reminal.app/#software"
+      },
+      "author": {
+        "@id": "https://reminal.app/#author"
+      },
+      "publisher": {
+        "@id": "https://reminal.app/#org"
+      },
+      "image": "https://reminal.app/poster.png",
+      "inLanguage": "en",
+      "datePublished": "2026-08-17",
+      "dateModified": "2026-08-27"
+    },
+    {
+      "@type": "FAQPage",
+      "mainEntity": [
+        {
+          "@type": "Question",
+          "name": "How do I stop my MacBook sleeping when I close the lid?",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "macOS only allows a closed lid without sleep when power, an external display and a keyboard/mouse are attached (clamshell mode). Without a display you can force it with `sudo pmset -a disablesleep 1` (undo with 0), with a keep-awake utility, with a dummy HDMI plug that fakes a monitor, or with software like reminal that disables clamshell sleep and creates a virtual display so GUI apps keep rendering."
+          }
+        },
+        {
+          "@type": "Question",
+          "name": "Why do screen capture and screen sharing show a black screen when the lid is closed?",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "With the lid shut and no monitor attached, macOS tears down the display coordinate space entirely. Even if the machine is awake, GUI apps have no screen to draw on, so capture APIs return black and remote-desktop tools show nothing. Fixing sleep is only half the problem; the machine also needs a display — real, dummy-plug, or virtual."
+          }
+        },
+        {
+          "@type": "Question",
+          "name": "Does caffeinate stop a MacBook sleeping when the lid closes?",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "No. caffeinate prevents idle sleep while a command runs, but closing the lid still forces sleep unless clamshell conditions are met. For lid-closed operation you need pmset disablesleep, a dummy plug, or a tool that handles clamshell sleep directly."
+          }
+        },
+        {
+          "@type": "Question",
+          "name": "Is it safe to run a fanless MacBook Air with the lid closed?",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "Mostly, with a caveat: fanless Airs shed heat through the keyboard deck, and a closed lid reduces that. Light and bursty workloads are fine; sustained heavy loads will thermal-throttle sooner than with the lid open. MacBook Pros with fans are less affected."
+          }
+        }
+      ],
+      "@id": "https://reminal.app/guides/macbook-lid-closed/#faq",
+      "isPartOf": {
+        "@id": "https://reminal.app/#website"
+      }
+    }
+  ]
+}
+</script>
+
+<style>
+:root{--bg:#0d1117;--surface:#161b22;--line:#30363d;--soft:#21262d;
+--fg:#e6edf3;--muted:#8b949e;--dim:#6e7681;--accent:#58a6ff}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);
+font:17px/1.75 -apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;-webkit-font-smoothing:antialiased}
+.wrap{max-width:760px;margin:0 auto;padding:26px 22px 90px}
+nav{border-bottom:1px solid var(--soft);margin-bottom:44px}
+nav .inner{max-width:760px;margin:0 auto;padding:0 22px;height:60px;display:flex;align-items:center;justify-content:space-between}
+nav a{display:flex;align-items:center;gap:10px;color:var(--fg);text-decoration:none;font-weight:650}
+nav img{width:26px;height:26px;border-radius:7px}
+nav .r a{font-weight:500;color:var(--muted);font-size:14px}
+h1{font-size:32px;letter-spacing:-.03em;line-height:1.2;margin:0 0 10px}
+.meta{color:var(--dim);font-size:14px;margin:0 0 34px}
+h2{font-size:22px;letter-spacing:-.02em;margin:42px 0 14px}
+h3{font-size:17px;margin:28px 0 8px}
+p{margin:0 0 16px;color:#c4cdd9}
+strong{color:var(--fg);font-weight:620}
+a{color:var(--accent);text-decoration:none}
+a:hover{text-decoration:underline}
+ul{margin:0 0 16px;padding-left:24px;color:#c4cdd9}
+li{margin-bottom:7px}
+code,pre{font-family:ui-monospace,SFMono-Regular,"SF Mono",Menlo,monospace}
+code{background:rgba(110,118,129,.2);padding:.15em .4em;border-radius:5px;font-size:.85em}
+pre{background:#0b0f14;border:1px solid var(--line);border-radius:10px;padding:14px 16px;overflow-x:auto;
+font-size:13.5px;line-height:1.6;color:#c9d1d9;margin:0 0 16px}
+pre code{background:none;padding:0;font-size:inherit}
+.lede{font-size:18.5px;color:var(--fg);border-left:2px solid var(--accent);padding-left:18px;margin:0 0 30px;line-height:1.7}
+.note{background:linear-gradient(180deg,rgba(28,33,41,.7),rgba(22,27,34,.7));border:1px solid var(--soft);
+border-radius:10px;padding:14px 17px;font-size:15px;color:var(--muted);margin:0 0 16px}
+.tablewrap{overflow-x:auto;border:1px solid var(--soft);border-radius:10px;margin:0 0 16px}
+table{border-collapse:collapse;width:100%;min-width:640px;font-size:14px}
+th,td{padding:10px 13px;border-top:1px solid var(--soft);text-align:left;color:var(--muted);vertical-align:top}
+thead th{border-top:none;color:var(--fg);background:rgba(28,33,41,.7);font-size:13px}
+td:first-child{color:var(--fg);font-weight:600;font-size:13.5px;white-space:nowrap}
+.y{color:#3fb950;font-weight:600}
+.n{color:#f85149}
+.p{color:#e0b355}
+.cta{margin:44px 0 0;padding:22px;border:1px solid var(--line);border-radius:12px;
+background:radial-gradient(ellipse 80% 120% at 50% 0%,rgba(31,111,235,.12),transparent 70%),var(--surface)}
+.cta p{margin:0 0 12px}
+.cta pre{margin:0}
+footer{border-top:1px solid var(--soft);margin-top:52px;padding-top:22px;font-size:14px;color:var(--dim)}
+footer a{color:var(--muted)}
+</style>
+</head>
+<body>
+<nav><div class="inner">
+  <a href="/"><img src="/assets/icon.png" alt="">reminal</a>
+  <span class="r"><a href="/agents/">for AI agents</a></span>
+</div></nav>
+<div class="wrap">
+
+<h1>How to keep a MacBook awake with the lid closed — every method, honestly compared</h1>
+<p class="meta">Updated August 2026 · no affiliate links, and we make one of the tools below (disclosed)</p>
+
+<p class="lede">Close a MacBook's lid and macOS puts it to sleep unless power, an external
+display <em>and</em> a keyboard are attached. Every guide covers that part. Almost none
+cover the second half: an awake Mac with no display <strong>still can't render its GUI</strong> —
+screen capture goes black, remote desktop shows nothing, windows drift into a phantom
+layout. Here's what each fix actually solves.</p>
+
+<h2>The two problems hiding in one lid</h2>
+<p><strong>Sleep.</strong> Lid closes → machine sleeps. Builds stop, downloads pause,
+SSH drops, coding agents die mid-task.</p>
+<p><strong>The display.</strong> Beat sleep, and with no monitor attached macOS still
+tears down the display coordinate space. The machine hums along headless — but GUI
+apps have nothing to draw on. <em>Awake isn't the same as usable.</em> If you only need
+SSH or background jobs, solving sleep is enough. If you need to see or control anything
+graphical, you need both halves.</p>
+
+<h2>Method 1: <code>caffeinate</code> (built in, free)</h2>
+<pre><code>caffeinate -i long_running_command</code></pre>
+<p>Prevents <em>idle</em> sleep while a command runs. <strong>Does not survive a lid
+close</strong> — clamshell sleep overrides it. Good for "don't sleep during this build
+with the lid open," and that's all.</p>
+
+<h2>Method 2: <code>pmset disablesleep</code> (built in, free, root)</h2>
+<pre><code>sudo pmset -a disablesleep 1   # lid-close no longer sleeps
+sudo pmset -a disablesleep 0   # put things back</code></pre>
+<p>The real override: the Mac stays awake with the lid shut, no hardware needed.
+Two catches: it needs root and is easy to forget to undo (battery drain in a bag),
+and it solves <strong>only the sleep half</strong> — headless GUI stays unreachable.</p>
+
+<h2>Method 3: keep-awake utilities (Amphetamine, KeepingYouAwake)</h2>
+<p>Friendly menu-bar wrappers around the same idea — sessions, timers, triggers.
+Note that <a href="https://apps.apple.com/us/app/amphetamine/id937984704">Amphetamine</a>
+by itself deliberately does not allow closed-lid-without-display operation; its
+companion "Enhancer" adds that. Same limitation as pmset: sleep only, no display.</p>
+
+<h2>Method 4: the dummy HDMI plug (~$8, hardware)</h2>
+<p>A little adapter that impersonates a monitor at the EDID level. macOS believes a
+display is attached, so clamshell mode engages (given power + keyboard) <em>and</em>
+the GUI has a screen to render to. <strong>It genuinely solves both halves</strong> —
+which is why homelab people buy them in multi-packs. Costs: it occupies a port, it has
+to travel with the machine, and windows can land on a "screen" you can't see until you
+remote in.</p>
+
+<h2>Method 5: both halves in software (reminal — ours, disclosed)</h2>
+<p><a href="/">reminal</a>'s closed-lid mode replaces the plug: it disables clamshell
+sleep and, the moment the Mac goes headless, creates a virtual display so GUI apps
+keep rendering — then streams every window and terminal, with input, into any browser
+(your phone included). Toggle off and everything reverts. Free and open source
+(AGPL); the virtual-display code is readable in
+<a href="https://github.com/harshalgajjar/Reminal">the repo</a>
+(<code>vdisplay_darwin.go</code>) if you want to check the claims.</p>
+<p class="note">Honest caveats: the closed-lid feature is macOS-only; and the virtual
+display rides the same private CGVirtualDisplay machinery DeskPad and BetterDisplay
+use — stable for years, but an OS update could change it (failure mode is "no display
+today", never a crash).</p>
+
+<h2>Side by side</h2>
+<div class="tablewrap"><table>
+<thead><tr><th></th><th>Survives lid close</th><th>GUI keeps rendering</th><th>Reachable remotely</th><th>Needs</th></tr></thead>
+<tbody>
+<tr><td>caffeinate</td><td class="n">No</td><td class="n">No</td><td class="n">—</td><td>nothing</td></tr>
+<tr><td>pmset disablesleep</td><td class="y">Yes</td><td class="n">No</td><td class="p">SSH only</td><td>root</td></tr>
+<tr><td>Amphetamine + Enhancer</td><td class="y">Yes</td><td class="n">No</td><td class="p">SSH only</td><td>two apps</td></tr>
+<tr><td>Dummy HDMI plug</td><td class="y">Yes</td><td class="y">Yes</td><td class="p">bring your own remote tool</td><td>$8 + a port</td></tr>
+<tr><td>reminal closed-lid</td><td class="y">Yes</td><td class="y">Yes (virtual display)</td><td class="y">built in — any browser, E2E-encrypted</td><td>one install, macOS</td></tr>
+</tbody>
+</table></div>
+
+<h2>The fanless-Air caveat</h2>
+<p>MacBook Airs have no fan; they shed heat through the keyboard deck, and a closed
+lid reduces that. Bursty or light work is fine. Sustained heavy loads (long compiles,
+training runs) will thermal-throttle sooner than lid-open — consider standing the
+machine on its side, or a Pro with fans for sustained closed-lid duty.</p>
+
+<div class="cta">
+<p><strong>The software route</strong> — free, open source, one line; then close the lid
+and watch every window from your phone:</p>
+<pre><code>curl -fsSL https://reminal.app/install.sh | sh</code></pre>
+</div>
+
+<footer>
+  <a href="/">reminal.app</a> ·
+  <a href="/agents/">for AI agents</a> · <a href="https://github.com/harshalgajjar/Reminal">GitHub</a>
+</footer>
+</div>
+</body>
+</html>
