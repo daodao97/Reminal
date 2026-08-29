@@ -209,6 +209,7 @@ if [ "$OS" = "darwin" ] && [ -d "$APP_DIR/reminal.app" ]; then
     "$INSTALL_DIR/reminal" daemon --install >/dev/null 2>&1 || true
     # Stale loose helper from a previous bare install (the bundle carries its own).
     rm -f "$INSTALL_DIR/reminal-capture" 2>/dev/null || true
+    rm -f "$INSTALL_DIR/reminal-overlay" 2>/dev/null || true
     echo
     echo "To mirror + control windows, grant reminal its permissions once:"
     echo "  reminal permissions"

@@ -186,6 +186,20 @@ func main() {
 			}
 			_ = client.RequestPermission(which)
 			return
+		case "mcp":
+			// Stdio MCP server. Speaks JSON-RPC on stdout, so nothing else may
+			// print there — errors go to stderr and a non-zero exit.
+			if err := runMCP(os.Args[2:]); err != nil {
+				fmt.Fprintf(os.Stderr, "error: %v\n", err)
+				os.Exit(1)
+			}
+			return
+		case "integrate":
+			if err := runIntegrate(os.Args[2:]); err != nil {
+				fmt.Fprintf(os.Stderr, "error: %v\n", err)
+				os.Exit(1)
+			}
+			return
 		case "settings":
 			if err := runSettings(os.Args[2:]); err != nil {
 				fmt.Fprintf(os.Stderr, "error: %v\n", err)

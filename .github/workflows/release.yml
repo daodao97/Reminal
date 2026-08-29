@@ -134,6 +134,10 @@ jobs:
           # falls back to screencapture. Ad-hoc signed so it runs unnotarized.
           swiftc -O -target ${{ matrix.swift_target }} -o reminal-capture native/reminal-capture/main.swift
           codesign --force --sign - reminal-capture || true
+          # Window-annotation helper behind `reminal mcp`. Same deployment
+          # target; without it the MCP tools report "helper not found".
+          swiftc -O -target ${{ matrix.swift_target }} -o reminal-overlay native/reminal-overlay/main.swift
+          codesign --force --sign - reminal-overlay || true
 
       - name: Assemble & sign reminal.app (macOS)
         if: matrix.goos == 'darwin'
@@ -228,6 +232,7 @@ jobs:
           else
             FILES="reminal"
             [ -f reminal-capture ] && FILES="$FILES reminal-capture"
+            [ -f reminal-overlay ] && FILES="$FILES reminal-overlay"
             tar czf "${ARCHIVE}" $FILES
           fi
           echo "ARCHIVE=${ARCHIVE}" >> "$GITHUB_ENV"

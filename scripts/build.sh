@@ -30,6 +30,12 @@ if [[ "$(uname)" == "Darwin" ]]; then
     swiftc -O -target "$(uname -m)-apple-macos12.3" -o "${HELPER}" native/reminal-capture/main.swift
     codesign --force --sign - "${HELPER}" >/dev/null 2>&1 || true
     echo "Built ${HELPER}"
+    # Window-annotation helper: `reminal mcp` shells out to it, so it has to sit
+    # next to the CLI or the MCP tools report "helper not found".
+    OVERLAY="$(dirname "${OUTPUT}")/reminal-overlay"
+    swiftc -O -target "$(uname -m)-apple-macos12.3" -o "${OVERLAY}" native/reminal-overlay/main.swift
+    codesign --force --sign - "${OVERLAY}" >/dev/null 2>&1 || true
+    echo "Built ${OVERLAY}"
     # Assemble reminal.app so local builds match the release layout (one signed
     # bundle: CLI + helper + icon). Ad-hoc signed here — an ad-hoc bundle can't
     # persist a Screen Recording grant (releases use the stable cert), but it's

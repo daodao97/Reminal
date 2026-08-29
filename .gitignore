@@ -18,3 +18,6 @@
 
 # Playwright MCP scratch output (screenshots, page snapshots)
 .playwright-mcp/
+
+# Compiled native helpers (built by scripts/build.sh)
+/native/reminal-overlay/reminal-overlay

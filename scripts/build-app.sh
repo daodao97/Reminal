@@ -14,7 +14,8 @@
 # Env:
 #   VERSION    version string for Info.plist   (default 0.0.0)
 #   KEYCHAIN   keychain holding the signing identity (optional)
-# <bin-dir> must contain `reminal` and `reminal-capture`.
+# <bin-dir> must contain `reminal` and `reminal-capture`; `reminal-overlay` is
+# included when present.
 # [identity] omitted or "-" => ad-hoc signature (dev only; can't hold a TCC grant).
 set -euo pipefail
 
@@ -32,6 +33,7 @@ rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BINDIR/reminal"           "$APP/Contents/MacOS/reminal"
 cp "$BINDIR/reminal-capture"   "$APP/Contents/MacOS/reminal-capture"
+[ -f "$BINDIR/reminal-overlay" ] && cp "$BINDIR/reminal-overlay" "$APP/Contents/MacOS/reminal-overlay"
 cp "$root/assets/reminal.icns" "$APP/Contents/Resources/reminal.icns"
 
 /usr/libexec/PlistBuddy \
@@ -52,6 +54,7 @@ kc=(); [ -n "$KEYCHAIN" ] && kc=(--keychain "$KEYCHAIN")
 # Sign the nested helper (its own identifier), then seal the bundle — the main
 # `reminal` inherits CFBundleIdentifier sh.reminal from Info.plist.
 codesign --force --timestamp=none ${kc[@]+"${kc[@]}"} --identifier sh.reminal.capture --sign "$IDENTITY" "$APP/Contents/MacOS/reminal-capture"
+[ -f "$APP/Contents/MacOS/reminal-overlay" ] && codesign --force --timestamp=none ${kc[@]+"${kc[@]}"} --identifier sh.reminal.overlay --sign "$IDENTITY" "$APP/Contents/MacOS/reminal-overlay"
 codesign --force --timestamp=none ${kc[@]+"${kc[@]}"} --sign "$IDENTITY" "$APP"
 
 codesign --verify --deep --strict "$APP"

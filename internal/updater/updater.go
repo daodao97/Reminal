@@ -390,6 +390,8 @@ func apply(url string) error {
 			installedBin = true
 		case "reminal-capture":
 			_ = installFileAtomic(filepath.Join(dir, "reminal-capture"), tr, dir)
+		case "reminal-overlay":
+			_ = installFileAtomic(filepath.Join(dir, "reminal-overlay"), tr, dir)
 		}
 	}
 	if !installedBin {
@@ -596,6 +598,7 @@ func migrateBareToBundle(tr *tar.Reader, bareBin string) error {
 	// The bundle carries its own ScreenCaptureKit helper; remove the loose sidecar
 	// from the old bare install so it can't shadow the bundle's copy.
 	_ = os.Remove(filepath.Join(filepath.Dir(bareBin), "reminal-capture"))
+	_ = os.Remove(filepath.Join(filepath.Dir(bareBin), "reminal-overlay"))
 	// Best-effort: register icon/identity with LaunchServices, strip quarantine.
 	lsregister(appRoot)
 	_ = exec.Command("/usr/bin/xattr", "-dr", "com.apple.quarantine", appRoot).Run()
