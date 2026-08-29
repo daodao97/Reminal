@@ -152,6 +152,19 @@ const (
 	// Data ("what windows are open?"). Agent→viewer: the reply, Data =
 	// encrypted JSON {"windows":[{"id","app","title","x","y","w","h"}, ...]}.
 	TypeWindowList MessageType = "window_list"
+
+	// TypeWindowNotes carries the agent→viewer note list for annotated windows —
+	// the same notes the desktop badge shows. Data = encrypted JSON
+	// {"notes":{"<windowID>":[{"id","status","title","body","author","ts"},…]}}.
+	// Machine-scoped on purpose: a note belongs to a window, not to whichever
+	// session's agent happened to publish it, so every viewer on this machine
+	// sees the same thing the badge does.
+	TypeWindowNotes MessageType = "window_notes"
+
+	// TypeWindowNoteAct is viewer→agent: act on one note the same ways the
+	// desktop badge offers. Data = encrypted JSON
+	// {"window":"<id>","id":"<noteID>","action":"handback|dismiss|dismiss_all"}.
+	TypeWindowNoteAct MessageType = "window_note_act"
 	// TypeWindowCtl is viewer→agent. Data = encrypted JSON
 	// {"action":"start"|"stop","id":"<window id>"}. "start" begins streaming
 	// periodic JPEG frames of that window; "stop" ends the current stream.

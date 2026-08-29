@@ -27,6 +27,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -81,10 +82,68 @@ type mcpServer struct {
 	helper   *overlayHelper
 	attached map[uint32]bool  // windows currently carrying a badge
 	events   []map[string]any // replies from the user, oldest first
+	// notes mirrors what each window is showing. Duplicated from the helper
+	// because web viewers need the same list and they reach it through the
+	// reminal agent, which is a different process tree entirely.
+	notes map[uint32][]mcpNote
 }
 
 func newMCPServer() *mcpServer {
-	return &mcpServer{attached: map[uint32]bool{}}
+	return &mcpServer{attached: map[uint32]bool{}, notes: map[uint32][]mcpNote{}}
+}
+
+// mcpNote mirrors one badge entry. Kept here as well as in the helper because
+// web viewers need the same list, and they reach it through the reminal agent,
+// not through this process.
+type mcpNote struct {
+	ID     string `json:"id"`
+	Status string `json:"status"`
+	Title  string `json:"title"`
+	Body   string `json:"body,omitempty"`
+	Author string `json:"author,omitempty"`
+	TS     int64  `json:"ts,omitempty"`
+}
+
+// publishNotes hands the whole current picture to every reminal agent running
+// as this user, which mirrors it to their viewers.
+//
+// Broadcast rather than addressed: notes are machine-scoped (a note belongs to a
+// window, and the window belongs to the machine), and this process has no idea
+// which session — if any — the user happens to be watching. Sessions come and go
+// while an agent works, so publishing to all of them is what makes a note show
+// up on the phone regardless of which tab is open.
+//
+// Best-effort throughout: a dead socket from an exited session must never fail
+// an MCP tool call. The badge on screen is the source of truth.
+func (s *mcpServer) publishNotes() {
+	s.mu.Lock()
+	payload := map[string]any{"notes": map[string][]mcpNote{}}
+	m := payload["notes"].(map[string][]mcpNote)
+	for w, list := range s.notes {
+		if len(list) > 0 {
+			m[strconv.FormatUint(uint64(w), 10)] = list
+		}
+	}
+	s.mu.Unlock()
+
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return
+	}
+	socks, _ := filepath.Glob(filepath.Join(home, ".reminal", "agent-*.sock"))
+	for _, sock := range socks {
+		conn, err := net.DialTimeout("unix", sock, 300*time.Millisecond)
+		if err != nil {
+			continue // session exited; its socket file lingers briefly
+		}
+		_ = conn.SetDeadline(time.Now().Add(time.Second))
+		_, _ = fmt.Fprintf(conn, "notes %s\n", body)
+		_ = conn.Close()
+	}
 }
 
 // overlayHelperPath mirrors how the agent finds reminal-capture: explicit
@@ -161,12 +220,18 @@ func (s *mcpServer) readReplies(r io.ReadCloser) {
 		}
 		// Window gone, list forgotten: free its slot, but the helper lives on
 		// serving the others.
+		closed := false
 		if ev["event"] == "closed" {
 			if w, ok := ev["window"].(float64); ok {
 				delete(s.attached, uint32(w))
+				delete(s.notes, uint32(w))
+				closed = true
 			}
 		}
 		s.mu.Unlock()
+		if closed {
+			s.publishNotes()
+		}
 	}
 	s.mu.Lock()
 	s.helper = nil
@@ -230,6 +295,10 @@ func (s *mcpServer) shutdown() {
 	s.helper = nil
 	s.attached = map[uint32]bool{}
 	s.mu.Unlock()
+	s.mu.Lock()
+	s.notes = map[uint32][]mcpNote{}
+	s.mu.Unlock()
+	s.publishNotes()
 	if h == nil {
 		return
 	}
@@ -372,6 +441,26 @@ func (s *mcpServer) callTool(name string, args map[string]any) (string, error) {
 		if err != nil {
 			return "", err
 		}
+		s.mu.Lock()
+		list := s.notes[wid]
+		updated := false
+		for i := range list {
+			if list[i].ID == id {
+				list[i] = mcpNote{ID: id, Status: argStr(args, "status", "info"), Title: title,
+					Body: argStr(args, "body", ""), Author: argStr(args, "author", "agent"),
+					TS: time.Now().Unix()}
+				updated = true
+				break
+			}
+		}
+		if !updated {
+			list = append(list, mcpNote{ID: id, Status: argStr(args, "status", "info"), Title: title,
+				Body: argStr(args, "body", ""), Author: argStr(args, "author", "agent"),
+				TS: time.Now().Unix()})
+		}
+		s.notes[wid] = list
+		s.mu.Unlock()
+		s.publishNotes()
 		return fmt.Sprintf("Note %s posted to window %d.", id, wid), nil
 
 	case "remove_note":
@@ -386,6 +475,16 @@ func (s *mcpServer) callTool(name string, args map[string]any) (string, error) {
 		if err := s.send(wid, map[string]any{"cmd": "remove", "id": id}); err != nil {
 			return "", err
 		}
+		s.mu.Lock()
+		kept := s.notes[wid][:0]
+		for _, n := range s.notes[wid] {
+			if n.ID != id {
+				kept = append(kept, n)
+			}
+		}
+		s.notes[wid] = kept
+		s.mu.Unlock()
+		s.publishNotes()
 		return "Removed " + id + ".", nil
 
 	case "clear_notes":
@@ -399,6 +498,10 @@ func (s *mcpServer) callTool(name string, args map[string]any) (string, error) {
 		// Also drop the panel, so the window-count limit reflects reality.
 		_ = s.send(wid, map[string]any{"cmd": "detach"})
 		s.detach(wid)
+		s.mu.Lock()
+		delete(s.notes, wid)
+		s.mu.Unlock()
+		s.publishNotes()
 		return "Cleared.", nil
 
 	case "read_replies":

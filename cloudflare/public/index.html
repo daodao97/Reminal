@@ -741,6 +741,40 @@
     }
     .machine-box.is-pending { opacity: 0.6; }
     .machine-pending { font-size: 11px; color: #d29922; font-style: italic; margin-left: 6px; white-space: nowrap; }
+    /* Window notes: the dots pill and its popover. Deliberately the same read
+       as the desktop badge — colour carries the meaning, red is the only one
+       that moves. */
+    .notes-pill { display:inline-flex; align-items:center; gap:4px; vertical-align:middle;
+      margin-left:7px; padding:3px 7px; border-radius:999px; cursor:pointer;
+      background:rgba(255,255,255,.08); border:1px solid rgba(255,255,255,.14); }
+    .notes-pill:hover { background:rgba(255,255,255,.14); }
+    .notes-pill-row { transform:translateY(-1px); }
+    .notes-dot { width:7px; height:7px; border-radius:50%; display:inline-block; flex:0 0 auto; }
+    .notes-dot.pulse { animation: notespulse 1.9s ease-in-out infinite; }
+    @keyframes notespulse { 0%,100% { box-shadow:0 0 0 0 rgba(255,69,58,.55) } 50% { box-shadow:0 0 0 4px rgba(255,69,58,0) } }
+    @media (prefers-reduced-motion: reduce) { .notes-dot.pulse { animation:none } }
+    .notes-more { font-size:10px; color:rgba(255,255,255,.7); font-weight:600; }
+    .wpane-notes { display:inline-flex; align-items:center; }
+    .notes-pop { position:fixed; z-index:9999; width:300px; max-height:min(60vh,420px); overflow:auto;
+      background:rgba(28,28,34,.97); border:1px solid rgba(255,255,255,.13); border-radius:12px;
+      box-shadow:0 12px 34px rgba(0,0,0,.46); padding:6px; backdrop-filter:blur(18px); }
+    .notes-row { display:flex; gap:9px; padding:9px 10px; align-items:flex-start; }
+    .notes-row + .notes-row { border-top:1px solid rgba(255,255,255,.08); }
+    .notes-row .notes-dot { margin-top:5px; }
+    .notes-txt { min-width:0; }
+    .notes-title { font-size:12.5px; font-weight:600; color:#fff; }
+    .notes-body { font-size:12px; color:rgba(255,255,255,.62); margin-top:2px; word-break:break-word; }
+    .notes-head { display:flex; align-items:center; justify-content:space-between;
+      padding:6px 10px 8px; border-bottom:1px solid rgba(255,255,255,.08);
+      font-size:11px; color:rgba(255,255,255,.5); }
+    .notes-actions { display:flex; gap:6px; margin-top:8px; }
+    .notes-btn { font-size:11.5px; font-weight:600; padding:5px 11px; border-radius:999px; cursor:pointer;
+      background:rgba(255,255,255,.07); border:1px solid rgba(255,255,255,.18); color:rgba(255,255,255,.8); }
+    .notes-btn:hover { background:rgba(255,255,255,.14); }
+    .notes-btn-primary { background:rgba(255,255,255,.92); border-color:transparent; color:#14141a; }
+    .notes-btn-primary:hover { background:#fff; }
+    .notes-meta { font-size:10.5px; color:rgba(255,255,255,.42); margin-top:3px; }
+
     /* Subtle icon buttons in the header — explicitly styled to override the
        global green <button> default (which otherwise makes them big and green). */
     /* All header controls are equal-size square buttons holding a same-size SVG
@@ -4531,6 +4565,15 @@
           } catch (_) {}
           break;
         }
+        case 'window_notes': {
+          if (!cryptoKey) break;
+          try {
+            const bytes = await decrypt(cryptoKey, msg.data);
+            const payload = JSON.parse(new TextDecoder().decode(bytes));
+            onWindowNotes(payload && payload.notes ? payload.notes : {});
+          } catch (_) {}
+          break;
+        }
         case 'window_list': {
           if (!cryptoKey) break;
           try {
@@ -7049,6 +7092,157 @@
       setTimeout(() => { b.textContent = prev; }, 1200);
     }, true);
 
+    // ---- Window notes: what an agent pinned on a window ---------------------
+    // The same annotations the desktop badge shows, mirrored here so a phone
+    // sees what the Mac does. Machine-scoped, ephemeral, and pushed by the
+    // agent — this side only renders.
+    let notesByWin = Object.create(null);
+
+    const NOTE_COLORS = {
+      attention: '#ff453a', working: '#ffbd21', info: '#2a8cff',
+      done: '#33d158', handback: '#bf61f2',
+    };
+    const NOTE_LABELS = {
+      attention: 'Needs you', working: 'Working', info: 'Note',
+      done: 'Done', handback: 'Back to agent',
+    };
+
+    function onWindowNotes(next) {
+      notesByWin = next || Object.create(null);
+      // Both surfaces re-read from the same map, so refresh whatever is up.
+      if (typeof renderWindows === 'function' && winList.length) renderWindows();
+      for (const [id, pane] of panes) refreshPaneNotes(id, pane);
+      // Re-render an open popover in place; otherwise acting on a note leaves
+      // the old list sitting there looking like nothing happened.
+      const open = document.querySelector('.notes-pop');
+      if (open && open.dataset.win) {
+        const wid = open.dataset.win, still = notesFor(wid);
+        const anchor = open._anchor;
+        open.remove();
+        if (still.length && anchor && document.body.contains(anchor)) openNotesPopover(anchor, still, wid);
+      }
+    }
+
+    function notesFor(id) { return notesByWin[String(id)] || []; }
+
+    function noteAge(ts) {
+      if (!ts) return '';
+      const s = Math.max(0, Math.floor(Date.now() / 1000 - ts));
+      if (s < 45) return 'just now';
+      if (s < 3600) return Math.max(1, Math.round(s / 60)) + 'm ago';
+      if (s < 86400) return Math.round(s / 3600) + 'h ago';
+      return Math.round(s / 86400) + 'd ago';
+    }
+
+    // A compact dots pill. Same read as the badge on the desktop: one dot per
+    // note, red first because that is the one that wants you.
+    function buildNotesPill(id, onOpen) {
+      const list = notesFor(id);
+      if (!list.length) return null;
+      const pill = document.createElement('button');
+      pill.className = 'notes-pill';
+      pill.title = list.length + (list.length === 1 ? ' note' : ' notes') + ' on this window';
+      const ordered = list.slice().sort((a, b) =>
+        (a.status === 'attention' ? -1 : 0) - (b.status === 'attention' ? -1 : 0));
+      for (const n of ordered.slice(0, 4)) {
+        const d = document.createElement('span');
+        d.className = 'notes-dot' + (n.status === 'attention' ? ' pulse' : '');
+        d.style.background = NOTE_COLORS[n.status] || NOTE_COLORS.info;
+        pill.appendChild(d);
+      }
+      if (list.length > 4) {
+        const more = document.createElement('span');
+        more.className = 'notes-more'; more.textContent = '+' + (list.length - 4);
+        pill.appendChild(more);
+      }
+      pill.addEventListener('click', (e) => { e.stopPropagation(); e.preventDefault(); onOpen(list); });
+      return pill;
+    }
+
+    // The list itself, as a popover anchored to whatever was clicked. Carries
+    // the same actions as the desktop badge: Done hands work back to the agent,
+    // Dismiss clears one, Dismiss all clears the window.
+    function noteAct(windowId, noteId, action) {
+      sendWin('window_note_act', { window: String(windowId), id: noteId || '', action });
+    }
+
+    // Mirrors the badge's rule: hand-back only where it means something —
+    // "working" is the agent's turn — but Dismiss is ALWAYS offered, or a stuck
+    // note from a crashed agent could never be cleared.
+    function noteButtons(status) {
+      if (status === 'attention') return { handback: 'Done', dismiss: 'Dismiss' };
+      if (status === 'info') return { handback: null, dismiss: 'Got it' };
+      if (status === 'working') return { handback: null, dismiss: 'Dismiss' };
+      return { handback: null, dismiss: 'Clear' };
+    }
+
+    function openNotesPopover(anchor, list, windowId) {
+      document.querySelectorAll('.notes-pop').forEach((el) => el.remove());
+      const pop = document.createElement('div');
+      pop.className = 'notes-pop';
+
+      if (list.length > 1) {
+        const head = document.createElement('div'); head.className = 'notes-head';
+        const cnt = document.createElement('span');
+        cnt.textContent = list.length + ' notes';
+        const all = document.createElement('button');
+        all.className = 'notes-btn'; all.textContent = 'Dismiss all';
+        all.addEventListener('click', (e) => {
+          e.stopPropagation(); noteAct(windowId, '', 'dismiss_all'); pop.remove();
+        });
+        head.append(cnt, all);
+        pop.appendChild(head);
+      }
+
+      for (const n of list) {
+        const row = document.createElement('div'); row.className = 'notes-row';
+        const dot = document.createElement('span'); dot.className = 'notes-dot';
+        dot.style.background = NOTE_COLORS[n.status] || NOTE_COLORS.info;
+        const txt = document.createElement('div'); txt.className = 'notes-txt';
+        const t = document.createElement('div'); t.className = 'notes-title'; t.textContent = n.title || '';
+        txt.appendChild(t);
+        if (n.body) { const b = document.createElement('div'); b.className = 'notes-body'; b.textContent = n.body; txt.appendChild(b); }
+        const meta = document.createElement('div'); meta.className = 'notes-meta';
+        meta.textContent = [NOTE_LABELS[n.status] || n.status, n.author, noteAge(n.ts)].filter(Boolean).join(' · ');
+        txt.appendChild(meta);
+
+        const btns = noteButtons(n.status);
+        const actions = document.createElement('div'); actions.className = 'notes-actions';
+        if (btns.handback) {
+          const b = document.createElement('button');
+          b.className = 'notes-btn notes-btn-primary'; b.textContent = btns.handback;
+          b.addEventListener('click', (e) => { e.stopPropagation(); noteAct(windowId, n.id, 'handback'); });
+          actions.appendChild(b);
+        }
+        const d = document.createElement('button');
+        d.className = 'notes-btn'; d.textContent = btns.dismiss;
+        d.addEventListener('click', (e) => { e.stopPropagation(); noteAct(windowId, n.id, 'dismiss'); });
+        actions.appendChild(d);
+        txt.appendChild(actions);
+
+        row.append(dot, txt);
+        pop.appendChild(row);
+      }
+      document.body.appendChild(pop);
+      const r = anchor.getBoundingClientRect();
+      pop.style.top = Math.min(window.innerHeight - pop.offsetHeight - 8, r.bottom + 6) + 'px';
+      pop.style.left = Math.max(8, Math.min(window.innerWidth - pop.offsetWidth - 8, r.left)) + 'px';
+      pop.dataset.win = String(windowId); pop._anchor = anchor;
+      const away = (ev) => {
+        if (pop.contains(ev.target) || anchor.contains(ev.target)) return;
+        pop.remove(); document.removeEventListener('pointerdown', away, true);
+      };
+      setTimeout(() => document.addEventListener('pointerdown', away, true), 0);
+    }
+
+    // Keep a pane's pill in step when notes change under it.
+    function refreshPaneNotes(id, pane) {
+      if (!pane || !pane.notesSlot) return;
+      pane.notesSlot.innerHTML = '';
+      const pill = buildNotesPill(id, (list) => openNotesPopover(pane.notesSlot, list, id));
+      if (pill) pane.notesSlot.appendChild(pill);
+    }
+
     function renderWindows() {
       winListRoot.innerHTML = '';
       if (winHint) {
@@ -7076,6 +7270,12 @@
         const metaEl = document.createElement('div');
         metaEl.className = 'meta';
         metaEl.textContent = (w.title || '(untitled)') + ' · ' + w.w + '×' + w.h;
+        // Notes are the machine owner's business: shown only to a viewer that
+        // has proved ownership, never to someone holding just the session PIN.
+        if (iOwnThisMachine) {
+          const pill = buildNotesPill(w.id, (list) => openNotesPopover(pill, list, w.id));
+          if (pill) { pill.classList.add('notes-pill-row'); nameEl.appendChild(pill); }
+        }
         label.appendChild(nameEl);
         label.appendChild(metaEl);
         row.appendChild(label);
@@ -7260,7 +7460,10 @@
       const infoBtn = document.createElement('button'); infoBtn.className = 'wpane-btn wpane-info-btn'; infoBtn.innerHTML = ICON_INFO; infoBtn.title = 'Connection details';
       const kbdBtn = document.createElement('button'); kbdBtn.className = 'wpane-btn wpane-kbd'; kbdBtn.innerHTML = ICON_KEYBOARD; kbdBtn.title = 'Keyboard';
       const closeBtn = document.createElement('button'); closeBtn.className = 'wpane-btn wpane-close'; closeBtn.innerHTML = ICON_CLOSE; closeBtn.title = 'Close';
-      bar.append(title, spacer, popBtn, infoBtn, kbdBtn, closeBtn);
+      // Slot rather than a built pill: notes arrive and change independently of
+      // the pane, so the pane keeps a mount point and re-fills it.
+      const notesSlot = document.createElement('span'); notesSlot.className = 'wpane-notes';
+      bar.append(title, spacer, notesSlot, popBtn, infoBtn, kbdBtn, closeBtn);
 
       const body = document.createElement('div'); body.className = 'wpane-body';
       // Frames render onto a <canvas>, not an <img>: drawImage is atomic and
@@ -7286,8 +7489,9 @@
       el.append(bar, body, infoEl, rz);
       document.body.appendChild(el);
 
-      const pane = { el, img, ctx, body, cursorEl, w: Object.assign({}, w), lastUrl: null, cursor: null, placeCursor: null, zoom: 1, panX: 0, panY: 0, lastFrameAt: performance.now(), lastAliveAt: performance.now(), stallMsg, loadMsg, gotFrame: false, errorMsg: null, frameTimes: [], infoEl, infoShown: false };
+      const pane = { el, img, ctx, body, cursorEl, notesSlot, w: Object.assign({}, w), lastUrl: null, cursor: null, placeCursor: null, zoom: 1, panX: 0, panY: 0, lastFrameAt: performance.now(), lastAliveAt: performance.now(), stallMsg, loadMsg, gotFrame: false, errorMsg: null, frameTimes: [], infoEl, infoShown: false };
       panes.set(w.id, pane);
+      refreshPaneNotes(w.id, pane);
       paneDrag(pane, bar);
       paneResize(pane, rz);
       paneInput(pane, img);

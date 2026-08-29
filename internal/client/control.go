@@ -158,6 +158,14 @@ func (a *Agent) handleControlConn(conn net.Conn) {
 		name := strings.TrimSpace(strings.TrimPrefix(line, "rename "))
 		a.setName(name)
 		_, _ = fmt.Fprintln(conn, "ok")
+	case strings.HasPrefix(line, "notes "):
+		// Window annotations published by `reminal mcp`. Whole-state, not deltas.
+		raw := strings.TrimSpace(strings.TrimPrefix(line, "notes "))
+		if err := a.setNotesJSON(raw); err != nil {
+			_, _ = fmt.Fprintln(conn, "error:", err)
+			return
+		}
+		_, _ = fmt.Fprintln(conn, "ok")
 	case strings.HasPrefix(line, "notify "):
 		msg := strings.TrimSpace(strings.TrimPrefix(line, "notify "))
 		if err := a.broadcastNotify(msg); err != nil {

@@ -134,6 +134,7 @@ var forwardableTypes = map[protocol.MessageType]bool{
 	// relay while working through the hosted one, which inspects nothing and
 	// so cannot leave a type behind.
 	protocol.TypeNotify: true, protocol.TypeDownload: true,
+	protocol.TypeWindowNotes: true, protocol.TypeWindowNoteAct: true,
 	protocol.TypeUpload: true, protocol.TypeUploadAck: true,
 	protocol.TypeWebRTCHello: true, protocol.TypeWebRTCOffer: true,
 	protocol.TypeWebRTCAnswer: true, protocol.TypeWebRTCICE: true,

@@ -224,6 +224,10 @@ type Agent struct {
 	// on this (and only this) so a transient/failed restart never kills the
 	// host keyboard permanently.
 	converting atomic.Bool
+	// notes holds this machine's window annotations, published by `reminal mcp`
+	// over the control socket and mirrored to viewers. Nil until first use.
+	notes *noteStore
+
 	// currentConnMu guards currentConn so the SIGUSR1 handler can close
 	// the live WS the moment a pause is requested, instead of waiting up
 	// to readDeadline (60s) for the read to time out.
@@ -2787,6 +2791,8 @@ func (a *Agent) runReader(conn *websocket.Conn, cursorCh chan uint64) error {
 			a.handleUpload(msg.Data)
 		case protocol.TypeWindowList:
 			a.enqueueWinOp(func() { a.handleWindowList(conn) })
+		case protocol.TypeWindowNoteAct:
+			a.handleNoteAct(msg)
 		case protocol.TypeWindowCtl:
 			d := msg.Data
 			a.enqueueWinOp(func() { a.handleWindowCtl(d) })
@@ -2830,6 +2836,9 @@ func (a *Agent) runReader(conn *websocket.Conn, cursorCh chan uint64) error {
 			}
 			a.updateActiveViewers(msg.Count)
 			a.syncViewerList(msg.Count, true)
+			// A tab opened after the notes were published would otherwise stay
+			// blank until something else changed.
+			a.sendNotesTo(conn)
 			if msg.Count == 0 {
 				a.forgetViewerCaps() // no watchers left; stale records must not outlive them
 			}
