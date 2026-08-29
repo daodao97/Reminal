@@ -1,18 +1,13 @@
 # reminal.app
 #
-# Until this file existed, Cloudflare served a managed robots.txt in its place
-# — which carried no Sitemap: line and disallowed every AI crawler by default.
-#
-# Cloudflare PREPENDS that managed block to this file rather than replacing it,
-# so the served result contains two groups for GPTBot, ClaudeBot and
-# Google-Extended: its Disallow first, ours second. RFC 9309 says a parser
-# merges same-named groups and, for two rules of equal specificity, the least
-# restrictive wins — so Allow should take it. "Should" is doing real work in
-# that sentence, and the only way to make the intent unambiguous is to turn the
-# managed robots.txt off in the dashboard (AI Crawl Control → robots.txt).
-# Until that's done, treat the AI-crawler lines below as a statement of intent,
-# not a guarantee. The Sitemap: line is unaffected — nothing above conflicts
-# with it.
+# This file is the whole served response. Two things had to be true for that:
+# it has to exist (without it Cloudflare serves a managed robots.txt in its
+# place, which carries no Sitemap: line and disallows every AI crawler), and
+# the managed one has to be off in the dashboard — it *prepends* rather than
+# replaces, which left GPTBot, ClaudeBot and Google-Extended each carrying a
+# Disallow group above our Allow. Both done, 2026-08-28. If AI crawlers ever
+# start behaving as though they're blocked, check AI Crawl Control → robots.txt
+# before believing anything below.
 
 User-agent: *
 Allow: /
