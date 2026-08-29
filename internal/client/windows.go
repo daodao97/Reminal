@@ -229,10 +229,19 @@ func (a *Agent) enqueueWinOpImportant(op func()) {
 func (a *Agent) handleWindowList(conn *websocket.Conn) {
 	b := a.windows()
 	var payload struct {
-		Windows     []winInfo `json:"windows"`
-		Unsupported string    `json:"unsupported,omitempty"`
-		Error       string    `json:"error,omitempty"`
-		Hint        string    `json:"hint,omitempty"`
+		Windows     []winInfo               `json:"windows"`
+		Unsupported string                  `json:"unsupported,omitempty"`
+		Error       string                  `json:"error,omitempty"`
+		Hint        string                  `json:"hint,omitempty"`
+		Notes       map[string][]windowNote `json:"notes,omitempty"`
+	}
+	// Notes ride with the list rather than being pushed on connect. Pushing at
+	// connect raced the viewer's key exchange — it had no cryptoKey yet and
+	// silently dropped the message, which is why notes vanished on every
+	// reconnect. A window_list request only happens once the viewer is keyed
+	// and ready, so this is the one moment it is guaranteed to be heard.
+	if a.notes != nil {
+		payload.Notes = a.notes.snapshot()
 	}
 	if reason := b.unsupported(); reason != "" {
 		payload.Unsupported = reason

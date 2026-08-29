@@ -2836,9 +2836,6 @@ func (a *Agent) runReader(conn *websocket.Conn, cursorCh chan uint64) error {
 			}
 			a.updateActiveViewers(msg.Count)
 			a.syncViewerList(msg.Count, true)
-			// A tab opened after the notes were published would otherwise stay
-			// blank until something else changed.
-			a.sendNotesTo(conn)
 			if msg.Count == 0 {
 				a.forgetViewerCaps() // no watchers left; stale records must not outlive them
 			}

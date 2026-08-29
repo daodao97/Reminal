@@ -24,7 +24,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/gorilla/websocket"
 	"github.com/reminal/reminal/internal/protocol"
 )
 
@@ -106,22 +105,6 @@ func (a *Agent) broadcastNotes() error {
 		return nil // not connected; the next viewer connect re-sends
 	}
 	return a.writeMsg(conn, protocol.Message{Type: protocol.TypeWindowNotes, Data: enc})
-}
-
-// sendNotesTo pushes current notes down one connection, used on viewer connect.
-func (a *Agent) sendNotesTo(conn *websocket.Conn) {
-	if a.notes == nil || a.notes.empty() || conn == nil {
-		return
-	}
-	payload, err := json.Marshal(notesPayload{Notes: a.notes.snapshot()})
-	if err != nil {
-		return
-	}
-	enc, err := a.box.Encrypt(payload)
-	if err != nil {
-		return
-	}
-	_ = a.writeMsg(conn, protocol.Message{Type: protocol.TypeWindowNotes, Data: enc})
 }
 
 // setNotesJSON accepts the JSON published over the control socket and pushes the

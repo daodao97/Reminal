@@ -4579,6 +4579,9 @@
           try {
             const bytes = await decrypt(cryptoKey, msg.data);
             const payload = JSON.parse(new TextDecoder().decode(bytes));
+            // Notes travel with the list so a reconnect always repopulates
+            // them; a push at connect time arrives before we hold the key.
+            if (payload && payload.notes) onWindowNotes(payload.notes);
             onWindowList(payload);
           } catch (_) {}
           break;
