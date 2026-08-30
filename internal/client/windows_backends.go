@@ -507,6 +507,12 @@ func asStr(s string) string {
 type linuxWindows struct{}
 
 func (linuxWindows) unsupported() string {
+	// Headless first. With no display of either kind — a cloud VM, a plain SSH
+	// box — the old code fell through to "install wmctrl", sending people after
+	// packages that cannot help because there is no desktop to mirror at all.
+	if os.Getenv("DISPLAY") == "" && os.Getenv("WAYLAND_DISPLAY") == "" {
+		return "no desktop session on this host — window mirroring needs a graphical login; the terminal works as normal"
+	}
 	if os.Getenv("WAYLAND_DISPLAY") != "" && os.Getenv("DISPLAY") == "" {
 		return "Wayland isn't supported yet — X11 (or Xwayland) required for window mirroring"
 	}
