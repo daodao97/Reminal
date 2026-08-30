@@ -289,6 +289,14 @@
         touch-action: pan-x; scrollbar-width: none;
       }
       #session-form::-webkit-scrollbar { display: none; }
+      /* A scroll container clips absolutely-positioned descendants, and every
+         one of these dropdowns is exactly that — so while a menu is open the
+         clipping has to go or the panel opens invisibly. */
+      #session-form.menu-open { overflow: visible; }
+      /* Dropping the clip lets the un-shrinkable buttons spill over the status
+         pill. Giving them the pill's width instead keeps that from happening —
+         and the session id is of no use while you are picking from a menu. */
+      #session-form.menu-open ~ #status { display: none; }
       /* flex:none matters — without it the controls shrink below their own
          label width and, because the labels are nowrap, "Disconnect" and
          "Share" render straight over each other. */
@@ -7142,6 +7150,15 @@
       try { navigator.clipboard.writeText(cmd); } catch (_) { /* insecure ctx / denied */ }
       const prev = b.textContent; b.textContent = 'copied';
       setTimeout(() => { b.textContent = prev; }, 1200);
+    }, true);
+
+    // The narrow-screen toolbar is a scroll container; keep it from clipping an
+    // open dropdown. `toggle` does not bubble, but non-bubbling events still run
+    // the capture phase, so one document-level listener catches all of them
+    // without disturbing the per-menu handlers already installed.
+    document.addEventListener('toggle', () => {
+      const sf = document.getElementById('session-form');
+      if (sf) sf.classList.toggle('menu-open', !!sf.querySelector('details[open]'));
     }, true);
 
     // ---- Window notes: what an agent pinned on a window ---------------------
