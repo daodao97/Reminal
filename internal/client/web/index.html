@@ -263,6 +263,55 @@
     #share-btn { background: transparent; color: #c9d1d9; }
     #share-btn::before { background-image: url("data:image/svg+xml,%3Csvg%20xmlns%3D%27http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%27%20viewBox%3D%270%200%2024%2024%27%20width%3D%2720%27%20height%3D%2720%27%20fill%3D%27none%27%20stroke%3D%27%23c9d1d9%27%20stroke-width%3D%272%27%20stroke-linecap%3D%27round%27%20stroke-linejoin%3D%27round%27%3E%3Ccircle%20cx%3D%2718%27%20cy%3D%275%27%20r%3D%273%27%2F%3E%3Ccircle%20cx%3D%276%27%20cy%3D%2712%27%20r%3D%273%27%2F%3E%3Ccircle%20cx%3D%2718%27%20cy%3D%2719%27%20r%3D%273%27%2F%3E%3Cpath%20d%3D%27M8.6%2010.5l6.8-4M8.6%2013.5l6.8%204%27%2F%3E%3C%2Fsvg%3E"); }
 
+    /* Narrow phones: the toolbar wrapped onto a second row, and since the
+       header is `flex: 0 0 auto` every wrapped row is stolen directly from the
+       terminal. On a 393pt iPhone the six controls plus the wordmark plus the
+       status pill simply do not fit at desktop metrics, so shrink them and drop
+       the purely decorative parts rather than let it wrap. */
+    @media (max-width: 480px) {
+      header {
+        gap: 4px;
+        padding: 7px 8px;
+        padding-top: max(7px, env(safe-area-inset-top));
+        flex-wrap: nowrap;
+      }
+      /* The wordmark is decoration — the tab title and the PWA icon already
+         say reminal, and it costs ~65px of a 393px row. */
+      header h1 { display: none; }
+      /* The toolbar takes the leftover space and scrolls inside it. Cramming
+         instead means session-form shrinks while its flex:none children do not,
+         so they spill out and paint over the status pill. Scrolling also holds
+         up whatever the labels say — longer words, another locale, a future
+         button — where hand-tuned widths would not. */
+      #session-form {
+        gap: 4px; flex-wrap: nowrap; min-width: 0; flex: 1 1 auto;
+        overflow-x: auto; overflow-y: hidden; -webkit-overflow-scrolling: touch;
+        touch-action: pan-x; scrollbar-width: none;
+      }
+      #session-form::-webkit-scrollbar { display: none; }
+      /* flex:none matters — without it the controls shrink below their own
+         label width and, because the labels are nowrap, "Disconnect" and
+         "Share" render straight over each other. */
+      #recents > summary, #windows > summary, #apps > summary, #host > summary,
+      #connect-btn, #share-btn {
+        min-width: 0; padding: 3px 4px; gap: 2px; font-size: 9px; letter-spacing: 0;
+        flex: none;
+      }
+      #recents > summary svg, #windows > summary svg, #apps > summary svg,
+      #host > summary svg { width: 15px; height: 15px; }
+      #connect-btn::before, #share-btn::before { width: 15px; height: 15px; }
+      /* Disconnected state: the two fields dominate the row on their own. */
+      #session-input { width: 84px; letter-spacing: 0.06em; }
+      #pin-input { width: 62px; letter-spacing: 0.08em; }
+      /* The status pill gives up space first — it is the one thing here that
+         can truncate without losing a control. */
+      /* The pill keeps its size and stays pinned right; the toolbar is what
+         gives, because a truncated session id is useless. */
+      #status {
+        flex: none; font-size: 10px; padding: 3px 7px;
+      }
+    }
+
     /* Mobile-only soft-key bar. Phones/tablets have no Esc, Tab, Ctrl,
        arrows on the system keyboard — without these reminal is unusable
        for shell editing on mobile, which is the killer feature vs ssh.
