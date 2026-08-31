@@ -150,7 +150,9 @@ const (
 
 	// TypeWindowList is bidirectional. Viewer→agent: a request with empty
 	// Data ("what windows are open?"). Agent→viewer: the reply, Data =
-	// encrypted JSON {"windows":[{"id","app","title","x","y","w","h"}, ...]}.
+	// encrypted JSON
+	// {"windows":[{"id","app","title","icon","x","y","w","h"}, ...]}.
+	// icon is an optional PNG data URL supplied by backends that can resolve it.
 	TypeWindowList MessageType = "window_list"
 
 	// TypeWindowNotes carries the agent→viewer note list for annotated windows —
@@ -188,7 +190,8 @@ const (
 
 	// TypeAppList is bidirectional. Viewer→agent: an empty-Data request ("what
 	// apps can I launch?"). Agent→viewer: the reply, Data = encrypted JSON
-	// {"apps":[{"id","name"}, ...]} of installed apps, or {"unsupported":"..."}.
+	// {"apps":[{"id","name","icon"}, ...]} of installed apps, or
+	// {"unsupported":"..."}. icon is optional for backend compatibility.
 	TypeAppList MessageType = "app_list"
 	// TypeAppOpen is viewer→agent. Data = encrypted JSON {"id":"<app id>"} —
 	// launch (or foreground) that app so its window shows up in the window list.
