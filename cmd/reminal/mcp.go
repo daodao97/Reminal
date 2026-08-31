@@ -82,6 +82,7 @@ type mcpServer struct {
 	helper   *overlayHelper
 	attached map[uint32]bool  // windows currently carrying a badge
 	events   []map[string]any // replies from the user, oldest first
+	pollOnce sync.Once
 	// notes mirrors what each window is showing. Duplicated from the helper
 	// because web viewers need the same list and they reach it through the
 	// reminal agent, which is a different process tree entirely.
@@ -146,6 +147,108 @@ func (s *mcpServer) publishNotes() {
 	}
 }
 
+// drainViewerActs collects what viewers did — dismiss / handback — from every
+// local agent and applies it to our mirror.
+//
+// The viewer talks to an agent, not to this process, so without collecting them
+// a dismissal made on the web is undone the moment we publish again. Polled
+// rather than pushed because nothing can call into an MCP server: it is a stdio
+// child of somebody else's client, with no address of its own.
+func (s *mcpServer) drainViewerActs() {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return
+	}
+	socks, _ := filepath.Glob(filepath.Join(home, ".reminal", "agent-*.sock"))
+	var acts []struct {
+		Window string `json:"window"`
+		ID     string `json:"id"`
+		Action string `json:"action"`
+	}
+	for _, sock := range socks {
+		conn, err := net.DialTimeout("unix", sock, 300*time.Millisecond)
+		if err != nil {
+			continue
+		}
+		_ = conn.SetDeadline(time.Now().Add(time.Second))
+		_, _ = fmt.Fprintln(conn, "note-acts")
+		line, err := bufio.NewReader(conn).ReadString('\n')
+		_ = conn.Close()
+		if err != nil {
+			continue
+		}
+		payload := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(line), "ok"))
+		if payload == "" || payload == "[]" {
+			continue
+		}
+		var batch []struct {
+			Window string `json:"window"`
+			ID     string `json:"id"`
+			Action string `json:"action"`
+		}
+		if json.Unmarshal([]byte(payload), &batch) == nil {
+			acts = append(acts, batch...)
+		}
+	}
+	if len(acts) == 0 {
+		return
+	}
+
+	changed := false
+	s.mu.Lock()
+	for _, a := range acts {
+		w64, err := strconv.ParseUint(a.Window, 10, 32)
+		if err != nil {
+			continue
+		}
+		win := uint32(w64)
+		switch a.Action {
+		case "dismiss_all":
+			delete(s.notes, win)
+			changed = true
+		case "dismiss":
+			if list, ok := s.notes[win]; ok {
+				kept := list[:0]
+				for _, n := range list {
+					if n.ID != a.ID {
+						kept = append(kept, n)
+					}
+				}
+				if len(kept) == 0 {
+					delete(s.notes, win)
+				} else {
+					s.notes[win] = kept
+				}
+				changed = true
+			}
+		case "handback":
+			for i := range s.notes[win] {
+				if s.notes[win][i].ID == a.ID {
+					s.notes[win][i].Status = "handback"
+					changed = true
+				}
+			}
+		}
+	}
+	s.mu.Unlock()
+
+	// Mirror it onto the badge too, so dismissing on the phone clears the dot
+	// on screen — the direction that never worked before.
+	for _, a := range acts {
+		if w64, err := strconv.ParseUint(a.Window, 10, 32); err == nil {
+			switch a.Action {
+			case "dismiss":
+				_ = s.send(uint32(w64), map[string]any{"cmd": "remove", "id": a.ID})
+			case "dismiss_all":
+				_ = s.send(uint32(w64), map[string]any{"cmd": "clear"})
+			}
+		}
+	}
+	if changed {
+		s.publishNotes()
+	}
+}
+
 // overlayHelperPath mirrors how the agent finds reminal-capture: explicit
 // override, then alongside this binary (the release layout), then PATH.
 func overlayHelperPath() (string, error) {
@@ -199,6 +302,13 @@ func (s *mcpServer) ensureHelper() (*overlayHelper, error) {
 	s.attached = map[uint32]bool{} // a fresh helper carries no badges
 	s.mu.Unlock()
 	go s.readReplies(stdout)
+	s.pollOnce.Do(func() {
+		go func() {
+			for range time.Tick(2 * time.Second) {
+				s.drainViewerActs()
+			}
+		}()
+	})
 	return h, nil
 }
 
@@ -218,18 +328,47 @@ func (s *mcpServer) readReplies(r io.ReadCloser) {
 		if len(s.events) > maxReplyEvents {
 			s.events = s.events[len(s.events)-maxReplyEvents:]
 		}
-		// Window gone, list forgotten: free its slot, but the helper lives on
-		// serving the others.
-		closed := false
-		if ev["event"] == "closed" {
-			if w, ok := ev["window"].(float64); ok {
-				delete(s.attached, uint32(w))
-				delete(s.notes, uint32(w))
-				closed = true
+		// Apply what the user did to our mirror, not just to the badge. Without
+		// this the mirror still holds a note they dismissed on screen, and the
+		// next publish re-asserts it — the note reappears in the viewer by
+		// itself and cannot be got rid of from either side.
+		changed := false
+		w, hasWin := ev["window"].(float64)
+		id, _ := ev["id"].(string)
+		if hasWin {
+			win := uint32(w)
+			switch ev["event"] {
+			case "closed":
+				delete(s.attached, win)
+				delete(s.notes, win)
+				changed = true
+			case "dismiss", "evicted":
+				if list, ok := s.notes[win]; ok {
+					kept := list[:0]
+					for _, n := range list {
+						if n.ID != id {
+							kept = append(kept, n)
+						}
+					}
+					if len(kept) == 0 {
+						delete(s.notes, win)
+					} else {
+						s.notes[win] = kept
+					}
+					changed = true
+				}
+			case "handback":
+				for i := range s.notes[win] {
+					if s.notes[win][i].ID == id {
+						s.notes[win][i].Status = "handback"
+						s.notes[win][i].TS = time.Now().Unix()
+						changed = true
+					}
+				}
 			}
 		}
 		s.mu.Unlock()
-		if closed {
+		if changed {
 			s.publishNotes()
 		}
 	}

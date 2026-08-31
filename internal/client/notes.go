@@ -44,6 +44,17 @@ type windowNote struct {
 type noteStore struct {
 	mu    sync.RWMutex
 	byWin map[string][]windowNote
+	// pending holds what viewers did, until `reminal mcp` drains it. Without
+	// this the MCP never learns about a dismissal made from the web and its
+	// next publish resurrects the note.
+	pending []noteAct
+}
+
+// noteAct is one viewer action awaiting collection by the MCP process.
+type noteAct struct {
+	Window string `json:"window"`
+	ID     string `json:"id"`
+	Action string `json:"action"`
 }
 
 func newNoteStore() *noteStore { return &noteStore{byWin: map[string][]windowNote{}} }
@@ -174,6 +185,31 @@ func (a *Agent) handleNoteAct(msg protocol.Message) {
 		}
 		a.notes.byWin[act.Window] = list
 	}
+	a.notes.pending = append(a.notes.pending, noteAct{Window: act.Window, ID: act.ID, Action: act.Action})
+	if len(a.notes.pending) > 200 {
+		a.notes.pending = a.notes.pending[len(a.notes.pending)-200:]
+	}
 	a.notes.mu.Unlock()
 	_ = a.broadcastNotes()
+}
+
+// takeNoteActs returns and clears what viewers have done since the last call.
+// `reminal mcp` polls this so a dismissal made on the web reaches the badge's
+// owner instead of being undone by the next publish.
+func (a *Agent) takeNoteActs() string {
+	if a.notes == nil {
+		return "[]"
+	}
+	a.notes.mu.Lock()
+	acts := a.notes.pending
+	a.notes.pending = nil
+	a.notes.mu.Unlock()
+	if len(acts) == 0 {
+		return "[]"
+	}
+	b, err := json.Marshal(acts)
+	if err != nil {
+		return "[]"
+	}
+	return string(b)
 }
