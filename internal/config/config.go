@@ -5,6 +5,7 @@ package config
 
 import (
 	"fmt"
+	"net/url"
 	"os"
 	"os/exec"
 	"runtime"
@@ -24,11 +25,9 @@ const (
 // last-resort POSIX fallback that exists on every Unix.
 var shellCandidates = []string{"/bin/zsh", "/bin/bash", "/bin/sh"}
 
-// Set at build time: -ldflags "-X github.com/reminal/reminal/internal/config.DefaultCloudRelay=wss://..."
-// Pointed at the futuristic.workers.dev subdomain (harshalg98@gmail.com's
-// Cloudflare account) since v0.6.3 — the original reminal.workers.dev
-// subdomain on the other account got persistently throttled by
-// Cloudflare's workers.dev edge anti-abuse rules.
+// Upstream defaults keep a plain source build compatible with the public
+// service. Forks and release builders can replace either value with -ldflags;
+// runtime REMINAL_RELAY / REMINAL_WEB and REMINAL_LOCAL take precedence.
 var (
 	DefaultCloudRelay = "wss://reminal-relay.futuristic.workers.dev/ws"
 	DefaultCloudWeb   = "https://reminal-relay.futuristic.workers.dev"
@@ -41,7 +40,15 @@ func RelayWS() string {
 	if os.Getenv("REMINAL_LOCAL") == "1" {
 		return DefaultLocalRelay
 	}
-	return DefaultCloudRelay
+	// A single runtime URL is enough: keep links and sockets on the same host
+	// instead of falling back to a differently compiled-in service.
+	if v := os.Getenv("REMINAL_WEB"); v != "" {
+		return relayFromWeb(v)
+	}
+	if DefaultCloudRelay != "" {
+		return strings.TrimRight(DefaultCloudRelay, "/")
+	}
+	return relayFromWeb(DefaultCloudWeb)
 }
 
 func WebURL() string {
@@ -51,7 +58,51 @@ func WebURL() string {
 	if os.Getenv("REMINAL_LOCAL") == "1" {
 		return DefaultLocalWeb
 	}
-	return DefaultCloudWeb
+	if v := os.Getenv("REMINAL_RELAY"); v != "" {
+		return webFromRelay(v)
+	}
+	if DefaultCloudWeb != "" {
+		return strings.TrimRight(DefaultCloudWeb, "/")
+	}
+	return webFromRelay(DefaultCloudRelay)
+}
+
+func relayFromWeb(raw string) string {
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || u.Host == "" {
+		return ""
+	}
+	switch u.Scheme {
+	case "https":
+		u.Scheme = "wss"
+	case "http":
+		u.Scheme = "ws"
+	case "wss", "ws":
+	default:
+		return ""
+	}
+	u.Path = strings.TrimRight(u.Path, "/") + "/ws"
+	u.RawQuery, u.Fragment = "", ""
+	return u.String()
+}
+
+func webFromRelay(raw string) string {
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || u.Host == "" {
+		return ""
+	}
+	switch u.Scheme {
+	case "wss":
+		u.Scheme = "https"
+	case "ws":
+		u.Scheme = "http"
+	case "https", "http":
+	default:
+		return ""
+	}
+	u.Path = strings.TrimSuffix(strings.TrimRight(u.Path, "/"), "/ws")
+	u.RawQuery, u.Fragment = "", ""
+	return strings.TrimRight(u.String(), "/")
 }
 
 func SessionWS(sessionID, role string) string {

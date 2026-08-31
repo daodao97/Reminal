@@ -13,7 +13,7 @@ relay: build
 	./dist/reminal relay
 
 run: build
-	REMINAL_RELAY=ws://localhost:8080/ws ./dist/reminal
+	REMINAL_LOCAL=1 ./dist/reminal
 
 clean:
 	rm -rf dist/

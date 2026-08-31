@@ -287,22 +287,36 @@ npx wrangler login
 npm run deploy
 ```
 
-Then point `DefaultCloudRelay` / `DefaultCloudWeb` in `internal/config/config.go` at your `workers.dev` URL and rebuild. Full guide in [cloudflare/README.md](cloudflare/README.md).
+Then copy `reminal.build.env.example` to the gitignored
+`reminal.build.env`, put your `workers.dev` URL there, and run
+`./scripts/build.sh`. No source edit is needed. Full guide in
+[cloudflare/README.md](cloudflare/README.md).
 
 ---
 
 ## Local development
 
 ```bash
+# Build once; source builds retain the upstream public relay by default
+./scripts/build.sh
+
 # Terminal 1 — your own relay on localhost:8080
-reminal relay
+./dist/reminal relay
 
 # Terminal 2 — share a session via the local relay
-REMINAL_LOCAL=1 reminal
+REMINAL_LOCAL=1 ./dist/reminal
 
 # Terminal 3 — connect from another shell or the browser
-REMINAL_LOCAL=1 reminal --connect <session_id> --pin <pin>
+REMINAL_LOCAL=1 ./dist/reminal connect <session_id> <pin>
 # or http://localhost:8080/?s=<session_id>
+```
+
+To test against a remote relay without rebuilding, set either runtime URL;
+reminal derives its counterpart automatically:
+
+```bash
+REMINAL_RELAY=wss://your-relay.example/ws ./dist/reminal
+# or: REMINAL_WEB=https://your-relay.example ./dist/reminal
 ```
 
 ---
@@ -372,8 +386,8 @@ Sessions resolve by **exact id, exact name, unique id prefix, or unique substrin
 
 | Variable | Default | What it does |
 |---|---|---|
-| `REMINAL_RELAY` | Cloudflare relay URL | Override the relay WebSocket base URL |
-| `REMINAL_WEB` | Cloudflare web URL | Override the web UI URL shown in the banner |
+| `REMINAL_RELAY` | Upstream public relay | Relay WebSocket base URL; also derives `REMINAL_WEB` when that is unset |
+| `REMINAL_WEB` | Upstream public web UI | Web UI URL; also derives `REMINAL_RELAY` when that is unset |
 | `REMINAL_LOCAL` | — | Set to `1` to point everything at `localhost` |
 | `REMINAL_OWNERS_DIR` | `/etc/reminal` (`%ProgramData%\reminal` on Windows) | Where the machine's owner list lives (the admin-gated trust store) — override for tests or unusual layouts |
 | `REMINAL_NO_KEEP_AWAKE` | — | Set to `1` to let the host sleep while reminal runs (defaults to keeping it awake via `caffeinate` / `systemd-inhibit` / `SetThreadExecutionState`) |
@@ -383,6 +397,14 @@ Sessions resolve by **exact id, exact name, unique id prefix, or unique substrin
 | `SHELL` | `$SHELL`, then probes `/bin/zsh`, `/bin/bash`, `/bin/sh` (Windows: `pwsh` → `powershell` → `cmd`) | Which shell to spawn inside the session |
 
 Installs to `~/.local/bin/reminal` (macOS/Linux) or `%LOCALAPPDATA%\Programs\reminal` (Windows) — no sudo/admin needed. Apple Silicon, x86_64, and Windows ARM64. Build from source with `./scripts/build.sh` (Go 1.25+, Swift toolchain on macOS for the native capture helper); on Windows it's a plain `go build ./cmd/reminal`.
+
+For a persistent custom default in local builds, copy
+`reminal.build.env.example` to `reminal.build.env` and set
+`REMINAL_DEFAULT_RELAY` and/or `REMINAL_DEFAULT_WEB`. The local file is ignored
+by git. Release workflows use repository variables with the same names, so
+forks can publish their own defaults; when those variables are absent, the
+upstream defaults remain intact so ordinary contributor and upstream builds
+continue to work.
 
 ---
 

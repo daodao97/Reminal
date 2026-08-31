@@ -709,8 +709,8 @@ func printHelp() {
 	})
 
 	helpTable(w, "Environment", []helpRow{
-		{"REMINAL_RELAY", "Override relay URL (default: hosted Cloudflare relay)"},
-		{"REMINAL_WEB", "Override web UI URL"},
+		{"REMINAL_RELAY", "Relay WebSocket URL (overrides any build default)"},
+		{"REMINAL_WEB", "Web UI URL (overrides any build default)"},
 		{"REMINAL_LOCAL", "Set to 1 to use a localhost relay (with reminal relay)"},
 		{"REMINAL_NO_KEEP_AWAKE", "Set to 1 to let the host sleep while reminal runs"},
 		{"REMINAL_DEBUG", "Set to 1 to append raw error detail to status lines"},
