@@ -5,6 +5,7 @@ go 1.25.0
 toolchain go1.26.5
 
 require (
+	github.com/charmbracelet/ultraviolet v0.0.0-20260622092850-f39628c8a989
 	github.com/charmbracelet/x/vt v0.0.0-20260628005914-6eb80f72a239
 	github.com/creack/pty v1.1.21
 	github.com/gorilla/websocket v1.5.3
@@ -17,7 +18,6 @@ require (
 
 require (
 	github.com/charmbracelet/colorprofile v0.4.3 // indirect
-	github.com/charmbracelet/ultraviolet v0.0.0-20260622092850-f39628c8a989 // indirect
 	github.com/charmbracelet/x/ansi v0.11.7 // indirect
 	github.com/charmbracelet/x/exp/ordered v0.1.0 // indirect
 	github.com/charmbracelet/x/term v0.2.2 // indirect

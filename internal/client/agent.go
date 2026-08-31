@@ -247,8 +247,7 @@ type Agent struct {
 
 	// szMu guards the viewer-resize coalescing state (coalesceViewerResize).
 	szMu               sync.Mutex
-	szMinC, szMinR     uint16 // elementwise-min of requests in the open shrink window
-	szLastC, szLastR   uint16 // latest request (grow candidate)
+	szLastC, szLastR   uint16 // the viewer's latest reported size — what a settle applies
 	szShrinkT, szGrowT *time.Timer
 
 	// headless disables every interaction with the host terminal: no raw
@@ -908,19 +907,31 @@ func (a *Agent) recordViewerSize(cols, rows uint16) {
 	a.viewerSizeMu.Unlock()
 }
 
+// resizeSettle is how long a burst of viewport reports is allowed to run
+// before the PTY is resized to the latest of them. Long enough that a soft
+// keyboard's slide, or a window drag, becomes one resize instead of one per
+// frame; short enough that it still feels immediate.
+var resizeSettle = 300 * time.Millisecond
+
+// resizeGrowStable is the stability window a small rows-only grow must survive
+// before it's applied — see the address-bar jitter note in coalesceViewerResize.
+var resizeGrowStable = 2 * time.Second
+
 // coalesceViewerResize absorbs viewer resize jitter before it reaches the PTY.
 //
 // Mobile browsers report a new viewport on nearly every scroll gesture (the
-// address bar shows/hides), and each applied change SIGWINCHes the app into a
-// full frame repaint — which, when its frame overflows a small screen, stamps
-// another copy of the frame into committed scrollback. A few minutes of
-// scrolling stamped Claude's welcome box ~70 times (live-observed, ~2100 junk
-// lines). Two rules kill the factory while keeping resizes correct:
+// address bar shows/hides), and each applied change SIGWINCHes the running
+// program into a full frame repaint — which, when its frame overflows a small
+// screen, stamps another copy of the frame into committed scrollback. A few
+// minutes of scrolling stamped one inline TUI's welcome frame ~70 times
+// (live-observed, ~2100 junk lines). Two rules kill the factory while keeping
+// resizes correct:
 //
-//   - SHRINKS apply fast (300ms elementwise-min window): a viewer must never
-//     render wider/taller than the PTY for long, and a burst of shrinking
-//     reports collapses into a single resize at the smallest requested size.
-//   - GROWS apply only after the reported size has been STABLE for 2s: on a
+//   - A real layout change settles fast (resizeSettle): a burst of reports —
+//     a soft keyboard sliding either way, a window being dragged — collapses
+//     into ONE resize at the LATEST reported size, because that is the size
+//     the viewer actually ended up at.
+//   - A small rows-only grow waits for stability (resizeGrowStable): on a
 //     phone the address bar almost always re-shrinks on the next gesture, so
 //     transient grows would each cost a full repaint for nothing. A real,
 //     settled grow (rotation, bar gone while reading, window truly resized)
@@ -944,30 +955,22 @@ func (a *Agent) coalesceViewerResize(cols, rows uint16) {
 	a.szMu.Lock()
 	defer a.szMu.Unlock()
 	a.szLastC, a.szLastR = cols, rows
-	if a.szMinC == 0 || cols < a.szMinC {
-		a.szMinC = cols
-	}
-	if a.szMinR == 0 || rows < a.szMinR {
-		a.szMinR = rows
-	}
-	shrinks := cols < curC || rows < curR
 	// Only a SMALL rows-only grow is address-bar jitter (~2-4 rows, cols
-	// unchanged) — that's all the 2s stability damper is for. Everything
-	// else is a real layout change the user is waiting on — the on-screen
-	// keyboard collapsing (rows jump by ~10+), rotation, a genuine window
-	// resize — and must apply on the fast path like a shrink does.
+	// unchanged) — that's all the stability damper is for. Everything else is a
+	// real layout change the user is waiting on — the on-screen keyboard
+	// sliding either way, rotation, a genuine window resize — and settles fast.
 	jitterGrow := cols == curC && rows > curR && rows-curR <= 5
-	if (shrinks || !jitterGrow) && a.szShrinkT == nil {
-		a.szShrinkT = time.AfterFunc(300*time.Millisecond, func() {
+	if !jitterGrow && a.szShrinkT == nil {
+		a.szShrinkT = time.AfterFunc(resizeSettle, func() {
 			a.szMu.Lock()
-			var c, r uint16
-			if a.szMinC < a.szLastC || a.szMinR < a.szLastR {
-				c, r = a.szMinC, a.szMinR // a shrink was seen: smallest wins
-			} else {
-				c, r = a.szLastC, a.szLastR // pure grow burst: settle at the latest
-			}
+			// The viewer's latest report IS its current size, so that is what
+			// to apply. Preferring the smallest size seen during the window
+			// instead is what broke closing a soft keyboard: the viewport is
+			// reported at a rising sequence (22, 28, 40) as the keyboard slides
+			// away, the smallest of those won, and the terminal stayed at the
+			// keyboard-open height.
+			c, r := a.szLastC, a.szLastR
 			a.szShrinkT = nil
-			a.szMinC, a.szMinR = 0, 0
 			a.szMu.Unlock()
 			if c > 0 && r > 0 {
 				a.recordViewerSize(c, r)
@@ -979,11 +982,10 @@ func (a *Agent) coalesceViewerResize(cols, rows uint16) {
 	if a.szGrowT != nil {
 		a.szGrowT.Stop()
 	}
-	a.szGrowT = time.AfterFunc(2*time.Second, func() {
+	a.szGrowT = time.AfterFunc(resizeGrowStable, func() {
 		a.szMu.Lock()
 		c, r := a.szLastC, a.szLastR
 		a.szGrowT = nil
-		a.szMinC, a.szMinR = 0, 0
 		a.szMu.Unlock()
 		if c > 0 && r > 0 {
 			a.recordViewerSize(c, r)
@@ -992,10 +994,9 @@ func (a *Agent) coalesceViewerResize(cols, rows uint16) {
 	})
 }
 
-// resetViewerSize clears the viewer min — called when the last viewer
-// leaves, so a fresh single viewer joining later can grow the PTY back
-// up to its size instead of being pinned at whatever a long-gone phone
-// once requested.
+// resetViewerSize forgets the tracked viewer size — called when the last
+// viewer leaves, so a fresh single viewer joining later sizes the PTY to
+// itself instead of inheriting whatever a long-gone phone once requested.
 func (a *Agent) resetViewerSize() {
 	a.viewerSizeMu.Lock()
 	a.viewerCols = 0
@@ -2096,6 +2097,18 @@ func (a *Agent) resizeScreen(cols, rows uint16) {
 			break
 		}
 	}
+	// Resize bottom-anchored, the way a real terminal does (resizeAnchoredBottom).
+	// It moves lines between the screen and scrollback itself — a shrink scrolls
+	// the top off into history, a grow reveals history back onto the screen — so
+	// the segment's scrollback position is taken AFTER it. Those moved rows are
+	// real history; only the app's later repaint is overflow this segment may
+	// drop, and recording the position beforehand would put genuine content
+	// inside the drop window.
+	resizeAnchoredBottom(a.screen, int(cols), int(rows))
+	// A grow pulls lines back out of scrollback, so its length can fall here.
+	// Reconcile before recording a new segment, or the older segments' absolute
+	// positions would be left pointing past the end of the rendered history.
+	a.noteScrollbackLen()
 	cur := 0
 	if sb := a.screen.Scrollback(); sb != nil {
 		cur = sb.Len()
@@ -2104,7 +2117,6 @@ func (a *Agent) resizeScreen(cols, rows uint16) {
 	if len(a.resizeSegs) > maxResizeSegs {
 		a.resizeSegs = a.resizeSegs[len(a.resizeSegs)-maxResizeSegs:]
 	}
-	a.screen.Resize(int(cols), int(rows))
 	if a.buf != nil {
 		// Marker for the history rebuild: bytes after this point were emitted
 		// for the new geometry. Under screenMu so it orders correctly against
