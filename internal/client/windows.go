@@ -941,6 +941,13 @@ func applyWindowInput(b windowBackend, st *inputState, ev windowInput, noteMenu 
 			for _, p := range clampPath(ev.Path, winMaxDragPoints) {
 				_ = pd.dragPhase(w, "move", p[0], p[1])
 			}
+			// Compatibility with viewers that began a drag on the first
+			// threshold-crossing pointermove but did not include that movement in
+			// the end packet. A down followed by an up at another coordinate is
+			// not a drag to many apps; guarantee at least one dragged event.
+			if len(ev.Path) == 0 {
+				_ = pd.dragPhase(w, "move", ev.X, ev.Y)
+			}
 			st.drag.disarm()
 			_ = pd.dragPhase(w, "up", ev.X, ev.Y)
 		}

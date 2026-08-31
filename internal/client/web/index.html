@@ -950,7 +950,7 @@
        it where there's a real pointer with hover (desktop). */
     .wpane-kbd { display: none; }
     @media (any-pointer: coarse) { .wpane-kbd { display: inline-flex; } }
-    .wpane-body { position: relative; background: #000; line-height: 0; overflow: hidden; }
+    .wpane-body { position: relative; background: #000; line-height: 0; overflow: hidden; overscroll-behavior: contain; }
     /* Standalone pane mode (?pane=): the window fills the tab. The pane keeps
        its own title bar so keyboard and info stay reachable; pop-out and close
        go, since this tab IS the pane. */
@@ -2125,6 +2125,7 @@
     // second ✂ tap, or a tap anywhere outside it.
     document.addEventListener('pointerdown', (e) => {
       if (!snipdockManage) return;
+      if (e.target.closest('.wpane')) return; // window gestures are an isolated input surface
       if (snipdockEl.contains(e.target) || snipHandle.contains(e.target)) return;
       closeSnipdock();
     }, true);
@@ -6729,6 +6730,7 @@
       // (which we exclude), and before xterm re-selects on a fresh press.
       document.addEventListener('pointerdown', (e) => {
         if (!active) return;
+        if (e.target.closest('.wpane')) return; // don't let pane gestures mutate terminal selection
         if (e.target.closest('#sel-toolbar, #sel-handle-start, #sel-handle-end')) return;
         clearSelection();
         // A tap on the terminal itself will fire a follow-up click; swallow it
@@ -7564,7 +7566,23 @@
       paneDrag(pane, bar);
       paneResize(pane, rz);
       paneInput(pane, img);
-      el.addEventListener('pointerdown', () => focusPane(w.id));
+      // A pane is its own gesture surface. Stop bubbling pointer/touch/wheel
+      // events into page-level docks, terminal selection and scroll handlers.
+      // Target handlers still run first; this fence is on the pane's bubble
+      // phase, while the capture-phase globals explicitly ignore .wpane above.
+      el.addEventListener('pointerdown', (e) => { e.stopPropagation(); focusPane(w.id); });
+      for (const type of ['pointermove', 'pointerup', 'pointercancel', 'click', 'dblclick', 'contextmenu', 'wheel']) {
+        el.addEventListener(type, (e) => e.stopPropagation());
+      }
+      for (const type of ['touchstart', 'touchmove', 'touchend', 'touchcancel']) {
+        el.addEventListener(type, (e) => {
+          e.stopPropagation();
+          if (type === 'touchmove') e.preventDefault();
+        }, { passive: false });
+      }
+      for (const type of ['gesturestart', 'gesturechange', 'gestureend']) {
+        el.addEventListener(type, (e) => { e.preventDefault(); e.stopPropagation(); }, { passive: false });
+      }
       closeBtn.addEventListener('click', (e) => { e.stopPropagation(); closePane(w.id); });
       popBtn.addEventListener('click', (e) => { e.stopPropagation(); popOutPane(pane); });
       kbdBtn.addEventListener('click', (e) => {
@@ -8799,10 +8817,10 @@
         if (ptrs.size === 2 && e.pointerType !== 'mouse') {
           const [a, b] = [...ptrs.values()];
           const cx = (a.x + b.x) / 2, cy = (a.y + b.y) / 2, d0 = dist(a, b);
-          // Two-finger gesture: locked to 'zoom' (fingers spread → pinch-zoom the
-          // pane) or 'scroll' (fingers move together → scroll the window) on the
-          // first decisive movement, so the two don't fight each other.
-          pinch = { d: d0 || 1, mx: cx, my: cy, z: pane.zoom, px: pane.panX, py: pane.panY, startD: d0, lastCx: cx, lastCy: cy, mode: null, t: Date.now() };
+          // Once zoomed, two fingers always manipulate the local viewport:
+          // changing their distance zooms and moving their midpoint pans. At
+          // 1×, a parallel two-finger swipe still scrolls the remote app.
+          pinch = { d: d0 || 1, mx: cx, my: cy, z: pane.zoom, px: pane.panX, py: pane.panY, startD: d0, lastCx: cx, lastCy: cy, mode: pane.zoom > 1.001 ? 'view' : null, t: Date.now() };
           downAt = 0; path = null; endDrag(false);
           return;
         }
@@ -8831,10 +8849,14 @@
           const [a, b] = [...ptrs.values()];
           const d = dist(a, b), cx = (a.x + b.x) / 2, cy = (a.y + b.y) / 2;
           if (!pinch.mode) {
-            if (Math.abs(d - pinch.startD) > 16) pinch.mode = 'zoom';
+            if (Math.abs(d - pinch.startD) > 16) pinch.mode = 'view';
             else if (Math.hypot(cx - pinch.mx, cy - pinch.my) > 16) pinch.mode = 'scroll';
           }
-          if (pinch.mode === 'zoom') {
+          if (pinch.mode === 'view') {
+            // Zoom and pan are applied together. The old zoom-only branch did
+            // move the midpoint while pinching, but a fresh parallel gesture
+            // on an already-zoomed image was classified as remote scrolling,
+            // making the enlarged viewport effectively impossible to drag.
             pane.zoom = Math.max(1, Math.min(MAX_ZOOM, pinch.z * (d / pinch.d)));
             pane.panX = pinch.px + (cx - pinch.mx);
             pane.panY = pinch.py + (cy - pinch.my);
@@ -8858,7 +8880,10 @@
           if (mouseBtn === 0 && moved && dragPhasesOK()) {
             const f = frac(e);
             if (!dragLive) dragBegin(path && path.length ? path[0] : f);
-            else dragMove(f);
+            // Include the threshold-crossing movement itself. Previously the
+            // first move only pressed the button; a quick release then had no
+            // dragged event, so many apps treated it as a click, not a drag.
+            dragMove(f);
           }
           return;
         }
@@ -8927,7 +8952,7 @@
       img.addEventListener('pointercancel', endPointer);
       // Desktop: mouse wheel / trackpad scroll over the pane scrolls the window.
       img.addEventListener('wheel', (e) => {
-        e.preventDefault();
+        e.preventDefault(); e.stopPropagation();
         focusPane(pane.w.id);
         const f = frac(e);
         const m = e.deltaMode === 1 ? 16 : (e.deltaMode === 2 ? img.getBoundingClientRect().height : 1);
