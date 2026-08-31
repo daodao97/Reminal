@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/reminal/reminal/internal/client"
+	"github.com/reminal/reminal/internal/config"
 	"github.com/reminal/reminal/internal/keepawake"
 	"github.com/reminal/reminal/internal/proc"
 	"github.com/reminal/reminal/internal/pty"
@@ -45,6 +46,10 @@ var (
 func main() {
 	// Make the console render ANSI escapes (no-op outside Windows/conhost).
 	enableVTConsole()
+	if err := config.ValidateRelayURLs(); err != nil {
+		fmt.Fprintf(os.Stderr, "configuration error: %v\n", err)
+		os.Exit(2)
+	}
 
 	// Hot-restart resume path. The previous binary image hit
 	// syscall.Exec on us with REMINAL_RESUME=1 + session credentials in
@@ -709,8 +714,8 @@ func printHelp() {
 	})
 
 	helpTable(w, "Environment", []helpRow{
-		{"REMINAL_RELAY", "Override relay URL (default: hosted Cloudflare relay)"},
-		{"REMINAL_WEB", "Override web UI URL"},
+		{"REMINAL_RELAY", "Relay WebSocket URL (overrides any build default)"},
+		{"REMINAL_WEB", "Web UI URL (overrides any build default)"},
 		{"REMINAL_LOCAL", "Set to 1 to use a localhost relay (with reminal relay)"},
 		{"REMINAL_NO_KEEP_AWAKE", "Set to 1 to let the host sleep while reminal runs"},
 		{"REMINAL_DEBUG", "Set to 1 to append raw error detail to status lines"},

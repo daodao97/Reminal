@@ -1,18 +1,94 @@
 #!/bin/bash
 set -euo pipefail
 
-VERSION="${VERSION:-1.12.3}"
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+cd "$ROOT"
+
+# Personal/self-hosted relay defaults live outside version control. Copy
+# reminal.build.env.example to reminal.build.env, or point this at another file.
+BUILD_CONFIG="${REMINAL_BUILD_CONFIG:-${ROOT}/reminal.build.env}"
+ENV_RELAY_SET="${REMINAL_DEFAULT_RELAY+x}"
+ENV_WEB_SET="${REMINAL_DEFAULT_WEB+x}"
+ENV_RELAY="${REMINAL_DEFAULT_RELAY:-}"
+ENV_WEB="${REMINAL_DEFAULT_WEB:-}"
+if [[ -f "$BUILD_CONFIG" ]]; then
+  # Parse inert KEY=VALUE data rather than sourcing shell code. Keep the
+  # allowlist deliberately small so a typo cannot silently change the build.
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    line="${line%$'\r'}"
+    [[ "$line" =~ ^[[:space:]]*$ || "$line" =~ ^[[:space:]]*# ]] && continue
+    if [[ "$line" != *=* ]]; then
+      echo "Invalid build config line in ${BUILD_CONFIG}: ${line}" >&2
+      exit 2
+    fi
+    key="${line%%=*}"
+    value="${line#*=}"
+    case "$key" in
+      REMINAL_DEFAULT_RELAY) REMINAL_DEFAULT_RELAY="$value" ;;
+      REMINAL_DEFAULT_WEB) REMINAL_DEFAULT_WEB="$value" ;;
+      *)
+        echo "Unsupported build config key in ${BUILD_CONFIG}: ${key}" >&2
+        exit 2
+        ;;
+    esac
+  done < "$BUILD_CONFIG"
+fi
+# An explicit command environment has higher precedence than the convenience
+# file (including an explicitly empty value used to disable one file entry).
+if [[ -n "$ENV_RELAY_SET" ]]; then
+  REMINAL_DEFAULT_RELAY="$ENV_RELAY"
+  [[ -z "$ENV_WEB_SET" ]] && REMINAL_DEFAULT_WEB=""
+fi
+if [[ -n "$ENV_WEB_SET" ]]; then
+  REMINAL_DEFAULT_WEB="$ENV_WEB"
+  [[ -z "$ENV_RELAY_SET" ]] && REMINAL_DEFAULT_RELAY=""
+fi
+
+# Local/fork builds must not masquerade as an old upstream release: doing so
+# makes the startup updater offer to replace the customized binary. Release CI
+# passes VERSION explicitly, while an ordinary local build stays "dev" and
+# intentionally skips upstream self-update checks.
+VERSION="${VERSION:-dev}"
 OUTPUT="${OUTPUT:-dist/reminal}"
 
 mkdir -p dist
 
-RELAY_LDFLAGS="-X github.com/reminal/reminal/internal/config.DefaultCloudRelay=wss://reminal-relay.futuristic.workers.dev/ws -X github.com/reminal/reminal/internal/config.DefaultCloudWeb=https://reminal-relay.futuristic.workers.dev"
+DEFAULT_RELAY="${REMINAL_DEFAULT_RELAY:-}"
+DEFAULT_WEB="${REMINAL_DEFAULT_WEB:-}"
+if [[ -n "$DEFAULT_RELAY" && ! "$DEFAULT_RELAY" =~ ^wss?:// ]]; then
+  echo "REMINAL_DEFAULT_RELAY must start with ws:// or wss://" >&2
+  exit 2
+fi
+if [[ -n "$DEFAULT_WEB" && ! "$DEFAULT_WEB" =~ ^https?:// ]]; then
+  echo "REMINAL_DEFAULT_WEB must start with http:// or https://" >&2
+  exit 2
+fi
+# Build defaults replace the upstream pair together. When only one is supplied,
+# derive the other so a fork never opens sockets on one relay while printing
+# links for another.
+if [[ -n "$DEFAULT_RELAY" && -z "$DEFAULT_WEB" ]]; then
+  DEFAULT_WEB="${DEFAULT_RELAY%/}"
+  DEFAULT_WEB="${DEFAULT_WEB%/ws}"
+  DEFAULT_WEB="${DEFAULT_WEB/#wss:\/\//https://}"
+  DEFAULT_WEB="${DEFAULT_WEB/#ws:\/\//http://}"
+elif [[ -n "$DEFAULT_WEB" && -z "$DEFAULT_RELAY" ]]; then
+  DEFAULT_RELAY="${DEFAULT_WEB%/}"
+  DEFAULT_RELAY="${DEFAULT_RELAY/#https:\/\//wss://}"
+  DEFAULT_RELAY="${DEFAULT_RELAY/#http:\/\//ws://}/ws"
+fi
 COMMIT=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
 BUILD_DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-BUILD_LDFLAGS="-X main.buildDate=${BUILD_DATE} -X main.commit=${COMMIT}"
+LDFLAGS=(-s -w -X "main.version=${VERSION}" -X "main.buildDate=${BUILD_DATE}" -X "main.commit=${COMMIT}")
+[[ -n "$DEFAULT_RELAY" ]] && LDFLAGS+=(-X "github.com/reminal/reminal/internal/config.DefaultCloudRelay=${DEFAULT_RELAY%/}")
+[[ -n "$DEFAULT_WEB" ]] && LDFLAGS+=(-X "github.com/reminal/reminal/internal/config.DefaultCloudWeb=${DEFAULT_WEB%/}")
 
 echo "Building reminal ${VERSION}..."
-CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -X main.version=${VERSION} ${BUILD_LDFLAGS} ${RELAY_LDFLAGS}" -o "${OUTPUT}" ./cmd/reminal
+if [[ -n "$DEFAULT_RELAY" || -n "$DEFAULT_WEB" ]]; then
+  echo "Embedding configured relay defaults from ${BUILD_CONFIG} / environment."
+else
+  echo "Using the upstream relay defaults from internal/config (override with reminal.build.env)."
+fi
+CGO_ENABLED=0 go build -trimpath -ldflags "${LDFLAGS[*]}" -o "${OUTPUT}" ./cmd/reminal
 
 echo "Built ${OUTPUT}"
 "${OUTPUT}" version

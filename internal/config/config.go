@@ -5,6 +5,7 @@ package config
 
 import (
 	"fmt"
+	"net/url"
 	"os"
 	"os/exec"
 	"runtime"
@@ -24,11 +25,9 @@ const (
 // last-resort POSIX fallback that exists on every Unix.
 var shellCandidates = []string{"/bin/zsh", "/bin/bash", "/bin/sh"}
 
-// Set at build time: -ldflags "-X github.com/reminal/reminal/internal/config.DefaultCloudRelay=wss://..."
-// Pointed at the futuristic.workers.dev subdomain (harshalg98@gmail.com's
-// Cloudflare account) since v0.6.3 — the original reminal.workers.dev
-// subdomain on the other account got persistently throttled by
-// Cloudflare's workers.dev edge anti-abuse rules.
+// Upstream defaults keep a plain source build compatible with the public
+// service. Forks and release builders can replace either value with -ldflags;
+// runtime REMINAL_RELAY / REMINAL_WEB and REMINAL_LOCAL take precedence.
 var (
 	DefaultCloudRelay = "wss://reminal-relay.futuristic.workers.dev/ws"
 	DefaultCloudWeb   = "https://reminal-relay.futuristic.workers.dev"
@@ -36,22 +35,146 @@ var (
 
 func RelayWS() string {
 	if v := os.Getenv("REMINAL_RELAY"); v != "" {
-		return strings.TrimRight(v, "/")
+		if normalized, err := normalizeEndpoint(v, "ws", "wss"); err == nil {
+			return strings.TrimRight(normalized, "/")
+		}
+		return defaultRelayWS()
 	}
 	if os.Getenv("REMINAL_LOCAL") == "1" {
 		return DefaultLocalRelay
 	}
-	return DefaultCloudRelay
+	// A single runtime URL is enough: keep links and sockets on the same host
+	// instead of falling back to a differently compiled-in service.
+	if v := os.Getenv("REMINAL_WEB"); v != "" {
+		if relay, err := relayFromWeb(v); err == nil {
+			return relay
+		}
+	}
+	return defaultRelayWS()
 }
 
 func WebURL() string {
 	if v := os.Getenv("REMINAL_WEB"); v != "" {
-		return strings.TrimRight(v, "/")
+		if normalized, err := normalizeEndpoint(v, "http", "https"); err == nil {
+			return strings.TrimRight(normalized, "/")
+		}
+		return defaultWebURL()
 	}
 	if os.Getenv("REMINAL_LOCAL") == "1" {
 		return DefaultLocalWeb
 	}
-	return DefaultCloudWeb
+	if v := os.Getenv("REMINAL_RELAY"); v != "" {
+		if web, err := webFromRelay(v); err == nil {
+			return web
+		}
+	}
+	return defaultWebURL()
+}
+
+// ValidateRelayURLs catches malformed runtime and build-time endpoints before
+// the dialer turns them into an unrelated, difficult-to-diagnose network error.
+// Accessors still fall back to a valid compiled counterpart so library callers
+// never receive an empty URL, but the CLI calls this at startup and fails loud.
+func ValidateRelayURLs() error {
+	if v := os.Getenv("REMINAL_RELAY"); v != "" {
+		if _, err := normalizeEndpoint(v, "ws", "wss"); err != nil {
+			return fmt.Errorf("invalid REMINAL_RELAY: %w", err)
+		}
+	}
+	if v := os.Getenv("REMINAL_WEB"); v != "" {
+		if _, err := normalizeEndpoint(v, "http", "https"); err != nil {
+			return fmt.Errorf("invalid REMINAL_WEB: %w", err)
+		}
+	}
+	if os.Getenv("REMINAL_RELAY") != "" || os.Getenv("REMINAL_WEB") != "" || os.Getenv("REMINAL_LOCAL") == "1" {
+		return nil
+	}
+	if DefaultCloudRelay != "" {
+		if _, err := normalizeEndpoint(DefaultCloudRelay, "ws", "wss"); err != nil {
+			return fmt.Errorf("invalid compiled relay default: %w", err)
+		}
+	}
+	if DefaultCloudWeb != "" {
+		if _, err := normalizeEndpoint(DefaultCloudWeb, "http", "https"); err != nil {
+			return fmt.Errorf("invalid compiled web default: %w", err)
+		}
+	}
+	if DefaultCloudRelay == "" && DefaultCloudWeb == "" {
+		return fmt.Errorf("no relay URL configured")
+	}
+	return nil
+}
+
+func defaultRelayWS() string {
+	if DefaultCloudRelay != "" {
+		if normalized, err := normalizeEndpoint(DefaultCloudRelay, "ws", "wss"); err == nil {
+			return strings.TrimRight(normalized, "/")
+		}
+	}
+	if relay, err := relayFromWeb(DefaultCloudWeb); err == nil {
+		return relay
+	}
+	return ""
+}
+
+func defaultWebURL() string {
+	if DefaultCloudWeb != "" {
+		if normalized, err := normalizeEndpoint(DefaultCloudWeb, "http", "https"); err == nil {
+			return strings.TrimRight(normalized, "/")
+		}
+	}
+	if web, err := webFromRelay(DefaultCloudRelay); err == nil {
+		return web
+	}
+	return ""
+}
+
+func relayFromWeb(raw string) (string, error) {
+	normalized, err := normalizeEndpoint(raw, "http", "https")
+	if err != nil {
+		return "", err
+	}
+	u, _ := url.Parse(normalized)
+	switch u.Scheme {
+	case "https":
+		u.Scheme = "wss"
+	case "http":
+		u.Scheme = "ws"
+	}
+	u.Path = strings.TrimRight(u.Path, "/") + "/ws"
+	u.RawQuery, u.Fragment = "", ""
+	return u.String(), nil
+}
+
+func webFromRelay(raw string) (string, error) {
+	normalized, err := normalizeEndpoint(raw, "ws", "wss")
+	if err != nil {
+		return "", err
+	}
+	u, _ := url.Parse(normalized)
+	switch u.Scheme {
+	case "wss":
+		u.Scheme = "https"
+	case "ws":
+		u.Scheme = "http"
+	}
+	u.Path = strings.TrimSuffix(strings.TrimRight(u.Path, "/"), "/ws")
+	u.RawQuery, u.Fragment = "", ""
+	return strings.TrimRight(u.String(), "/"), nil
+}
+
+func normalizeEndpoint(raw string, schemes ...string) (string, error) {
+	raw = strings.TrimSpace(raw)
+	u, err := url.Parse(raw)
+	if err != nil || u.Host == "" {
+		return "", fmt.Errorf("expected an absolute URL with a host")
+	}
+	for _, scheme := range schemes {
+		if u.Scheme == scheme {
+			return u.String(), nil
+		}
+	}
+	return "", fmt.Errorf("expected %s URL", strings.Join(schemes, " or "))
 }
 
 func SessionWS(sessionID, role string) string {

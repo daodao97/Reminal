@@ -117,13 +117,28 @@ jobs:
           GOARCH: ${{ matrix.goarch }}
           VERSION: ${{ github.ref_name }}
           COMMIT: ${{ github.sha }}
+          REMINAL_DEFAULT_RELAY: ${{ vars.REMINAL_DEFAULT_RELAY }}
+          REMINAL_DEFAULT_WEB: ${{ vars.REMINAL_DEFAULT_WEB }}
         run: |
           VERSION="${VERSION#v}"
           BUILD_DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ)
           SHORT_COMMIT="${COMMIT:0:7}"
           OUT="reminal"
           [ "$GOOS" = "windows" ] && OUT="reminal.exe"
-          CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -X main.version=${VERSION} -X main.buildDate=${BUILD_DATE} -X main.commit=${SHORT_COMMIT} -X github.com/reminal/reminal/internal/config.DefaultCloudRelay=wss://reminal-relay.futuristic.workers.dev/ws -X github.com/reminal/reminal/internal/config.DefaultCloudWeb=https://reminal-relay.futuristic.workers.dev" -o "$OUT" ./cmd/reminal
+          if [ -n "$REMINAL_DEFAULT_RELAY" ] && [ -z "$REMINAL_DEFAULT_WEB" ]; then
+            REMINAL_DEFAULT_WEB="${REMINAL_DEFAULT_RELAY%/}"
+            REMINAL_DEFAULT_WEB="${REMINAL_DEFAULT_WEB%/ws}"
+            REMINAL_DEFAULT_WEB="${REMINAL_DEFAULT_WEB/#wss:\/\//https://}"
+            REMINAL_DEFAULT_WEB="${REMINAL_DEFAULT_WEB/#ws:\/\//http://}"
+          elif [ -n "$REMINAL_DEFAULT_WEB" ] && [ -z "$REMINAL_DEFAULT_RELAY" ]; then
+            REMINAL_DEFAULT_RELAY="${REMINAL_DEFAULT_WEB%/}"
+            REMINAL_DEFAULT_RELAY="${REMINAL_DEFAULT_RELAY/#https:\/\//wss://}"
+            REMINAL_DEFAULT_RELAY="${REMINAL_DEFAULT_RELAY/#http:\/\//ws://}/ws"
+          fi
+          RELAY_LDFLAGS=""
+          [ -n "$REMINAL_DEFAULT_RELAY" ] && RELAY_LDFLAGS="$RELAY_LDFLAGS -X github.com/reminal/reminal/internal/config.DefaultCloudRelay=${REMINAL_DEFAULT_RELAY%/}"
+          [ -n "$REMINAL_DEFAULT_WEB" ] && RELAY_LDFLAGS="$RELAY_LDFLAGS -X github.com/reminal/reminal/internal/config.DefaultCloudWeb=${REMINAL_DEFAULT_WEB%/}"
+          CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -X main.version=${VERSION} -X main.buildDate=${BUILD_DATE} -X main.commit=${SHORT_COMMIT}${RELAY_LDFLAGS}" -o "$OUT" ./cmd/reminal
           echo "VERSION=${VERSION}" >> "$GITHUB_ENV"
 
       - name: Build capture helper (macOS)
