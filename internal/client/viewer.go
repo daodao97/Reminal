@@ -6,6 +6,7 @@ package client
 import (
 	"bytes"
 	"crypto/ed25519"
+	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -51,6 +52,7 @@ type Viewer struct {
 	sessionID string
 	pin       string
 	owner     bool // connect PIN-free via this device's enrolled owner key
+	id        string
 	box       *crypto.Box
 
 	// pendingDownloads buffers in-flight chunked downloads (from a host
@@ -81,8 +83,17 @@ func NewViewer(sessionID, pin string) (*Viewer, error) {
 	return &Viewer{
 		sessionID:        sessionID,
 		pin:              pin,
+		id:               newViewerID(),
 		pendingDownloads: make(map[string]*pendingDownload),
 	}, nil
+}
+
+func newViewerID() string {
+	var b [6]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return fmt.Sprintf("v-%d", time.Now().UnixNano())
+	}
+	return fmt.Sprintf("v-%x", b)
 }
 
 func Connect(sessionID, pin string) error {
@@ -821,7 +832,7 @@ func (v *Viewer) sendResizeNow(conn *websocket.Conn) {
 	if err != nil {
 		return
 	}
-	enc, err := encryptResize(v.box, uint16(cols), uint16(rows))
+	enc, err := encryptResize(v.box, uint16(cols), uint16(rows), v.id)
 	if err != nil {
 		return
 	}

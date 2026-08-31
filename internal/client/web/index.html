@@ -1246,6 +1246,10 @@
     // reason ("a pane tab owns no layout") while resume/fit/resize did not,
     // which is exactly how the two came apart.
     const ownsTerminal = !paneOnly;
+    // Stable for the life of this tab. Sent on every resize so the agent can
+    // take min(width)×min(height) across attached viewers instead of letting
+    // the latest report overwrite the others (laptop + phone keyboard).
+    const viewerId = 'v-' + ((crypto.randomUUID && crypto.randomUUID()) || String(Math.random()).slice(2)).slice(0, 12);
     if (initialSession) sessionInput.value = initialSession.toUpperCase();
 
     // The PIN may arrive in the URL fragment (e.g. #p=123456) from the
@@ -4194,7 +4198,7 @@
         if (msg.type === 'data') {
           msg = { type: 'data', data: await encrypt(cryptoKey, Uint8Array.from(atob(msg.data), c => c.charCodeAt(0))) };
         } else {
-          const payload = JSON.stringify({ cols: msg.cols, rows: msg.rows });
+          const payload = JSON.stringify({ cols: msg.cols, rows: msg.rows, viewer: viewerId });
           msg = { type: 'resize', data: await encrypt(cryptoKey, payload) };
         }
       }
@@ -4207,9 +4211,8 @@
     function sendResize() {
       // A pane tab must never drive the PTY. Its terminal is display:none, so
       // fitAddon measures nothing and xterm falls back to its 80x24 default —
-      // and the agent applies the most recent viewer's size, so popping a
-      // window out dropped the shared terminal from whatever it was to 80x24
-      // for everyone. Each resize also makes Ink re-emit its whole frame, so
+      // and that 80x24 would enter the agent's per-viewer min, shrinking
+      // everyone. Each resize also makes Ink re-emit its whole frame, so
       // this was corrupting scrollback as well as geometry. Guarded here
       // rather than at the call sites: there are five, and gating them one at
       // a time is precisely how this was missed.
@@ -7782,7 +7785,6 @@
     // negotiation attempt, so keying the host's viewer records by it left one
     // stale record per retry — fine for "can anyone decode h264", useless for
     // counting viewers.
-    const viewerId = 'v-' + ((crypto.randomUUID && crypto.randomUUID()) || String(Math.random()).slice(2)).slice(0, 12);
     let rtcPc = null, rtcDc = null, rtcPeerId = null, rtcPendingIce = [];
     // The "ctl" channel: acks, keyframe requests and heartbeats, on their own
     // unreliable+unordered stream. They used to ride the frame channel, where

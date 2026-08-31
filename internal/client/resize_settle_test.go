@@ -29,7 +29,7 @@ func sizedAgent(cols, rows uint16) *Agent {
 func TestCoalesceKeyboardCloseSettlesAtFinalHeight(t *testing.T) {
 	a := sizedAgent(80, 20)
 	for _, rows := range []uint16{22, 28, 40} {
-		a.coalesceViewerResize(80, rows)
+		a.coalesceViewerResize("phone", 80, rows)
 	}
 	time.Sleep(resizeSettle + 150*time.Millisecond)
 
@@ -46,7 +46,7 @@ func TestCoalesceKeyboardCloseSettlesAtFinalHeight(t *testing.T) {
 func TestCoalesceKeyboardOpenSettlesAtFinalHeight(t *testing.T) {
 	a := sizedAgent(80, 40)
 	for _, rows := range []uint16{32, 24, 20} {
-		a.coalesceViewerResize(80, rows)
+		a.coalesceViewerResize("phone", 80, rows)
 	}
 	time.Sleep(resizeSettle + 150*time.Millisecond)
 
@@ -62,8 +62,8 @@ func TestCoalesceKeyboardOpenSettlesAtFinalHeight(t *testing.T) {
 // ended up, not at the transient low point.
 func TestCoalesceOpenThenCloseSettlesAtFinalHeight(t *testing.T) {
 	a := sizedAgent(80, 40)
-	a.coalesceViewerResize(80, 20)
-	a.coalesceViewerResize(80, 40)
+	a.coalesceViewerResize("phone", 80, 20)
+	a.coalesceViewerResize("phone", 80, 40)
 	time.Sleep(resizeSettle + 150*time.Millisecond)
 
 	a.viewerSizeMu.Lock()
@@ -79,7 +79,7 @@ func TestCoalesceOpenThenCloseSettlesAtFinalHeight(t *testing.T) {
 // change costs the running program a full repaint.
 func TestCoalesceAddressBarJitterWaitsForStability(t *testing.T) {
 	a := sizedAgent(80, 40)
-	a.coalesceViewerResize(80, 42)
+	a.coalesceViewerResize("phone", 80, 42)
 
 	time.Sleep(resizeSettle + 150*time.Millisecond)
 	a.viewerSizeMu.Lock()
