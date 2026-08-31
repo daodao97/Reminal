@@ -249,14 +249,14 @@ type Message struct {
 	// replaces pin_hash so the relay never holds any PIN-derived, offline-
 	// crackable value. A new agent sends this on register; on a legacy session
 	// it also sends pin_hash once to prove control while migrating to token.
-	Token   string `json:"token,omitempty"`
-	Cols    uint16 `json:"cols,omitempty"`
-	Rows    uint16 `json:"rows,omitempty"`
+	Token string `json:"token,omitempty"`
+	Cols  uint16 `json:"cols,omitempty"`
+	Rows  uint16 `json:"rows,omitempty"`
 	// Viewer is a stable per-tab id on encrypted resize reports, so the
 	// agent can take min(width)×min(height) across everyone currently
 	// attached. Absent on viewers older than this field: those share a
 	// single anonymous slot (last anonymous report wins that slot).
-	Viewer string `json:"viewer,omitempty"`
+	Viewer  string `json:"viewer,omitempty"`
 	Error   string `json:"error,omitempty"`
 	Seq     uint64 `json:"seq,omitempty"`
 	FromSeq uint64 `json:"from_seq,omitempty"`
