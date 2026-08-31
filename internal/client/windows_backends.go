@@ -499,10 +499,14 @@ func asStr(s string) string {
 
 // ---- Linux/X11: wmctrl + xdotool + ImageMagick -----------------------------
 //
-// Best-effort and currently untested on real hardware (developed on macOS).
 // Works on X11 sessions with wmctrl (enumerate/focus), ImageMagick `import`
-// (capture), and xdotool (input). Wayland blocks synthetic input and
-// cross-window capture for these tools, so it reports unsupported there.
+// (capture), xdotool (input) and xwininfo (geometry). Wayland blocks synthetic
+// input and cross-window capture for these tools, so it reports unsupported
+// there.
+//
+// Exercised against a real X server, window manager and window by the gated
+// TestX11* suite in windows_linux_manual_test.go; scripts/x11-test/run.sh brings
+// up that desktop in a container.
 
 type linuxWindows struct{}
 
@@ -517,7 +521,7 @@ func (linuxWindows) unsupported() string {
 		return "Wayland isn't supported yet — X11 (or Xwayland) required for window mirroring"
 	}
 	if !have("wmctrl") {
-		return "install wmctrl (and xdotool + imagemagick) to mirror windows on Linux"
+		return "install wmctrl (and xdotool + imagemagick + x11-utils) to mirror windows on Linux"
 	}
 	return ""
 }
@@ -578,11 +582,27 @@ func (linuxWindows) list() ([]winInfo, error) {
 	return wins, nil
 }
 
-// linuxGeom returns a window's true absolute geometry via xdotool, which
-// (unlike wmctrl -G) reports coordinates that match where the window actually
-// is on screen — so clicks land where they should. Returns zeros on error, so
-// the caller's w/h < 40 check drops the window.
+// linuxGeom returns a window's true absolute geometry: the client area's origin
+// in root coordinates, which is what every click, drag, scroll and region
+// capture is computed from. Returns zeros on error, so the caller's w/h < 40
+// check drops the window.
+//
+// Neither wmctrl -G nor xdotool can be trusted here, and they are wrong in the
+// same way: on a reparenting window manager both add the client's offset inside
+// its frame to coordinates that are already absolute, so they report the window
+// one titlebar too low. Measured under openbox, where the frame is 1px of border
+// and a 20px titlebar: xwininfo says the client is at (61,60), xdotool says
+// (62,80). Acting on that put every tap a titlebar's height below where the user
+// aimed, and pushed taps near the bottom edge off the window entirely.
+//
+// xwininfo reports the translated origin directly, so prefer it. Where it isn't
+// installed, fall back to xdotool with the frame extents subtracted — which is
+// the same correction, and degrades to today's behaviour when the window manager
+// publishes no extents.
 func linuxGeom(id string) (x, y, w, h int) {
+	if x, y, w, h, ok := xwininfoGeom(id); ok {
+		return x, y, w, h
+	}
 	out, err := run("xdotool", "getwindowgeometry", "--shell", id)
 	if err != nil {
 		return 0, 0, 0, 0
@@ -603,7 +623,44 @@ func linuxGeom(id string) (x, y, w, h int) {
 			h = atoi(kv[1])
 		}
 	}
+	if l, _, t, _, ok := xpropExtents(id, "_NET_FRAME_EXTENTS"); ok {
+		x, y = x-l, y-t
+	}
 	return x, y, w, h
+}
+
+// xwininfoGeom returns the window's absolute (root-relative) client origin and
+// size. ok is false when xwininfo isn't installed or the window has gone away,
+// leaving the caller to fall back.
+func xwininfoGeom(id string) (x, y, w, h int, ok bool) {
+	out, err := run("xwininfo", "-id", id)
+	if err != nil {
+		return 0, 0, 0, 0, false
+	}
+	found := 0
+	field := func(line, prefix string) (int, bool) {
+		rest, cut := strings.CutPrefix(line, prefix)
+		if !cut {
+			return 0, false
+		}
+		return atoi(strings.TrimSpace(rest)), true
+	}
+	for _, line := range strings.Split(out, "\n") {
+		line = strings.TrimSpace(line)
+		// "Absolute" distinguishes these from the "Relative upper-left" pair,
+		// which is the offset inside the frame — the very number that makes
+		// xdotool wrong.
+		if v, hit := field(line, "Absolute upper-left X:"); hit {
+			x, found = v, found+1
+		} else if v, hit := field(line, "Absolute upper-left Y:"); hit {
+			y, found = v, found+1
+		} else if v, hit := field(line, "Width:"); hit {
+			w, found = v, found+1
+		} else if v, hit := field(line, "Height:"); hit {
+			h, found = v, found+1
+		}
+	}
+	return x, y, w, h, found == 4
 }
 
 // gtkFrameExtents reads _GTK_FRAME_EXTENTS (left, right, top, bottom) — the
@@ -611,7 +668,14 @@ func linuxGeom(id string) (x, y, w, h int) {
 // false when the property is absent (non-CSD windows, or no xprop), meaning
 // there's nothing to adjust.
 func gtkFrameExtents(id string) (left, right, top, bottom int, ok bool) {
-	out, err := run("xprop", "-id", id, "_GTK_FRAME_EXTENTS")
+	return xpropExtents(id, "_GTK_FRAME_EXTENTS")
+}
+
+// xpropExtents reads a four-cardinal (left, right, top, bottom) window property.
+// ok is false when the property is absent or xprop isn't installed, which every
+// caller treats as "no adjustment needed".
+func xpropExtents(id, atom string) (left, right, top, bottom int, ok bool) {
+	out, err := run("xprop", "-id", id, atom)
 	if err != nil {
 		return 0, 0, 0, 0, false
 	}

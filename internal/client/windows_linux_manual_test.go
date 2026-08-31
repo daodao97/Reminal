@@ -1,0 +1,326 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 Harshal Gajjar
+
+//go:build linux
+
+package client
+
+// Manual integration test for the X11 window backend, which every other test
+// skips because it needs a real display, a real window manager, and the wmctrl /
+// xdotool / ImageMagick trio actually installed.
+//
+// It is gated on REMINAL_X11_TEST=1 so `go test ./...` on a developer machine
+// (or in CI) stays unaffected. Run it inside the container built by
+// scripts/x11-test/Dockerfile, which provides Xvfb, openbox and an xterm to
+// point at.
+//
+// The point is coverage of the code path, not of X11: every assertion is about
+// what the backend returns to the rest of reminal — geometry the click mapper
+// can use, JPEG bytes the viewer can decode, an app list the launcher can show.
+
+import (
+	"os"
+	"strings"
+	"testing"
+	"time"
+)
+
+func requireX11(t *testing.T) linuxWindows {
+	t.Helper()
+	if os.Getenv("REMINAL_X11_TEST") != "1" {
+		t.Skip("set REMINAL_X11_TEST=1 (and run under a real X11 display) to enable")
+	}
+	b := linuxWindows{}
+	if msg := b.unsupported(); msg != "" {
+		t.Fatalf("backend reports unsupported: %s", msg)
+	}
+	return b
+}
+
+// findTestWindow returns the window the container opened for us to poke at.
+func findTestWindow(t *testing.T, b linuxWindows) winInfo {
+	t.Helper()
+	wins, err := b.list()
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(wins) == 0 {
+		t.Fatal("no windows enumerated — is xterm running on this display?")
+	}
+	for _, w := range wins {
+		if strings.EqualFold(w.App, "xterm") {
+			return w
+		}
+	}
+	return wins[0]
+}
+
+func TestX11List(t *testing.T) {
+	b := requireX11(t)
+	wins, err := b.list()
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(wins) == 0 {
+		t.Fatal("no windows enumerated")
+	}
+	for _, w := range wins {
+		t.Logf("id=%s app=%q title=%q geom=%dx%d@%d,%d crop=%d,%d",
+			w.ID, w.App, w.Title, w.W, w.H, w.X, w.Y, w.CropL, w.CropT)
+		// Geometry is what click mapping divides by; zero or negative would send
+		// every click to the wrong place (or panic the mapper).
+		if w.W < 40 || w.H < 40 {
+			t.Errorf("window %s has unusable size %dx%d — list() should have dropped it", w.ID, w.W, w.H)
+		}
+		if !strings.HasPrefix(w.ID, "0x") {
+			t.Errorf("window id %q is not an X11 hex id; focus/capture pass it straight to wmctrl/import", w.ID)
+		}
+		if w.App == "" {
+			t.Errorf("window %s has empty app name — the viewer groups by it", w.ID)
+		}
+	}
+}
+
+// trueRect asks X directly where the window is, independently of anything the
+// backend computes — the oracle both geometry tests are measured against.
+func trueRect(t *testing.T, id string) (x, y, w, h int) {
+	t.Helper()
+	out, err := run("xwininfo", "-id", id)
+	if err != nil {
+		t.Skipf("xwininfo unavailable, no independent oracle: %v", err)
+	}
+	seen := 0
+	for _, line := range strings.Split(out, "\n") {
+		line = strings.TrimSpace(line)
+		for _, f := range []struct {
+			prefix string
+			into   *int
+		}{
+			{"Absolute upper-left X:", &x},
+			{"Absolute upper-left Y:", &y},
+			{"Width:", &w},
+			{"Height:", &h},
+		} {
+			if rest, ok := strings.CutPrefix(line, f.prefix); ok {
+				*f.into = atoi(strings.TrimSpace(rest))
+				seen++
+			}
+		}
+	}
+	if seen != 4 {
+		t.Fatalf("could not read window rect from xwininfo:\n%s", out)
+	}
+	return x, y, w, h
+}
+
+// TestX11GeometryIsAbsolute pins list()'s geometry to what X itself reports for
+// the window. It regresses a bug that only shows up on a reparenting window
+// manager: xdotool (and wmctrl -G) add the client's offset inside its frame to
+// coordinates that are already absolute, so the backend placed every window one
+// titlebar too low and sent every click there too.
+func TestX11GeometryIsAbsolute(t *testing.T) {
+	b := requireX11(t)
+	w := findTestWindow(t, b)
+
+	wantX, wantY, _, _ := trueRect(t, w.ID)
+	if w.X != wantX || w.Y != wantY {
+		t.Errorf("list() reports origin (%d,%d) but X says the client is at (%d,%d); "+
+			"clicks and region captures would be off by (%d,%d)",
+			w.X, w.Y, wantX, wantY, w.X-wantX, w.Y-wantY)
+	}
+}
+
+func TestX11Capture(t *testing.T) {
+	b := requireX11(t)
+	w := findTestWindow(t, b)
+	img, err := b.capture(w)
+	if err != nil {
+		t.Fatalf("capture %s: %v", w.ID, err)
+	}
+	if len(img) < 512 {
+		t.Fatalf("capture returned %d bytes — too small to be a frame", len(img))
+	}
+	// The viewer decodes these as JPEG; anything else renders as a broken image.
+	if img[0] != 0xFF || img[1] != 0xD8 {
+		t.Fatalf("capture is not JPEG (starts %#x %#x)", img[0], img[1])
+	}
+	t.Logf("capture ok: %d bytes for %dx%d window", len(img), w.W, w.H)
+	dumpFrame(t, "capture.jpg", img)
+}
+
+// dumpFrame writes a captured frame to $REMINAL_X11_DUMP so a human can confirm
+// it shows the window and not, say, a black rectangle — which is what a broken
+// `import -window` produces, and which passes every byte-level assertion.
+func dumpFrame(t *testing.T, name string, img []byte) {
+	t.Helper()
+	dir := os.Getenv("REMINAL_X11_DUMP")
+	if dir == "" {
+		return
+	}
+	if err := os.WriteFile(dir+"/"+name, img, 0o644); err != nil {
+		t.Logf("dump %s: %v", name, err)
+		return
+	}
+	t.Logf("wrote %s/%s", dir, name)
+}
+
+func TestX11CaptureRegion(t *testing.T) {
+	b := requireX11(t)
+	w := findTestWindow(t, b)
+	img, err := b.captureRegion(w.X, w.Y, w.W, w.H)
+	if err != nil {
+		t.Fatalf("captureRegion: %v", err)
+	}
+	if len(img) < 512 || img[0] != 0xFF || img[1] != 0xD8 {
+		t.Fatalf("captureRegion returned %d bytes, not a JPEG", len(img))
+	}
+	t.Logf("captureRegion ok: %d bytes", len(img))
+	dumpFrame(t, "region.jpg", img)
+}
+
+func TestX11FocusAndExists(t *testing.T) {
+	b := requireX11(t)
+	w := findTestWindow(t, b)
+	if !b.exists(w.ID) {
+		t.Errorf("exists(%s) is false for a window list() just returned", w.ID)
+	}
+	if b.exists("0xdeadbeef") {
+		t.Error("exists() returned true for a bogus window id")
+	}
+	if err := b.focus(w); err != nil {
+		t.Errorf("focus %s: %v", w.ID, err)
+	}
+}
+
+func TestX11Input(t *testing.T) {
+	b := requireX11(t)
+	w := findTestWindow(t, b)
+	if err := b.focus(w); err != nil {
+		t.Fatalf("focus: %v", err)
+	}
+	// Each of these shells out to xdotool with a different argument shape; a typo
+	// in any one of them is invisible until someone tries it from a phone.
+	if err := b.typeText(w, "echo reminal-x11-ok"); err != nil {
+		t.Errorf("typeText: %v", err)
+	}
+	if err := b.key(w, "Return"); err != nil {
+		t.Errorf("key Return: %v", err)
+	}
+	if err := b.clickN(w, 0.5, 0.5, 1, false); err != nil {
+		t.Errorf("clickN: %v", err)
+	}
+	if err := b.clickN(w, 0.5, 0.5, 2, false); err != nil {
+		t.Errorf("clickN double: %v", err)
+	}
+	if err := b.clickN(w, 0.5, 0.5, 1, true); err != nil {
+		t.Errorf("clickN right: %v", err)
+	}
+	if err := b.scroll(w, 0.5, 0.5, 0, -3); err != nil {
+		t.Errorf("scroll: %v", err)
+	}
+	if err := b.drag(w, [][2]float64{{0.3, 0.3}, {0.6, 0.6}}); err != nil {
+		t.Errorf("drag: %v", err)
+	}
+	if err := b.releaseInput(); err != nil {
+		t.Errorf("releaseInput: %v", err)
+	}
+}
+
+// TestX11TypeTextLanded proves typeText actually reached the application rather
+// than merely exiting 0 — the failure mode that a "no error" assertion misses.
+func TestX11TypeTextLanded(t *testing.T) {
+	b := requireX11(t)
+	w := findTestWindow(t, b)
+	if !strings.EqualFold(w.App, "xterm") {
+		t.Skip("needs the xterm test window to read its title back")
+	}
+	if err := b.focus(w); err != nil {
+		t.Fatalf("focus: %v", err)
+	}
+	// The container runs xterm with a shell that puts the last command in the
+	// title, so typing a command and pressing Return changes the window title.
+	marker := "reminalx11"
+	if err := b.typeText(w, "printf '\\033]0;"+marker+"\\007'"); err != nil {
+		t.Fatalf("typeText: %v", err)
+	}
+	if err := b.key(w, "Return"); err != nil {
+		t.Fatalf("key: %v", err)
+	}
+	deadline := 40
+	for i := 0; i < deadline; i++ {
+		wins, err := b.list()
+		if err != nil {
+			t.Fatalf("list: %v", err)
+		}
+		for _, x := range wins {
+			if x.ID == w.ID && strings.Contains(x.Title, marker) {
+				t.Logf("typed text reached the app: title is now %q", x.Title)
+				return
+			}
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	t.Error("typed text never reached the application — window title never changed")
+}
+
+// TestX11ClickLandsInWindow checks where a tap actually puts the pointer. The
+// geometry bug this regresses was invisible to every "did it error" assertion:
+// xdotool exited 0 while moving the pointer a titlebar's height below the spot
+// the user touched, and a tap near the bottom edge left the window entirely.
+func TestX11ClickLandsInWindow(t *testing.T) {
+	b := requireX11(t)
+	w := findTestWindow(t, b)
+	tx, ty, tw, th := trueRect(t, w.ID)
+
+	for _, p := range []struct{ fx, fy float64 }{{0.5, 0.5}, {0.1, 0.05}, {0.9, 0.95}} {
+		if err := b.clickN(w, p.fx, p.fy, 1, false); err != nil {
+			t.Fatalf("clickN(%v,%v): %v", p.fx, p.fy, err)
+		}
+		out, err := run("xdotool", "getmouselocation", "--shell")
+		if err != nil {
+			t.Fatalf("getmouselocation: %v", err)
+		}
+		var gotX, gotY int
+		for _, line := range strings.Split(out, "\n") {
+			if rest, ok := strings.CutPrefix(strings.TrimSpace(line), "X="); ok {
+				gotX = atoi(rest)
+			}
+			if rest, ok := strings.CutPrefix(strings.TrimSpace(line), "Y="); ok {
+				gotY = atoi(rest)
+			}
+		}
+		// Measured against X's own rect, not against w — comparing the landing
+		// point to the same geometry that positioned it would agree with itself
+		// no matter how wrong both were.
+		wantX := tx + int(p.fx*float64(tw))
+		wantY := ty + int(p.fy*float64(th))
+		if gotX != wantX || gotY != wantY {
+			t.Errorf("tap at (%.2f,%.2f) moved the pointer to (%d,%d); the window is really %dx%d@%d,%d so it should be (%d,%d)",
+				p.fx, p.fy, gotX, gotY, tw, th, tx, ty, wantX, wantY)
+		}
+		if gotX < tx || gotX >= tx+tw || gotY < ty || gotY >= ty+th {
+			t.Errorf("tap at (%.2f,%.2f) landed at (%d,%d), outside the window — it hit whatever is behind it",
+				p.fx, p.fy, gotX, gotY)
+		}
+	}
+}
+
+func TestX11ListApps(t *testing.T) {
+	b := requireX11(t)
+	apps, err := b.listApps()
+	if err != nil {
+		t.Fatalf("listApps: %v", err)
+	}
+	t.Logf("listApps returned %d entries", len(apps))
+	for i, a := range apps {
+		if a.ID == "" || a.Name == "" {
+			t.Errorf("app %d has empty id/name: %+v", i, a)
+		}
+		if !strings.HasSuffix(a.ID, ".desktop") {
+			t.Errorf("app %d id %q is not a .desktop path; openApp parses it as one", i, a.ID)
+		}
+		if i < 5 {
+			t.Logf("  %s -> %s", a.Name, a.ID)
+		}
+	}
+}
