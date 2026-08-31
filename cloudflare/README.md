@@ -10,8 +10,9 @@ Requires a Cloudflare **free** account. Durable Objects use the SQLite backend (
 cd cloudflare
 npm install
 npx wrangler login   # or: export CLOUDFLARE_API_TOKEN=...
-# If your login can access multiple accounts:
-export CLOUDFLARE_ACCOUNT_ID=your_account_id
+# Forks: replace account_id in wrangler.toml with your Cloudflare account ID.
+# The upstream value is deliberately pinned to prevent accidental production
+# deployments to whichever account happens to be authenticated.
 npm run deploy
 ```
 
@@ -40,6 +41,9 @@ REMINAL_RELAY=wss://your-url/ws ./dist/reminal
 Plain source builds retain the upstream public relay. GitHub releases optionally
 read the build-time values from repository Actions variables of the same names;
 without them, upstream release behavior is unchanged.
+
+`reminal.build.env` is parsed as inert `KEY=VALUE` data. Only the two documented
+build-default keys are accepted; it is not sourced or executed as shell code.
 
 Optional: add a custom domain in the Cloudflare dashboard (free).
 

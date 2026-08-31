@@ -2,9 +2,11 @@ name = "reminal-relay"
 main = "src/index.ts"
 compatibility_date = "2024-11-01"
 compatibility_flags = ["nodejs_compat"]
-# Wrangler uses the authenticated account. If that login can access multiple
-# accounts, export CLOUDFLARE_ACCOUNT_ID before deploy instead of committing a
-# contributor-specific account id here.
+# Pinned so `wrangler deploy` errors out instead of silently shipping
+# to whichever Cloudflare account happens to be logged in. Belongs to
+# harshalg98@gmail.com (the everything-account). Forks must replace this value
+# with their own account ID before deploying.
+account_id = "0cd85a1166e44b17571b7457040d18ae"
 
 [durable_objects]
 bindings = [

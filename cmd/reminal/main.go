@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/reminal/reminal/internal/client"
+	"github.com/reminal/reminal/internal/config"
 	"github.com/reminal/reminal/internal/keepawake"
 	"github.com/reminal/reminal/internal/proc"
 	"github.com/reminal/reminal/internal/pty"
@@ -45,6 +46,10 @@ var (
 func main() {
 	// Make the console render ANSI escapes (no-op outside Windows/conhost).
 	enableVTConsole()
+	if err := config.ValidateRelayURLs(); err != nil {
+		fmt.Fprintf(os.Stderr, "configuration error: %v\n", err)
+		os.Exit(2)
+	}
 
 	// Hot-restart resume path. The previous binary image hit
 	// syscall.Exec on us with REMINAL_RESUME=1 + session credentials in

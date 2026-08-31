@@ -1,6 +1,9 @@
 package config
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func withCloudDefaults(t *testing.T, relay, web string) {
 	t.Helper()
@@ -71,5 +74,37 @@ func TestLocalRelay(t *testing.T) {
 	}
 	if got := WebURL(); got != DefaultLocalWeb {
 		t.Fatalf("WebURL() = %q, want %q", got, DefaultLocalWeb)
+	}
+}
+
+func TestInvalidRuntimeURLsFailValidationAndDoNotLeakEmptyValues(t *testing.T) {
+	t.Run("web URL", func(t *testing.T) {
+		withCloudDefaults(t, "wss://compiled.example/ws", "https://compiled.example")
+		t.Setenv("REMINAL_WEB", "example.com")
+		if err := ValidateRelayURLs(); err == nil || !strings.Contains(err.Error(), "REMINAL_WEB") {
+			t.Fatalf("ValidateRelayURLs() = %v, want REMINAL_WEB error", err)
+		}
+		if got := RelayWS(); got != "wss://compiled.example/ws" {
+			t.Fatalf("RelayWS() = %q, want safe compiled fallback", got)
+		}
+	})
+
+	t.Run("relay scheme", func(t *testing.T) {
+		withCloudDefaults(t, "wss://compiled.example/ws", "https://compiled.example")
+		t.Setenv("REMINAL_RELAY", "ftp://relay.example/ws")
+		if err := ValidateRelayURLs(); err == nil || !strings.Contains(err.Error(), "REMINAL_RELAY") {
+			t.Fatalf("ValidateRelayURLs() = %v, want REMINAL_RELAY error", err)
+		}
+		if got := WebURL(); got != "https://compiled.example" {
+			t.Fatalf("WebURL() = %q, want safe compiled fallback", got)
+		}
+	})
+}
+
+func TestLocalModeDoesNotRequireCloudDefaults(t *testing.T) {
+	withCloudDefaults(t, "", "")
+	t.Setenv("REMINAL_LOCAL", "1")
+	if err := ValidateRelayURLs(); err != nil {
+		t.Fatalf("ValidateRelayURLs() = %v in local mode", err)
 	}
 }

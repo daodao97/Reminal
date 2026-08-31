@@ -12,8 +12,26 @@ ENV_WEB_SET="${REMINAL_DEFAULT_WEB+x}"
 ENV_RELAY="${REMINAL_DEFAULT_RELAY:-}"
 ENV_WEB="${REMINAL_DEFAULT_WEB:-}"
 if [[ -f "$BUILD_CONFIG" ]]; then
-  # shellcheck disable=SC1090
-  source "$BUILD_CONFIG"
+  # Parse inert KEY=VALUE data rather than sourcing shell code. Keep the
+  # allowlist deliberately small so a typo cannot silently change the build.
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    line="${line%$'\r'}"
+    [[ "$line" =~ ^[[:space:]]*$ || "$line" =~ ^[[:space:]]*# ]] && continue
+    if [[ "$line" != *=* ]]; then
+      echo "Invalid build config line in ${BUILD_CONFIG}: ${line}" >&2
+      exit 2
+    fi
+    key="${line%%=*}"
+    value="${line#*=}"
+    case "$key" in
+      REMINAL_DEFAULT_RELAY) REMINAL_DEFAULT_RELAY="$value" ;;
+      REMINAL_DEFAULT_WEB) REMINAL_DEFAULT_WEB="$value" ;;
+      *)
+        echo "Unsupported build config key in ${BUILD_CONFIG}: ${key}" >&2
+        exit 2
+        ;;
+    esac
+  done < "$BUILD_CONFIG"
 fi
 # An explicit command environment has higher precedence than the convenience
 # file (including an explicitly empty value used to disable one file entry).

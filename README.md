@@ -401,7 +401,8 @@ Installs to `~/.local/bin/reminal` (macOS/Linux) or `%LOCALAPPDATA%\Programs\rem
 For a persistent custom default in local builds, copy
 `reminal.build.env.example` to `reminal.build.env` and set
 `REMINAL_DEFAULT_RELAY` and/or `REMINAL_DEFAULT_WEB`. The local file is ignored
-by git. Release workflows use repository variables with the same names, so
+by git and is parsed as inert `KEY=VALUE` data (not executed as shell code).
+Release workflows use repository variables with the same names, so
 forks can publish their own defaults; when those variables are absent, the
 upstream defaults remain intact so ordinary contributor and upstream builds
 continue to work.
