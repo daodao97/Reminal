@@ -842,11 +842,8 @@ func printVersionInfo() {
 // The list is best-effort (the relay only sends count deltas, so the
 // agent can't perfectly identify which viewer left when one disconnects).
 func runConnections() error {
-	a, err := session.ReadActive()
+	a, err := resolveActive("")
 	if err != nil {
-		if os.IsNotExist(err) {
-			return errors.New("no active reminal session on this machine")
-		}
 		return err
 	}
 	payload, err := sendControl(a.PID, "connections")
@@ -882,11 +879,8 @@ func runNotify(message string) error {
 	if strings.TrimSpace(message) == "" {
 		return errors.New("message required")
 	}
-	a, err := session.ReadActive()
+	a, err := resolveActive("")
 	if err != nil {
-		if os.IsNotExist(err) {
-			return errors.New("no active reminal session on this machine")
-		}
 		return err
 	}
 	// Control socket protocol is line-delimited: the agent reads up to
@@ -1026,11 +1020,8 @@ func runPasteCmd(args []string) error {
 // must be valid from the agent's working directory perspective — which is
 // guaranteed when invoked from inside the shared shell.
 func runSend(path string) error {
-	a, err := session.ReadActive()
+	a, err := resolveActive("")
 	if err != nil {
-		if os.IsNotExist(err) {
-			return errors.New("no active reminal session on this machine")
-		}
 		return err
 	}
 	abs, err := filepath.Abs(path)

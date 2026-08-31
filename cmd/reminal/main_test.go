@@ -84,6 +84,31 @@ func TestResolveActiveByPortStillWorks(t *testing.T) {
 	}
 }
 
+// Empty-arg resolve (connections / notify / send) must prefer REMINAL_SESSION
+// over the oldest-on-disk record — otherwise a shell inside session B reports
+// viewers for session A when both are running.
+func TestResolveActivePrefersEnvSession(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	writeRec(t, session.Active{ID: "AAAA1111", PIN: "1"})
+	writeRec(t, session.Active{ID: "BBBB2222", PIN: "2"})
+
+	t.Setenv("REMINAL_SESSION", "BBBB2222")
+	got, err := resolveActive("")
+	if err != nil {
+		t.Fatalf("resolveActive(\"\"): %v", err)
+	}
+	if got.ID != "BBBB2222" {
+		t.Fatalf("got %s, want BBBB2222 (REMINAL_SESSION)", got.ID)
+	}
+
+	// Without the env hint, multiple live sessions must not silently pick one.
+	t.Setenv("REMINAL_SESSION", "")
+	_, err = resolveActive("")
+	if err == nil {
+		t.Fatal("expected ambiguity error with multiple sessions and no env")
+	}
+}
+
 func TestParseDuration(t *testing.T) {
 	ok := map[string]time.Duration{
 		"30m":   30 * time.Minute,
