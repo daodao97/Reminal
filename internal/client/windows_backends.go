@@ -579,6 +579,22 @@ func (linuxWindows) list() ([]winInfo, error) {
 		}
 		wins = append(wins, wi)
 	}
+	// The whole desktop rides the same list as a pseudo-window ("display:0"),
+	// exactly as the macOS and Windows backends do — that entry is what the
+	// viewer's "View full desktop" button looks for, and without it Linux hosts
+	// answer "Not supported by this host" even with a perfectly good X session.
+	//
+	// One entry, not one per monitor: X11 composites every output into a single
+	// root framebuffer, and `import -window root` captures precisely that. Its
+	// origin is the root's own, so click mapping needs no special case.
+	if x, y, sw, sh, ok := xrootGeom(); ok && sw >= 40 && sh >= 40 {
+		wins = append(wins, winInfo{
+			ID:    "display:0",
+			App:   "Desktop",
+			Title: fmt.Sprintf("Entire screen — %d×%d", sw, sh),
+			X:     x, Y: y, W: sw, H: sh,
+		})
+	}
 	return wins, nil
 }
 
@@ -637,6 +653,20 @@ func xwininfoGeom(id string) (x, y, w, h int, ok bool) {
 	if err != nil {
 		return 0, 0, 0, 0, false
 	}
+	return parseXwininfo(out)
+}
+
+// xrootGeom returns the root window's rect — the whole X screen, which is what
+// `import -window root` captures.
+func xrootGeom() (x, y, w, h int, ok bool) {
+	out, err := run("xwininfo", "-root")
+	if err != nil {
+		return 0, 0, 0, 0, false
+	}
+	return parseXwininfo(out)
+}
+
+func parseXwininfo(out string) (x, y, w, h int, ok bool) {
 	found := 0
 	field := func(line, prefix string) (int, bool) {
 		rest, cut := strings.CutPrefix(line, prefix)
@@ -697,6 +727,11 @@ func (linuxWindows) capture(w winInfo) ([]byte, error) {
 	}
 	// import writes JPEG to stdout; -window takes the hex window id.
 	args := []string{"-window", w.ID}
+	if isDisplayID(w.ID) {
+		// Whole desktop: the root window IS the composited screen, so there is
+		// no per-window id to pass and no CSD shadow to crop.
+		args = []string{"-window", "root"}
+	}
 	// Crop off the invisible top-left CSD shadow (see list()) so the frame is
 	// pure window content — no black border, and pixels line up 1:1 with the
 	// content rect we map clicks against. w.W×w.H is the content size; the shadow
@@ -730,6 +765,9 @@ func (linuxWindows) captureRegion(x, y, w, h int) ([]byte, error) {
 }
 
 func (linuxWindows) focus(w winInfo) error {
+	if isDisplayID(w.ID) {
+		return nil // a desktop has no window to raise; clicks land wherever aimed
+	}
 	_, err := run("wmctrl", "-i", "-a", w.ID)
 	return err
 }
@@ -988,6 +1026,9 @@ func (linuxWindows) key(w winInfo, name string) error {
 }
 
 func (linuxWindows) exists(id string) bool {
+	if isDisplayID(id) {
+		return true // the screen is always there; a dead X server fails elsewhere
+	}
 	// wmctrl -l lists all managed windows (any workspace); the hex id appears
 	// as the first column. Present → still open.
 	out, err := run("wmctrl", "-l")

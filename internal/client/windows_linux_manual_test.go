@@ -72,8 +72,12 @@ func TestX11List(t *testing.T) {
 		if w.W < 40 || w.H < 40 {
 			t.Errorf("window %s has unusable size %dx%d — list() should have dropped it", w.ID, w.W, w.H)
 		}
-		if !strings.HasPrefix(w.ID, "0x") {
-			t.Errorf("window id %q is not an X11 hex id; focus/capture pass it straight to wmctrl/import", w.ID)
+		// Real windows carry an X11 hex id, which focus/capture hand straight to
+		// wmctrl/import. The one exception is the whole-desktop pseudo-window,
+		// which every backend reports as "display:<n>" and which capture()
+		// redirects to the root window — see TestX11FullDesktop.
+		if !isDisplayID(w.ID) && !strings.HasPrefix(w.ID, "0x") {
+			t.Errorf("window id %q is neither an X11 hex id nor a display: pseudo-window", w.ID)
 		}
 		if w.App == "" {
 			t.Errorf("window %s has empty app name — the viewer groups by it", w.ID)
@@ -85,7 +89,11 @@ func TestX11List(t *testing.T) {
 // backend computes — the oracle both geometry tests are measured against.
 func trueRect(t *testing.T, id string) (x, y, w, h int) {
 	t.Helper()
-	out, err := run("xwininfo", "-id", id)
+	args := []string{"-id", id}
+	if id == "root" {
+		args = []string{"-root"} // the root window has no id to pass
+	}
+	out, err := run("xwininfo", args...)
 	if err != nil {
 		t.Skipf("xwininfo unavailable, no independent oracle: %v", err)
 	}
@@ -302,6 +310,63 @@ func TestX11ClickLandsInWindow(t *testing.T) {
 			t.Errorf("tap at (%.2f,%.2f) landed at (%d,%d), outside the window — it hit whatever is behind it",
 				p.fx, p.fy, gotX, gotY)
 		}
+	}
+}
+
+// TestX11FullDesktop covers the viewer's "View full desktop" button, which
+// looks for a pseudo-window whose id starts with "display:". Without one, a
+// perfectly good X session answers "Not supported by this host".
+func TestX11FullDesktop(t *testing.T) {
+	b := requireX11(t)
+	wins, err := b.list()
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	var desk *winInfo
+	for i := range wins {
+		if isDisplayID(wins[i].ID) {
+			desk = &wins[i]
+			break
+		}
+	}
+	if desk == nil {
+		t.Fatal("list() returned no display: pseudo-window — the viewer would say the host can't do full desktop")
+	}
+	t.Logf("desktop entry: id=%s app=%q title=%q %dx%d@%d,%d",
+		desk.ID, desk.App, desk.Title, desk.W, desk.H, desk.X, desk.Y)
+
+	// The screen has to match what X reports for the root window, or the pane
+	// is framed wrong and every click inside it is mapped against a bad rect.
+	rx, ry, rw, rh := trueRect(t, "root")
+	if desk.X != rx || desk.Y != ry || desk.W != rw || desk.H != rh {
+		t.Errorf("desktop rect is %dx%d@%d,%d but the root window is %dx%d@%d,%d",
+			desk.W, desk.H, desk.X, desk.Y, rw, rh, rx, ry)
+	}
+	// The viewer groups by App and shows Title; both are visible UI.
+	if desk.App != "Desktop" {
+		t.Errorf("desktop app is %q, want \"Desktop\" (matches the macOS/Windows backends)", desk.App)
+	}
+	if desk.Title == "" {
+		t.Error("desktop entry has no title")
+	}
+
+	img, err := b.capture(*desk)
+	if err != nil {
+		t.Fatalf("capture desktop: %v", err)
+	}
+	if len(img) < 512 || img[0] != 0xFF || img[1] != 0xD8 {
+		t.Fatalf("desktop capture returned %d bytes, not a JPEG", len(img))
+	}
+	t.Logf("desktop capture ok: %d bytes", len(img))
+	dumpFrame(t, "desktop.jpg", img)
+
+	// Panes call these on the id they were opened with; a display must not be
+	// treated as a missing window (which would close the pane immediately).
+	if !b.exists(desk.ID) {
+		t.Error("exists() is false for the desktop — its pane would close on open")
+	}
+	if err := b.focus(*desk); err != nil {
+		t.Errorf("focus(desktop): %v — there is no window to raise, it should no-op", err)
 	}
 }
 
