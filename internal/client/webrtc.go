@@ -180,9 +180,9 @@ type rtcPeer struct {
 // Dropping instead is what a video call does — the viewer sees a sequence gap
 // and asks for a keyframe (submitAU → requestH264Key), which it already did for
 // packets lost in flight. Sized at roughly a quarter-second of the encoder's
-// 6 Mbps ceiling: deep enough to ride out a burst, shallow enough that the
+// 12 Mbps high-quality ceiling: deep enough to ride out a burst, shallow enough that the
 // picture stays current rather than replaying the past.
-const rtcSendBudget = 192 << 10
+const rtcSendBudget = 384 << 10
 
 // sendFrame hands one frame message to this peer, unless its send queue is
 // already over budget. Best effort by design: the viewer's gap detection is

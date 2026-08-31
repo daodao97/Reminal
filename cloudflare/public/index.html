@@ -7007,12 +7007,18 @@
     // always re-stamps itself first).
     const TRANSPORT_CLAIM_MS = 5000;
     function noteTransport(viaDC) {
-      if (viaDC) { lastDCSeenAt = performance.now(); lastFrameVia = 'webrtc'; return; }
+      const before = lastFrameVia;
+      if (viaDC) {
+        lastDCSeenAt = performance.now(); lastFrameVia = 'webrtc';
+        if (before !== lastFrameVia) for (const p of panes.values()) requestPaneQuality(p);
+        return;
+      }
       // !lastDCSeenAt = no DataChannel traffic EVER — claim immediately. (The
       // 0 init otherwise reads as "DC activity at page load", which blocked
       // relay frames from labeling for the page's first 5s: the popover sat on
       // "—" while frames were already painting.)
       if (!lastDCSeenAt || performance.now() - lastDCSeenAt > TRANSPORT_CLAIM_MS) lastFrameVia = 'ws';
+      if (before !== lastFrameVia) for (const p of panes.values()) requestPaneQuality(p);
     }
     // Describe the current transport for a pane's (i) popover.
     function paneInfoHtml(p) {
@@ -7023,7 +7029,10 @@
       else if (lastFrameVia === 'ws') { transport = 'Relay · WebSocket'; cls = 'ws'; }
       else { transport = '—'; cls = ''; }
       const enc = webrtc ? 'DTLS (end-to-end)' : 'AES-256-GCM (end-to-end)';
-      const res = (p.w.w && p.w.h) ? (p.w.w + '×' + p.w.h) : '—';
+      // Canvas intrinsic pixels are the stream's real capture resolution. The
+      // old value was the host window's logical-point size, so the info panel
+      // could claim a resolution unrelated to the pixels being decoded.
+      const res = (p.gotFrame && p.img.width && p.img.height) ? (p.img.width + '×' + p.img.height) : '—';
       // Prune on READ. The rolling window is otherwise only trimmed when a
       // frame ARRIVES, so a stream that stopped kept reporting whatever rate
       // it last had — a frozen pane showing a healthy fps, which is the single
@@ -7587,7 +7596,7 @@
       infoEl.addEventListener('pointerdown', (e) => e.stopPropagation()); // don't drag/focus when interacting
 
       focusPane(w.id);
-      sendWin('window_ctl', { action: 'start', id: w.id, viewer: viewerId });
+      sendPaneStart(pane);
       announcePaneInterest();
       savePaneLayout();
     }
@@ -7730,7 +7739,7 @@
       winStreamsPaused = false;
       for (const [id, p] of panes) {
         resetPaneStreamCursors(p);
-        sendWin('window_ctl', { action: 'start', id, viewer: viewerId });
+        sendPaneStart(p);
       }
     }
     function resumeWinStreams() {
@@ -8089,7 +8098,7 @@
         if (p.gotFrame && staleFor > 9000 && (!p.reqAt || performance.now() - p.reqAt > 10000)) {
           p.reqAt = performance.now();
           resetPaneStreamCursors(p);
-          sendWin('window_ctl', { action: 'start', id: p.w.id, viewer: viewerId });
+          sendPaneStart(p);
         }
         // Safety net for playout: if frames are queued and overdue, rAF is not
         // running (every window holding this pane is hidden, or the browser
@@ -8625,6 +8634,71 @@
       bar.addEventListener('pointercancel', end);
     }
 
+    // Match capture pixels to what the browser can actually display. Network
+    // Information is only a hint (and absent in Safari), so transport and pane
+    // size remain the primary signals. Requests are host-clamped and debounced.
+    function paneQualityProfile(pane) {
+      const conn = navigator.connection || navigator.mozConnection || navigator.webkitConnection;
+      const effective = conn && conn.effectiveType || '';
+      const save = !!(conn && conn.saveData);
+      const downlink = conn && Number(conn.downlink) || 0;
+      const rtt = conn && Number(conn.rtt) || 0;
+      const fr = frameRect(pane.img.getBoundingClientRect(), pane.img.width, pane.img.height);
+      const displayPx = Math.ceil(Math.max(1, fr.width) * Math.max(1, window.devicePixelRatio || 1));
+      let maxWidth = Math.max(1100, Math.min(2880, displayPx));
+      let quality = 68;
+      // A confirmed direct WebRTC path does not traverse the relay and its
+      // observed throughput is more trustworthy than Network Information's
+      // coarse, often stale internet estimate. Preserve only an explicit
+      // Save-Data request; otherwise use the full native-detail profile so a
+      // Retina source remains sharp when the pane is enlarged or pinch-zoomed.
+      if (lastFrameVia === 'webrtc' && !save) { maxWidth = 2880; quality = 80; }
+      else if (save || effective === 'slow-2g' || effective === '2g' || (downlink > 0 && downlink < 1.5)) { maxWidth = 800; quality = 40; }
+      else if (effective === '3g' || (downlink > 0 && downlink < 4) || rtt > 300) { maxWidth = Math.min(maxWidth, 1100); quality = 48; }
+      // A relay route is not evidence of a slow network — NAT can prevent P2P
+      // on an otherwise excellent link. This deployment is user-owned, so let
+      // a good relay connection use the high-detail tier too.
+      else if (lastFrameVia !== 'webrtc') { maxWidth = Math.min(maxWidth, 2560); quality = 74; }
+      else if (maxWidth >= 2400) quality = 80;
+      else if (maxWidth >= 1600) quality = 72;
+      // Stable buckets prevent a one-pixel resize from restarting capture.
+      maxWidth = maxWidth <= 800 ? 800 : maxWidth <= 1100 ? 1100 : maxWidth <= 1440 ? 1440 : maxWidth <= 1920 ? 1920 : maxWidth <= 2560 ? 2560 : 2880;
+      return { max_width: maxWidth, quality };
+    }
+    function requestPaneQuality(pane, immediate) {
+      if (!pane) return;
+      const apply = () => {
+        pane.qualityTimer = null;
+        const q = paneQualityProfile(pane);
+        const key = q.max_width + ':' + q.quality;
+        if (pane.qualityKey === key) return;
+        pane.qualityKey = key;
+        sendWin('window_ctl', { action: 'quality', id: pane.w.id, viewer: viewerId, ...q });
+      };
+      if (immediate) {
+        if (pane.qualityTimer) clearTimeout(pane.qualityTimer);
+        apply();
+      } else if (!pane.qualityTimer) {
+        // Throttle (rather than debounce) resize negotiation. During a long
+        // drag this applies the newest size every 150ms, while qualityKey means
+        // only actual 800/1100/1440/1920/2560/2880 tier crossings reach the
+        // Agent and restart its capture pipeline.
+        pane.qualityTimer = setTimeout(apply, 150);
+      }
+    }
+    function sendPaneStart(pane) {
+      const q = paneQualityProfile(pane);
+      pane.qualityKey = q.max_width + ':' + q.quality;
+      sendWin('window_ctl', { action: 'start', id: pane.w.id, viewer: viewerId, ...q });
+    }
+    const netInfo = navigator.connection || navigator.mozConnection || navigator.webkitConnection;
+    if (netInfo && netInfo.addEventListener) netInfo.addEventListener('change', () => {
+      for (const p of panes.values()) requestPaneQuality(p);
+    });
+    window.addEventListener('resize', () => {
+      for (const p of panes.values()) requestPaneQuality(p);
+    });
+
     // Resize from the bottom-right handle; width drives height via image aspect.
     function paneResize(pane, rz) {
       let s = null;
@@ -8638,8 +8712,9 @@
         if (!s) return;
         pane.el.style.width = Math.max(160, s.w + e.clientX - s.px) + 'px';
         if (pane.placeCursor) pane.placeCursor();
+        requestPaneQuality(pane);
       });
-      const end = () => { if (s) { s = null; savePaneLayout(); } };
+      const end = () => { if (s) { s = null; savePaneLayout(); requestPaneQuality(pane, true); } };
       rz.addEventListener('pointerup', end);
       rz.addEventListener('pointercancel', end);
     }
@@ -8885,6 +8960,10 @@
               click(pane.cursor || fracAt(pinch.mx, pinch.my), 'right'); flash();
             }
             pinch = null; clampPan(); applyTransform();
+            // getBoundingClientRect now reflects the zoomed display size.
+            // Re-evaluate capture pixels so zooming does not merely magnify
+            // the old low-resolution source frame.
+            requestPaneQuality(pane);
           }
           downAt = 0; return;
         }

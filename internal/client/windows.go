@@ -307,7 +307,9 @@ func (a *Agent) handleWindowCtl(encData string) {
 		// one viewer closing a pane stopped the stream for everyone watching
 		// that window. Absent for viewers older than this field, which keeps
 		// their old all-or-nothing behaviour.
-		Viewer string `json:"viewer"`
+		Viewer   string `json:"viewer"`
+		MaxWidth int    `json:"max_width"`
+		Quality  int    `json:"quality"`
 	}
 	if json.Unmarshal(plaintext, &req) != nil {
 		return
@@ -315,12 +317,63 @@ func (a *Agent) handleWindowCtl(encData string) {
 	switch req.Action {
 	case "start":
 		a.startWindowStream(req.ID, req.Viewer)
+		// Old/official viewers omit these fields. Leave those streams in host-side
+		// auto mode so they still sharpen when WebRTC becomes direct.
+		if req.MaxWidth != 0 || req.Quality != 0 {
+			a.tuneWindowStream(req.ID, windowQuality{MaxWidth: req.MaxWidth, Quality: req.Quality})
+		}
+	case "quality":
+		a.tuneWindowStream(req.ID, windowQuality{MaxWidth: req.MaxWidth, Quality: req.Quality})
 	case "stop":
 		if a.dropWindowSub(req.ID, req.Viewer) {
 			return // somebody else is still watching this window
 		}
 		a.stopWindowStream(req.ID)
 		a.releaseWindowInput() // never leave a button held after a pane closes
+	}
+}
+
+// windowQuality is a viewer-requested capture profile. Values are deliberately
+// bounded on the host: a browser is an authenticated remote input, not a source
+// we trust with arbitrary encoder sizes or CPU usage.
+type windowQuality struct {
+	MaxWidth int
+	Quality  int
+}
+
+func (q windowQuality) normalized() windowQuality {
+	if q.MaxWidth == 0 {
+		q.MaxWidth = winMaxWidth
+	}
+	if q.Quality == 0 {
+		q.Quality = winCaptureQuality
+	}
+	q.MaxWidth = max(720, min(2880, q.MaxWidth))
+	q.Quality = max(35, min(82, q.Quality))
+	return q
+}
+
+// tuneWindowStream replaces any stale pending profile with the newest one.
+// Resizing a pane can emit several requests; only its final size matters.
+func (a *Agent) tuneWindowStream(id string, q windowQuality) {
+	q = q.normalized()
+	a.winMu.Lock()
+	ch := a.winQuality[id]
+	a.winMu.Unlock()
+	if ch == nil {
+		return
+	}
+	select {
+	case ch <- q:
+	default:
+		select {
+		case <-ch:
+		default:
+		}
+		select {
+		case ch <- q:
+		default:
+		}
 	}
 }
 
@@ -569,6 +622,11 @@ func (a *Agent) startWindowStream(id, viewer string) {
 		a.winAck = map[string]chan uint64{}
 		a.winKeyReq = map[string]*atomic.Bool{}
 	}
+	// Keep this independent of winStreams for tests and hot-restart state made
+	// by an older image, where the pre-existing maps do not include quality.
+	if a.winQuality == nil {
+		a.winQuality = map[string]chan windowQuality{}
+	}
 	if _, ok := a.winStreams[id]; ok {
 		a.winMu.Unlock() // already streaming this window
 		// Somebody new just asked for it, though. H.264 deltas are useless
@@ -583,9 +641,11 @@ func (a *Agent) startWindowStream(id, viewer string) {
 	// Buffered so an incoming ack never blocks the reader goroutine; streamWindow
 	// only cares about the newest seq, so a slot or two is plenty.
 	ack := make(chan uint64, 4)
+	quality := make(chan windowQuality, 1)
 	keyReq := &atomic.Bool{}
 	a.winStreams[id] = stop
 	a.winAck[id] = ack
+	a.winQuality[id] = quality
 	a.winKeyReq[id] = keyReq
 	// First window under mirror → keep the display awake so the host can't
 	// idle-lock and strand remote control (see winAwake).
@@ -594,7 +654,7 @@ func (a *Agent) startWindowStream(id, viewer string) {
 	}
 	a.winMu.Unlock()
 
-	go a.streamWindow(w, stop, ack, keyReq)
+	go a.streamWindow(w, stop, ack, quality, keyReq)
 }
 
 // stopWindowStream ends the stream for one window id (its pane was closed).
@@ -608,11 +668,13 @@ func (a *Agent) stopWindowStream(id string) {
 			delete(a.winStreams, k)
 		}
 		a.winAck = map[string]chan uint64{}
+		a.winQuality = map[string]chan windowQuality{}
 		a.winKeyReq = map[string]*atomic.Bool{}
 	} else if ch, ok := a.winStreams[id]; ok {
 		close(ch)
 		delete(a.winStreams, id)
 		delete(a.winAck, id)
+		delete(a.winQuality, id)
 		delete(a.winKeyReq, id)
 	}
 	// Last window stopped → let the display sleep/lock again. Capture and run the
@@ -1300,11 +1362,14 @@ func (s winSinks) expectsAck() bool { return len(s.confirmed) > 0 || s.ws }
 // winStream is the state machine for one mirrored window. One runs per
 // streamed id (see startWindowStream); all fields are goroutine-local.
 type winStream struct {
-	a    *Agent
-	b    windowBackend
-	w    winInfo
-	stop <-chan struct{}
-	ack  <-chan uint64
+	a               *Agent
+	b               windowBackend
+	w               winInfo
+	stop            <-chan struct{}
+	ack             <-chan uint64
+	quality         <-chan windowQuality
+	profile         windowQuality
+	profileExplicit bool
 	// forceSend makes the next capture ship whatever the change detector
 	// thinks, and bypasses the relay pacing while it does. Raised for a viewer
 	// that has joined an in-flight stream and has no picture at all; cleared
@@ -1381,8 +1446,8 @@ type winStream struct {
 // the viewer acks one over them. The stream is ack-paced: at most
 // maxFramesInFlight unacknowledged frames, so latency can't accumulate on a
 // slow link and the rate adapts to what the viewer actually consumes.
-func (a *Agent) streamWindow(w winInfo, stop <-chan struct{}, ack <-chan uint64, keyReq *atomic.Bool) {
-	s := &winStream{a: a, b: a.windows(), w: w, stop: stop, ack: ack, keyReq: keyReq, lastGeoCheck: time.Now()}
+func (a *Agent) streamWindow(w winInfo, stop <-chan struct{}, ack <-chan uint64, quality <-chan windowQuality, keyReq *atomic.Bool) {
+	s := &winStream{a: a, b: a.windows(), w: w, stop: stop, ack: ack, quality: quality, profile: (windowQuality{}).normalized(), keyReq: keyReq, lastGeoCheck: time.Now()}
 	defer s.cleanup()
 	s.run()
 }
@@ -1400,6 +1465,7 @@ func (s *winStream) cleanup() {
 	if ch, ok := a.winStreams[s.w.ID]; ok && ch == s.stop {
 		delete(a.winStreams, s.w.ID)
 		delete(a.winAck, s.w.ID)
+		delete(a.winQuality, s.w.ID)
 		delete(a.winKeyReq, s.w.ID)
 	}
 	delete(a.winMenu, s.w.ID)
@@ -1438,6 +1504,7 @@ func (s *winStream) run() {
 			return
 		}
 		s.drainAcks()
+		s.applyQuality()
 		if !s.watched() {
 			return
 		}
@@ -1445,6 +1512,7 @@ func (s *winStream) run() {
 			return
 		}
 		s.negotiateCodec()
+		s.applyAutomaticQuality()
 		// A viewer lost sync (gap in the sequence): re-key before capturing, so
 		// the very next AU it receives is a self-contained entry point.
 		s.noteKeyRequest()
@@ -1516,6 +1584,59 @@ func (s *winStream) run() {
 	}
 }
 
+// applyQuality applies the latest browser profile at a frame boundary. The
+// helper is restarted only when the profile actually changes; the old canvas
+// remains visible in the browser until the first sharper frame arrives.
+func (s *winStream) applyQuality() {
+	var newest windowQuality
+	changed := false
+	for {
+		select {
+		case newest = <-s.quality:
+			changed = true
+		default:
+			if !changed || newest == s.profile {
+				return
+			}
+			s.profileExplicit = true
+			s.setQuality(newest)
+			return
+		}
+	}
+}
+
+// applyAutomaticQuality keeps locally modified agents useful with the official
+// hosted viewer, which cannot know about a newly-added quality request yet.
+// Relay traffic gets a conservative sharper tier; when every viewer is on a
+// confirmed P2P channel, the stream can spend more pixels without loading the
+// shared service. A viewer that explicitly requested a profile remains the
+// authority (notably Save-Data/2G browsers).
+func (s *winStream) applyAutomaticQuality() {
+	if s.profileExplicit {
+		return
+	}
+	confirmed, _, _ := s.a.rtcSinks()
+	want := windowQuality{MaxWidth: 1920, Quality: 68}
+	if len(confirmed) > 0 && !wsSinkNeeded(s.a.framesWantedBy(), len(confirmed)) {
+		want = windowQuality{MaxWidth: 2880, Quality: 80}
+	}
+	s.setQuality(want)
+}
+
+func (s *winStream) setQuality(q windowQuality) {
+	q = q.normalized()
+	if q == s.profile {
+		return
+	}
+	s.profile = q
+	if s.helper != nil {
+		s.helper.stop()
+		s.helper = nil
+	}
+	s.helperRetryAt = time.Time{}
+	s.helperErr = ""
+}
+
 // desiredCodec picks the frame codec and delivery shape for the CURRENT sink
 // topology. H.264 needs every receiver to decode it — the relay is a broadcast,
 // so one incapable viewer means nobody gets video — but it is NOT restricted to
@@ -1540,6 +1661,12 @@ func (s *winStream) desiredCodec() (codec string, wsVideo bool) {
 func (s *winStream) captureFPS() int {
 	if s.codec != "h264" {
 		return winHelperFPS
+	}
+	// Spend the high-quality tier on pixels rather than redundant motion.
+	// 2880-wide UI capture at 60fps exceeds the decoder throughput of many
+	// phones; 30fps stays responsive and looks materially sharper.
+	if s.profile.MaxWidth > 1920 {
+		return 30
 	}
 	if s.wsVideo {
 		return winHelperFPS
@@ -1711,7 +1838,7 @@ func (s *winStream) ensureHelper() {
 	if time.Now().Before(s.helperRetryAt) {
 		return
 	}
-	h, err := startCaptureHelper(s.w.ID, winMaxWidth, winCaptureQuality, s.captureFPS(), s.codec)
+	h, err := startCaptureHelper(s.w.ID, s.profile.MaxWidth, s.profile.Quality, s.captureFPS(), s.codec)
 	if err == nil {
 		s.helper = h
 		s.helperErr = ""
@@ -1744,7 +1871,7 @@ func (s *winStream) ensureHelper() {
 		// unavailable). Fall back to JPEG immediately — the viewer is waiting
 		// for frames — and re-test h264 once the suspension lapses.
 		s.suspendH264()
-		if h, jerr := startCaptureHelper(s.w.ID, winMaxWidth, winCaptureQuality, winHelperFPS, ""); jerr == nil {
+		if h, jerr := startCaptureHelper(s.w.ID, s.profile.MaxWidth, s.profile.Quality, winHelperFPS, ""); jerr == nil {
 			s.helper = h
 			s.helperErr = ""
 			s.helperStarted = time.Now()
@@ -1901,7 +2028,7 @@ func (s *winStream) checkWindow(conn *websocket.Conn, changed bool) bool {
 		if resized && s.helper != nil {
 			s.helper.stop()
 			s.helper = nil
-			if h, err := startCaptureHelper(s.w.ID, winMaxWidth, winCaptureQuality, s.captureFPS(), s.codec); err == nil {
+			if h, err := startCaptureHelper(s.w.ID, s.profile.MaxWidth, s.profile.Quality, s.captureFPS(), s.codec); err == nil {
 				s.helper = h
 			} else {
 				s.helperRetryAt = time.Now().Add(helperRetryCooldown)

@@ -424,7 +424,7 @@ final class H264Encoder {
         guard status == noErr, let created = s else { return nil }
         session = created
 
-        // ~0.08 bits per pixel per frame at 30fps lands at ~1.7 Mbps for
+        // ~0.10 bits per pixel per frame at 30fps lands at ~2.1 Mbps for
         // 1100×636 — measured visually transparent for UI content vs the JPEG
         // stream it replaces. Frame rate scales the budget SUBLINEARLY: at a
         // higher rate consecutive frames differ less, so each costs fewer bits.
@@ -434,7 +434,7 @@ final class H264Encoder {
         // flood a P2P link. Property failures are non-fatal: an encoder that
         // ignores a hint still produces decodable output.
         let fpsScale = pow(Double(fps) / 30.0, 0.6)
-        let avgBitrate = max(600_000, min(6_000_000, Int(Double(width * height) * 30.0 * 0.08 * fpsScale)))
+        let avgBitrate = max(600_000, min(12_000_000, Int(Double(width * height) * 30.0 * 0.10 * fpsScale)))
         VTSessionSetProperty(session, key: kVTCompressionPropertyKey_RealTime, value: kCFBooleanTrue)
         VTSessionSetProperty(session, key: kVTCompressionPropertyKey_ProfileLevel, value: kVTProfileLevel_H264_Main_AutoLevel)
         VTSessionSetProperty(session, key: kVTCompressionPropertyKey_AllowFrameReordering, value: kCFBooleanFalse)
