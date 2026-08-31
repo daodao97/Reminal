@@ -44,6 +44,7 @@ type winInfo struct {
 	ID    string `json:"id"`
 	App   string `json:"app"`
 	Title string `json:"title"`
+	Icon  string `json:"icon,omitempty"`
 	X     int    `json:"x"`
 	Y     int    `json:"y"`
 	W     int    `json:"w"`
@@ -51,6 +52,10 @@ type winInfo struct {
 	// PID is the owning process id (macOS), used to activate the app reliably
 	// via NSRunningApplication. Not sent to the viewer.
 	PID int `json:"-"`
+	// AppPath identifies the owning application bundle when the backend can
+	// provide it. It is used only to look up the app icon and never leaves the
+	// host (the opaque window ID remains the viewer-facing handle).
+	AppPath string `json:"-"`
 	// CropL/CropT are the left/top invisible CSD shadow margins to crop off the
 	// captured image (Linux). X/Y/W/H already describe the content rect inside
 	// that shadow, so cropping by these offsets yields a borderless frame whose
@@ -135,6 +140,7 @@ type windowBackend interface {
 type appInfo struct {
 	ID   string `json:"id"`
 	Name string `json:"name"`
+	Icon string `json:"icon,omitempty"`
 }
 
 // newWindowBackend picks the backend for the current OS. Unknown platforms get

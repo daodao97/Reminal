@@ -748,6 +748,14 @@
       color: #58a6ff;
     }
     .recents-row .label { flex: 1; min-width: 0; }
+    .app-list-icon {
+      width: 24px; height: 24px; flex: 0 0 24px; display: grid; place-items: center;
+      border-radius: 7px; object-fit: contain; user-select: none;
+    }
+    .app-list-icon.fallback {
+      background: linear-gradient(145deg, #30363d, #161b22); border: 1px solid #3d444d;
+      color: #c9d1d9; font-size: 12px; font-weight: 700; box-sizing: border-box;
+    }
     /* The label is a real <a href="?s=…"> so ⌘-click / middle-click / "Open link
        in new tab" work natively; stretched back over the row's own padding so
        the whole body of the row is the link, not just the two lines of text. */
@@ -7331,6 +7339,7 @@
         const row = document.createElement('div');
         row.className = 'recents-row';
         row.title = 'Open and control this window';
+        row.appendChild(appListIcon(w));
         const label = document.createElement('div');
         label.className = 'label';
         const nameEl = document.createElement('div');
@@ -7403,6 +7412,7 @@
           const row = document.createElement('div');
           row.className = 'recents-row';
           row.title = 'Launch on the host';
+          row.appendChild(appListIcon(a));
           const label = document.createElement('div'); label.className = 'label';
           const nameEl = document.createElement('div'); nameEl.className = 'name';
           nameEl.textContent = a.name || 'App';
@@ -7415,6 +7425,20 @@
       search.addEventListener('input', draw);
       draw();
       setTimeout(() => search.focus(), 0);
+    }
+
+    function appListIcon(item) {
+      if (item && item.icon) {
+        const img = document.createElement('img');
+        img.className = 'app-list-icon'; img.src = item.icon; img.alt = '';
+        img.draggable = false;
+        return img;
+      }
+      const fallback = document.createElement('span');
+      fallback.className = 'app-list-icon fallback';
+      const name = (item && (item.name || item.app)) || '?';
+      fallback.textContent = Array.from(name.trim())[0] || '?';
+      return fallback;
     }
 
     // nextWindowList resolves with the window list from the next window_list

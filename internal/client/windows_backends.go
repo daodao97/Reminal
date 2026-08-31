@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 )
 
 // This file holds the concrete windowBackend implementations. They only shell
@@ -58,7 +59,8 @@ func (darwinWindows) permissionHint() string {
 // each window — which lets screencapture grab the window by id even when it's
 // occluded, and requires no Accessibility permission (only Screen Recording,
 // which capture needs anyway). Emits tab-separated
-// "id<TAB>owner<TAB>title<TAB>x<TAB>y<TAB>w<TAB>h" lines. Layer 0 filters to
+// "id<TAB>pid<TAB>bundle<TAB>owner<TAB>title<TAB>x<TAB>y<TAB>w<TAB>h" lines.
+// Layer 0 filters to
 // normal application windows (skips the menu bar, Dock, shadows, etc.).
 const jxaListScript = `ObjC.import("CoreGraphics"); ObjC.import("Foundation"); ObjC.import("AppKit");
 var arr = ObjC.castRefToObject($.CGWindowListCopyWindowInfo($.kCGWindowListOptionOnScreenOnly | $.kCGWindowListExcludeDesktopElements, $.kCGNullWindowID));
@@ -70,8 +72,10 @@ for (var i = 0; i < n; i++) {
   var name = w.objectForKey("kCGWindowName");
   var num = w.objectForKey("kCGWindowNumber").intValue;
   var pid = w.objectForKey("kCGWindowOwnerPID").intValue;
+  var running = $.NSRunningApplication.runningApplicationWithProcessIdentifier(pid);
+  var bundle = running && running.bundleURL ? ObjC.unwrap(running.bundleURL.path) : "";
   var b = w.objectForKey("kCGWindowBounds");
-  out.push([num, pid, owner ? ObjC.unwrap(owner) : "", name ? ObjC.unwrap(name) : "",
+  out.push([num, pid, bundle, owner ? ObjC.unwrap(owner) : "", name ? ObjC.unwrap(name) : "",
     b.objectForKey("X").intValue, b.objectForKey("Y").intValue,
     b.objectForKey("Width").intValue, b.objectForKey("Height").intValue].join("\t"));
 }
@@ -84,7 +88,7 @@ for (var i = 0; i < screens.count; i++) {
   var db = $.CGDisplayBounds(did);
   var dw = Math.round(db.size.width), dh = Math.round(db.size.height);
   var label = (screens.count > 1 ? "Display " + (i + 1) : "Entire screen") + " — " + dw + "×" + dh;
-  out.push(["display:" + did, 0, "Desktop", label,
+  out.push(["display:" + did, 0, "", "Desktop", label,
     Math.round(db.origin.x), Math.round(db.origin.y), dw, dh].join("\t"));
 }
 out.join("\n");`
@@ -104,21 +108,103 @@ func (darwinWindows) list() ([]winInfo, error) {
 			continue
 		}
 		f := strings.Split(line, "\t")
-		if len(f) < 8 {
+		if len(f) < 9 {
 			continue
 		}
 		// Title may itself contain tabs; the numeric fields are the last four.
 		n := len(f)
-		id, pid, owner := f[0], atoi(f[1]), f[2]
-		title := strings.Join(f[3:n-4], "\t")
+		id, pid, appPath, owner := f[0], atoi(f[1]), f[2], f[3]
+		title := strings.Join(f[4:n-4], "\t")
 		x, y := atoi(f[n-4]), atoi(f[n-3])
 		w, h := atoi(f[n-2]), atoi(f[n-1])
 		if w < 40 || h < 40 {
 			continue
 		}
-		wins = append(wins, winInfo{ID: id, PID: pid, App: owner, Title: title, X: x, Y: y, W: w, H: h})
+		wins = append(wins, winInfo{ID: id, PID: pid, AppPath: appPath, App: owner, Title: title, X: x, Y: y, W: w, H: h})
 	}
+	darwinAddWindowIcons(wins)
 	return wins, nil
+}
+
+// macOS exposes the canonical icon for any application bundle through
+// NSWorkspace. Render it into a small Retina-aware bitmap in one JXA process
+// for the whole batch: spawning osascript once per app makes opening the Apps
+// menu needlessly slow. The resulting PNG data URLs can be rendered directly
+// by the browser and stay end-to-end encrypted with the rest of the list.
+const jxaAppIconsScript = `ObjC.import("AppKit");
+function run(argv) {
+  // AppKit renders this point size at 2× on Retina hosts, yielding a crisp
+  // 24px bitmap for the browser without bloating the encrypted app list.
+  var out = [], n = 12;
+  for (var i = 0; i < argv.length; i++) {
+    try {
+      var path = String(argv[i]);
+      var src = $.NSWorkspace.sharedWorkspace.iconForFile(path);
+      if (!src) continue;
+      var dst = $.NSImage.alloc.initWithSize($.NSMakeSize(n, n));
+      dst.lockFocus;
+      src.drawInRectFromRectOperationFraction($.NSMakeRect(0, 0, n, n), $.NSZeroRect,
+        $.NSCompositingOperationCopy, 1);
+      dst.unlockFocus;
+      var rep = $.NSBitmapImageRep.imageRepWithData(dst.TIFFRepresentation);
+      var png = rep.representationUsingTypeProperties($.NSBitmapImageFileTypePNG, $({}));
+      out.push(path + "\t" + ObjC.unwrap(png.base64EncodedStringWithOptions(0)));
+    } catch (_) {}
+  }
+  return out.join("\n");
+}`
+
+var darwinIconCache sync.Map // bundle path -> data URL (empty string caches failures)
+
+func darwinIcons(paths []string) map[string]string {
+	icons := make(map[string]string, len(paths))
+	missing := make([]string, 0, len(paths))
+	seen := make(map[string]bool, len(paths))
+	for _, path := range paths {
+		if path == "" || seen[path] {
+			continue
+		}
+		seen[path] = true
+		if cached, ok := darwinIconCache.Load(path); ok {
+			if icon, _ := cached.(string); icon != "" {
+				icons[path] = icon
+			}
+			continue
+		}
+		missing = append(missing, path)
+	}
+	if len(missing) != 0 {
+		args := append([]string{"-l", "JavaScript", "-e", jxaAppIconsScript, "--"}, missing...)
+		out, err := run("osascript", args...)
+		found := make(map[string]string, len(missing))
+		if err == nil {
+			for _, line := range strings.Split(out, "\n") {
+				f := strings.SplitN(line, "\t", 2)
+				if len(f) == 2 && f[0] != "" && f[1] != "" {
+					found[f[0]] = "data:image/png;base64," + f[1]
+				}
+			}
+		}
+		for _, path := range missing {
+			icon := found[path]
+			darwinIconCache.Store(path, icon)
+			if icon != "" {
+				icons[path] = icon
+			}
+		}
+	}
+	return icons
+}
+
+func darwinAddWindowIcons(wins []winInfo) {
+	paths := make([]string, 0, len(wins))
+	for i := range wins {
+		paths = append(paths, wins[i].AppPath)
+	}
+	icons := darwinIcons(paths)
+	for i := range wins {
+		wins[i].Icon = icons[wins[i].AppPath]
+	}
 }
 
 // winMaxWidth is the width we downscale captured frames to. Retina windows
@@ -225,6 +311,25 @@ func (darwinWindows) listApps() ([]appInfo, error) {
 	sort.Slice(apps, func(i, j int) bool {
 		return strings.ToLower(apps[i].Name) < strings.ToLower(apps[j].Name)
 	})
+	paths := make([]string, len(apps))
+	for i := range apps {
+		paths[i] = apps[i].ID
+	}
+	icons := darwinIcons(paths)
+	// Keep comfortable headroom below the relay's 1 MiB encrypted-frame cap.
+	// Encryption base64-expands the JSON again, so cap the already-base64 icon
+	// strings at 560 KiB. Extremely large app collections retain names and use
+	// the browser's fallback tile after this budget is exhausted.
+	const iconBudget = 600 << 10
+	used := 0
+	for i := range apps {
+		icon := icons[apps[i].ID]
+		if icon == "" || used+len(icon) > iconBudget {
+			continue
+		}
+		apps[i].Icon = icon
+		used += len(icon)
+	}
 	return apps, nil
 }
 
