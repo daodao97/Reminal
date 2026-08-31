@@ -200,3 +200,45 @@ func TestWindowCapIsEnforced(t *testing.T) {
 		t.Errorf("expected the %d-window cap to be enforced", maxNoteWindows)
 	}
 }
+
+// TestBadgeDetachesWhenEmptied — a window with nothing left to show must be
+// detached from the helper, or an empty badge lingers on screen and `attached`
+// grows for the life of the daemon.
+func TestBadgeDetachesWhenEmptied(t *testing.T) {
+	d := startNotesService(t)
+	now := time.Now().Unix()
+	if _, err := NotesAdd(11, NoteInput{ID: "only", Title: "t", TS: now}); err != nil {
+		t.Fatal(err)
+	}
+	// Mark it attached the way a working helper would, so the detach path runs.
+	d.mu.Lock()
+	d.attached[11] = true
+	d.mu.Unlock()
+
+	if err := NotesRemove(11, "only"); err != nil {
+		t.Fatal(err)
+	}
+	d.mu.Lock()
+	stillAttached := d.attached[11]
+	d.mu.Unlock()
+	if stillAttached {
+		t.Error("window still attached after its last note was removed")
+	}
+
+	// Same for a whole-window clear.
+	if _, err := NotesAdd(12, NoteInput{ID: "a", Title: "t", TS: now}); err != nil {
+		t.Fatal(err)
+	}
+	d.mu.Lock()
+	d.attached[12] = true
+	d.mu.Unlock()
+	if err := NotesClear(12); err != nil {
+		t.Fatal(err)
+	}
+	d.mu.Lock()
+	stillAttached = d.attached[12]
+	d.mu.Unlock()
+	if stillAttached {
+		t.Error("window still attached after clear_notes")
+	}
+}

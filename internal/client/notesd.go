@@ -279,6 +279,7 @@ func (d *notesDaemon) add(win uint32, n windowNote) (string, error) {
 
 func (d *notesDaemon) remove(win uint32, id string) {
 	d.mu.Lock()
+	emptied := false
 	if list, ok := d.notes[win]; ok {
 		kept := list[:0]
 		for _, n := range list {
@@ -288,12 +289,16 @@ func (d *notesDaemon) remove(win uint32, id string) {
 		}
 		if len(kept) == 0 {
 			delete(d.notes, win)
+			emptied = true
 		} else {
 			d.notes[win] = kept
 		}
 	}
 	d.mu.Unlock()
 	_ = d.send(win, map[string]any{"cmd": "remove", "id": id})
+	if emptied {
+		d.detachBadge(win)
+	}
 	d.publish()
 }
 
@@ -302,7 +307,22 @@ func (d *notesDaemon) clear(win uint32) {
 	delete(d.notes, win)
 	d.mu.Unlock()
 	_ = d.send(win, map[string]any{"cmd": "clear"})
+	d.detachBadge(win)
 	d.publish()
+}
+
+// detachBadge drops the helper's panel for a window with nothing left to show.
+// Without it the helper keeps the window attached forever: an empty badge can
+// linger on screen, and `attached` grows for the life of the daemon.
+func (d *notesDaemon) detachBadge(win uint32) {
+	d.mu.Lock()
+	attached := d.attached[win]
+	delete(d.attached, win)
+	d.mu.Unlock()
+	if !attached {
+		return
+	}
+	_ = d.writeHelper(map[string]any{"cmd": "detach", "window": win})
 }
 
 // applyAct is a viewer's Done / Dismiss / Dismiss-all, arriving from a session
