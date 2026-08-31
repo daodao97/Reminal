@@ -1362,14 +1362,13 @@ func (s winSinks) expectsAck() bool { return len(s.confirmed) > 0 || s.ws }
 // winStream is the state machine for one mirrored window. One runs per
 // streamed id (see startWindowStream); all fields are goroutine-local.
 type winStream struct {
-	a               *Agent
-	b               windowBackend
-	w               winInfo
-	stop            <-chan struct{}
-	ack             <-chan uint64
-	quality         <-chan windowQuality
-	profile         windowQuality
-	profileExplicit bool
+	a       *Agent
+	b       windowBackend
+	w       winInfo
+	stop    <-chan struct{}
+	ack     <-chan uint64
+	quality <-chan windowQuality
+	profile windowQuality
 	// forceSend makes the next capture ship whatever the change detector
 	// thinks, and bypasses the relay pacing while it does. Raised for a viewer
 	// that has joined an in-flight stream and has no picture at all; cleared
@@ -1512,7 +1511,6 @@ func (s *winStream) run() {
 			return
 		}
 		s.negotiateCodec()
-		s.applyAutomaticQuality()
 		// A viewer lost sync (gap in the sequence): re-key before capturing, so
 		// the very next AU it receives is a self-contained entry point.
 		s.noteKeyRequest()
@@ -1598,29 +1596,10 @@ func (s *winStream) applyQuality() {
 			if !changed || newest == s.profile {
 				return
 			}
-			s.profileExplicit = true
 			s.setQuality(newest)
 			return
 		}
 	}
-}
-
-// applyAutomaticQuality keeps locally modified agents useful with the official
-// hosted viewer, which cannot know about a newly-added quality request yet.
-// Relay traffic gets a conservative sharper tier; when every viewer is on a
-// confirmed P2P channel, the stream can spend more pixels without loading the
-// shared service. A viewer that explicitly requested a profile remains the
-// authority (notably Save-Data/2G browsers).
-func (s *winStream) applyAutomaticQuality() {
-	if s.profileExplicit {
-		return
-	}
-	confirmed, _, _ := s.a.rtcSinks()
-	want := windowQuality{MaxWidth: 1920, Quality: 68}
-	if len(confirmed) > 0 && !wsSinkNeeded(s.a.framesWantedBy(), len(confirmed)) {
-		want = windowQuality{MaxWidth: 2880, Quality: 80}
-	}
-	s.setQuality(want)
 }
 
 func (s *winStream) setQuality(q windowQuality) {

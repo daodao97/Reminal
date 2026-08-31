@@ -7033,6 +7033,7 @@
       // old value was the host window's logical-point size, so the info panel
       // could claim a resolution unrelated to the pixels being decoded.
       const res = (p.gotFrame && p.img.width && p.img.height) ? (p.img.width + '×' + p.img.height) : '—';
+      const profile = p.qualityKey ? p.qualityKey.replace(':', '@') : '—';
       // Prune on READ. The rolling window is otherwise only trimmed when a
       // frame ARRIVES, so a stream that stopped kept reporting whatever rate
       // it last had — a frozen pane showing a healthy fps, which is the single
@@ -7069,6 +7070,7 @@
         + health
         + '<div class="row"><span class="k">Encryption</span><span class="v">' + enc + '</span></div>'
         + '<div class="row"><span class="k">Resolution</span><span class="v">' + res + '</span></div>'
+        + '<div class="row"><span class="k">Requested</span><span class="v">' + profile + '</span></div>'
         + '<div class="row"><span class="k">Frame rate</span><span class="v">' + rate + '</span></div>';
     }
 
@@ -8647,12 +8649,14 @@
       const displayPx = Math.ceil(Math.max(1, fr.width) * Math.max(1, window.devicePixelRatio || 1));
       let maxWidth = Math.max(1100, Math.min(2880, displayPx));
       let quality = 68;
-      // A confirmed direct WebRTC path does not traverse the relay and its
-      // observed throughput is more trustworthy than Network Information's
-      // coarse, often stale internet estimate. Preserve only an explicit
-      // Save-Data request; otherwise use the full native-detail profile so a
-      // Retina source remains sharp when the pane is enlarged or pinch-zoomed.
-      if (lastFrameVia === 'webrtc' && !save) { maxWidth = 2880; quality = 80; }
+      // A confirmed direct WebRTC path can use a higher quality ceiling, but
+      // pane size still chooses the resolution tier. A small pane should not
+      // restart capture at 2880 merely because its route is peer-to-peer.
+      // Live connection stats can move this tier later; Network Information
+      // remains only a coarse fallback and Save-Data stays authoritative.
+      if (lastFrameVia === 'webrtc' && !save) {
+        quality = maxWidth >= 2400 ? 80 : maxWidth >= 1600 ? 76 : 72;
+      }
       else if (save || effective === 'slow-2g' || effective === '2g' || (downlink > 0 && downlink < 1.5)) { maxWidth = 800; quality = 40; }
       else if (effective === '3g' || (downlink > 0 && downlink < 4) || rtt > 300) { maxWidth = Math.min(maxWidth, 1100); quality = 48; }
       // A relay route is not evidence of a slow network — NAT can prevent P2P
@@ -8673,6 +8677,7 @@
         const key = q.max_width + ':' + q.quality;
         if (pane.qualityKey === key) return;
         pane.qualityKey = key;
+        if (pane.infoShown) pane.infoEl.innerHTML = paneInfoHtml(pane);
         sendWin('window_ctl', { action: 'quality', id: pane.w.id, viewer: viewerId, ...q });
       };
       if (immediate) {

@@ -34,20 +34,12 @@ func TestTuneWindowStreamKeepsNewestProfile(t *testing.T) {
 	}
 }
 
-func TestAutomaticWindowQualityUsesSharperRelayTier(t *testing.T) {
-	s := &winStream{a: &Agent{}, profile: (windowQuality{}).normalized()}
-	s.applyAutomaticQuality()
-	want := windowQuality{MaxWidth: 1920, Quality: 68}
-	if s.profile != want {
-		t.Fatalf("automatic relay profile = %+v, want %+v", s.profile, want)
-	}
-
-	// An explicit browser preference (for example Save-Data) must not be
-	// overwritten by the host's transport heuristic.
-	s.profile = windowQuality{MaxWidth: 800, Quality: 40}
-	s.profileExplicit = true
-	s.applyAutomaticQuality()
-	if s.profile != (windowQuality{MaxWidth: 800, Quality: 40}) {
-		t.Fatalf("automatic profile overwrote explicit request: %+v", s.profile)
+func TestLegacyViewerKeepsExistingCaptureProfile(t *testing.T) {
+	// Viewers predating quality requests send no profile. Keep their capture
+	// behavior unchanged until updated viewer HTML explicitly asks to sharpen.
+	got := (windowQuality{}).normalized()
+	want := windowQuality{MaxWidth: winMaxWidth, Quality: winCaptureQuality}
+	if got != want {
+		t.Fatalf("legacy viewer profile = %+v, want %+v", got, want)
 	}
 }
