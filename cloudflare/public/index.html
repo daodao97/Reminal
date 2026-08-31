@@ -6820,7 +6820,8 @@
 
     // Close the recents <details> on any outside click. Native <details>
     // doesn't have this behavior — only the summary toggles it — so a
-    // dropdown left open after picking a row would shadow the terminal.
+    // dropdown left open after picking a row would shadow the terminal. This
+    // runs in capture phase so pane click isolation cannot hide an outside tap.
     document.addEventListener('click', (e) => {
       const recents = document.getElementById('recents');
       if (recents && recents.open && !recents.contains(e.target)) {
@@ -6838,7 +6839,7 @@
       if (host && host.open && !host.contains(e.target)) {
         host.open = false;
       }
-    });
+    }, true);
     // While the Host dropdown is open, poll the stats live and refresh the
     // panel; stop polling when it closes.
     let hostPollTimer = null;
@@ -7577,6 +7578,9 @@
       for (const type of ['touchstart', 'touchmove', 'touchend', 'touchcancel']) {
         el.addEventListener(type, (e) => {
           e.stopPropagation();
+          // The pane currently owns every touch gesture. If native scrollable
+          // or selectable controls are added inside it later, exempt those
+          // targets here before preventing touchmove's browser default.
           if (type === 'touchmove') e.preventDefault();
         }, { passive: false });
       }
@@ -8817,10 +8821,11 @@
         if (ptrs.size === 2 && e.pointerType !== 'mouse') {
           const [a, b] = [...ptrs.values()];
           const cx = (a.x + b.x) / 2, cy = (a.y + b.y) / 2, d0 = dist(a, b);
-          // Once zoomed, two fingers always manipulate the local viewport:
-          // changing their distance zooms and moving their midpoint pans. At
-          // 1×, a parallel two-finger swipe still scrolls the remote app.
-          pinch = { d: d0 || 1, mx: cx, my: cy, z: pane.zoom, px: pane.panX, py: pane.panY, startD: d0, lastCx: cx, lastCy: cy, mode: pane.zoom > 1.001 ? 'view' : null, t: Date.now() };
+          // Both pinch and parallel movement enter one deterministic viewport
+          // mode. Midpoint movement pans while room remains; any movement the
+          // pan bounds cannot consume chains into remote scrolling. At 1×
+          // there is no pan room, so a parallel swipe scrolls immediately.
+          pinch = { d: d0 || 1, mx: cx, my: cy, z: pane.zoom, startD: d0, lastCx: cx, lastCy: cy, mode: null, scaled: false, t: Date.now() };
           downAt = 0; path = null; endDrag(false);
           return;
         }
@@ -8848,25 +8853,34 @@
         if (pinch && ptrs.size >= 2) {
           const [a, b] = [...ptrs.values()];
           const d = dist(a, b), cx = (a.x + b.x) / 2, cy = (a.y + b.y) / 2;
+          const fingerDX = cx - pinch.lastCx, fingerDY = cy - pinch.lastCy;
+          const scaleMoved = Math.abs(d - pinch.startD) > 16;
+          const midpointMoved = Math.hypot(cx - pinch.mx, cy - pinch.my) > 16;
           if (!pinch.mode) {
-            if (Math.abs(d - pinch.startD) > 16) pinch.mode = 'view';
-            else if (Math.hypot(cx - pinch.mx, cy - pinch.my) > 16) pinch.mode = 'scroll';
+            if (scaleMoved || midpointMoved) pinch.mode = 'view';
           }
+          if (scaleMoved) pinch.scaled = true;
           if (pinch.mode === 'view') {
-            // Zoom and pan are applied together. The old zoom-only branch did
-            // move the midpoint while pinching, but a fresh parallel gesture
-            // on an already-zoomed image was classified as remote scrolling,
-            // making the enlarged viewport effectively impossible to drag.
-            pane.zoom = Math.max(1, Math.min(MAX_ZOOM, pinch.z * (d / pinch.d)));
-            pane.panX = pinch.px + (cx - pinch.mx);
-            pane.panY = pinch.py + (cy - pinch.my);
+            // Once a real distance change wins the threshold, keep the whole
+            // gesture local: combined pinch+pan must not accidentally scroll.
+            if (pinch.scaled) pane.zoom = Math.max(1, Math.min(MAX_ZOOM, pinch.z * (d / pinch.d)));
+            const beforeX = pane.panX, beforeY = pane.panY;
+            pane.panX += fingerDX;
+            pane.panY += fingerDY;
             clampPan(); applyTransform();
-          } else if (pinch.mode === 'scroll') {
-            // Map finger travel to window pixels (the pane is downscaled) so the
-            // content tracks the fingers. Fingers up → scroll down.
-            const rr = img.getBoundingClientRect();
-            const scaleX = (pane.w.w || rr.width) / rr.width, scaleY = (pane.w.h || rr.height) / rr.height;
-            queueScroll(fracAt(cx, cy).fx, fracAt(cx, cy).fy, (pinch.lastCx - cx) * scaleX, (pinch.lastCy - cy) * scaleY);
+            if (!pinch.scaled) {
+              // Nested-scroll chaining: consume midpoint travel as local pan
+              // first, then send only the remainder once an axis reaches its
+              // edge. Incremental pan avoids a dead zone when reversing there.
+              const residualX = fingerDX - (pane.panX - beforeX);
+              const residualY = fingerDY - (pane.panY - beforeY);
+              if (Math.abs(residualX) > 0.25 || Math.abs(residualY) > 0.25) {
+                const rr = img.getBoundingClientRect();
+                const scaleX = (pane.w.w || rr.width) / rr.width, scaleY = (pane.w.h || rr.height) / rr.height;
+                const f = fracAt(cx, cy);
+                queueScroll(f.fx, f.fy, -residualX * scaleX, -residualY * scaleY);
+              }
+            }
           }
           pinch.lastCx = cx; pinch.lastCy = cy;
           return;
