@@ -160,7 +160,7 @@ func (a *Agent) handleControlConn(conn net.Conn) {
 		_, _ = fmt.Fprintln(conn, "ok")
 	case line == "note-acts":
 		// Drained by `reminal mcp` so viewer-side dismissals reach it.
-		_, _ = fmt.Fprintln(conn, "ok", a.takeNoteActs())
+		_, _ = fmt.Fprintln(conn, "ok", a.recentActs())
 	case strings.HasPrefix(line, "notes "):
 		// Window annotations published by `reminal mcp`. Whole-state, not deltas.
 		raw := strings.TrimSpace(strings.TrimPrefix(line, "notes "))

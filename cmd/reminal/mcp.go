@@ -17,9 +17,18 @@ package main
 // carries protocol traffic ONLY — anything else corrupts the stream, so all
 // diagnostics go to stderr.
 //
-// State is deliberately in-memory: notes live exactly as long as their window
-// (a closed window's list is forgotten by design), so there is nothing to
-// persist and the ephemeral CGWindowID is a perfectly good key.
+// This process holds NO state of its own when the daemon is reachable, which is
+// the normal case (install.sh starts the daemon regardless of ownership). A
+// machine runs one `reminal mcp` per registered coding agent — four of them is
+// ordinary — and when each kept its own copy of the notes they overwrote one
+// another: a note dismissed on a phone came back from whichever publisher had
+// not heard, and one publisher's update erased another's windows. The daemon is
+// the machine's singleton, so it owns the store and the badge and every server
+// here is a thin client. The in-process path is kept only as a fallback for a
+// machine with no daemon running.
+//
+// Notes are still ephemeral either way: they live exactly as long as their
+// window, so there is nothing to persist and the CGWindowID is a fine key.
 
 import (
 	"bufio"
@@ -36,6 +45,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/reminal/reminal/internal/client"
 )
 
 const mcpProtocolFallback = "2024-11-05"
@@ -83,6 +94,15 @@ type mcpServer struct {
 	attached map[uint32]bool  // windows currently carrying a badge
 	events   []map[string]any // replies from the user, oldest first
 	pollOnce sync.Once
+	// lastActSeq is the highest viewer-action sequence this process has applied.
+	lastActSeq uint64
+	// daemonOwned is set when the daemon's notes service answered at startup.
+	// Then this process keeps NO state: it forwards every tool call and the
+	// daemon owns the store and the badge. The in-process path below is only a
+	// fallback for a machine with no daemon running.
+	daemonOwned bool
+	// lastReplySeq is our cursor into the daemon's badge-event log.
+	lastReplySeq uint64
 	// notes mirrors what each window is showing. Duplicated from the helper
 	// because web viewers need the same list and they reach it through the
 	// reminal agent, which is a different process tree entirely.
@@ -155,6 +175,9 @@ func (s *mcpServer) publishNotes() {
 // rather than pushed because nothing can call into an MCP server: it is a stdio
 // child of somebody else's client, with no address of its own.
 func (s *mcpServer) drainViewerActs() {
+	if s.daemonOwned {
+		return // the daemon owns the store and applies viewer actions itself
+	}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return
@@ -164,6 +187,7 @@ func (s *mcpServer) drainViewerActs() {
 		Window string `json:"window"`
 		ID     string `json:"id"`
 		Action string `json:"action"`
+		Seq    uint64 `json:"seq"`
 	}
 	for _, sock := range socks {
 		conn, err := net.DialTimeout("unix", sock, 300*time.Millisecond)
@@ -185,11 +209,30 @@ func (s *mcpServer) drainViewerActs() {
 			Window string `json:"window"`
 			ID     string `json:"id"`
 			Action string `json:"action"`
+			Seq    uint64 `json:"seq"`
 		}
 		if json.Unmarshal([]byte(payload), &batch) == nil {
 			acts = append(acts, batch...)
 		}
 	}
+	if len(acts) == 0 {
+		return
+	}
+
+	// The agent serves a time-windowed log, not a drain-once queue, so every
+	// publisher sees every action — including the ones this process already
+	// applied. Skip those, or a single dismissal would re-fire on each 2s poll
+	// for as long as it stays in the window.
+	fresh, highest := acts[:0], s.lastActSeq
+	for _, a := range acts {
+		if a.Seq > s.lastActSeq {
+			fresh = append(fresh, a)
+			if a.Seq > highest {
+				highest = a.Seq
+			}
+		}
+	}
+	acts, s.lastActSeq = fresh, highest
 	if len(acts) == 0 {
 		return
 	}
@@ -204,8 +247,10 @@ func (s *mcpServer) drainViewerActs() {
 		win := uint32(w64)
 		switch a.Action {
 		case "dismiss_all":
-			delete(s.notes, win)
-			changed = true
+			if _, ok := s.notes[win]; ok {
+				delete(s.notes, win)
+				changed = true
+			}
 		case "dismiss":
 			if list, ok := s.notes[win]; ok {
 				kept := list[:0]
@@ -223,7 +268,7 @@ func (s *mcpServer) drainViewerActs() {
 			}
 		case "handback":
 			for i := range s.notes[win] {
-				if s.notes[win][i].ID == a.ID {
+				if s.notes[win][i].ID == a.ID && s.notes[win][i].Status != "handback" {
 					s.notes[win][i].Status = "handback"
 					changed = true
 				}
@@ -571,6 +616,21 @@ func (s *mcpServer) callTool(name string, args map[string]any) (string, error) {
 		seq := s.seq
 		s.mu.Unlock()
 		id := argStr(args, "note_id", fmt.Sprintf("n%d-%d", time.Now().UnixMilli(), seq))
+		if s.daemonOwned {
+			warn, err := client.NotesAdd(wid, client.NoteInput{
+				ID: id, Status: argStr(args, "status", "info"), Title: title,
+				Body: argStr(args, "body", ""), Author: argStr(args, "author", "agent"),
+				TS: time.Now().Unix(),
+			})
+			if err != nil {
+				return "", err
+			}
+			msg := fmt.Sprintf("Note %s posted to window %d.", id, wid)
+			if warn != "" {
+				msg += " (" + warn + ")"
+			}
+			return msg, nil
+		}
 		err = s.send(wid, map[string]any{
 			"cmd": "upsert", "id": id,
 			"status": argStr(args, "status", "info"),
@@ -611,6 +671,12 @@ func (s *mcpServer) callTool(name string, args map[string]any) (string, error) {
 		if id == "" {
 			return "", errors.New("note_id is required")
 		}
+		if s.daemonOwned {
+			if err := client.NotesRemove(wid, id); err != nil {
+				return "", err
+			}
+			return "Removed " + id + ".", nil
+		}
 		if err := s.send(wid, map[string]any{"cmd": "remove", "id": id}); err != nil {
 			return "", err
 		}
@@ -631,6 +697,12 @@ func (s *mcpServer) callTool(name string, args map[string]any) (string, error) {
 		if err != nil {
 			return "", err
 		}
+		if s.daemonOwned {
+			if err := client.NotesClear(wid); err != nil {
+				return "", err
+			}
+			return "Cleared.", nil
+		}
 		if err := s.send(wid, map[string]any{"cmd": "clear"}); err != nil {
 			return "", err
 		}
@@ -645,6 +717,21 @@ func (s *mcpServer) callTool(name string, args map[string]any) (string, error) {
 
 	case "read_replies":
 		want, hasWant := args["window_id"].(float64)
+		if s.daemonOwned {
+			// Pull anything new from the daemon's log into the local buffer, then
+			// fall through to the same filter/drain below. The cursor is ours
+			// alone, so another MCP client reading its replies cannot blind us.
+			evs, seq, err := client.NotesReplies(s.lastReplySeq)
+			if err == nil {
+				s.mu.Lock()
+				s.events = append(s.events, evs...)
+				if len(s.events) > maxReplyEvents {
+					s.events = s.events[len(s.events)-maxReplyEvents:]
+				}
+				s.lastReplySeq = seq
+				s.mu.Unlock()
+			}
+		}
 		s.mu.Lock()
 		var out, keep []map[string]any
 		for _, ev := range s.events {
@@ -682,6 +769,9 @@ type rpcMessage struct {
 
 func runMCP(_ []string) error {
 	srv := newMCPServer()
+	// Ask once, at startup, who owns the notes. Reachable daemon (the normal
+	// case) => this process is stateless and every tool call is forwarded.
+	srv.daemonOwned = client.NotesDaemonReachable()
 	defer srv.shutdown()
 
 	out := json.NewEncoder(os.Stdout)

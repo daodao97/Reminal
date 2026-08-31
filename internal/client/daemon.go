@@ -51,6 +51,11 @@ func RunDaemon() error {
 		// one reminal.app grant covers every session.
 		go serveMirror(stop)
 	}
+	// The daemon also owns the window notes and the one badge helper, so the N
+	// `reminal mcp` processes a machine runs can't each hold a private copy and
+	// overwrite each other. Served on every platform: the badge is macOS-only
+	// today, but mirroring notes to a phone is not.
+	go ServeNotes(stop)
 	runDirectoryHost(stop, true)
 	return nil
 }
