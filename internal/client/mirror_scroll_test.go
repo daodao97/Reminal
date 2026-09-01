@@ -382,6 +382,10 @@ func TestAbandonedDragReleasesTheButton(t *testing.T) {
 		if ups != 1 {
 			t.Fatalf("got %d releases, want exactly 1", ups)
 		}
+		got := b.got()
+		if len(got) < 3 || got[len(got)-2] != "move" || got[len(got)-1] != "up" {
+			t.Fatalf("clean end phases = %v, want a final move before up", got)
+		}
 	})
 }
 

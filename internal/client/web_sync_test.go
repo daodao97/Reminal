@@ -6,6 +6,7 @@ package client
 import (
 	"crypto/sha256"
 	"os"
+	"strings"
 	"testing"
 )
 
@@ -34,5 +35,31 @@ func TestWebIndexCopiesInSync(t *testing.T) {
 		t.Fatalf("%s and %s have diverged (%d vs %d bytes).\n"+
 			"After editing the viewer, copy it across:\n"+
 			"  cp %s %s", embedded, worker, len(a), len(b), embedded, worker)
+	}
+}
+
+// These are event-order contracts in the shipped viewer, not styling details:
+// the dropdown listener must run before a pane fences clicks, and a two-finger
+// swipe must preserve both local pan and edge-chained remote scrolling.
+func TestPaneGestureContracts(t *testing.T) {
+	b, err := os.ReadFile("web/index.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(b)
+	for _, required := range []string{
+		"runs in capture phase so pane click isolation cannot hide an outside tap",
+		"}, true);\n    // While the Host dropdown is open",
+		"mode: null, scaled: false",
+		"const residualX = fingerDX - (pane.panX - beforeX)",
+		"queueScroll(f.fx, f.fy, -residualX * scaleX, -residualY * scaleY)",
+		"targets here before preventing touchmove's browser default",
+	} {
+		if !strings.Contains(s, required) {
+			t.Fatalf("viewer is missing pane gesture contract %q", required)
+		}
+	}
+	if strings.Contains(s, "mode: pane.zoom > 1.001 ? 'view' : null") {
+		t.Fatal("zoomed panes still force local-only view mode; remote edge scrolling is unreachable")
 	}
 }

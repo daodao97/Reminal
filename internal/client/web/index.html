@@ -958,7 +958,7 @@
        it where there's a real pointer with hover (desktop). */
     .wpane-kbd { display: none; }
     @media (any-pointer: coarse) { .wpane-kbd { display: inline-flex; } }
-    .wpane-body { position: relative; background: #000; line-height: 0; overflow: hidden; }
+    .wpane-body { position: relative; background: #000; line-height: 0; overflow: hidden; overscroll-behavior: contain; }
     /* Standalone pane mode (?pane=): the window fills the tab. The pane keeps
        its own title bar so keyboard and info stay reachable; pop-out and close
        go, since this tab IS the pane. */
@@ -2137,6 +2137,7 @@
     // second ✂ tap, or a tap anywhere outside it.
     document.addEventListener('pointerdown', (e) => {
       if (!snipdockManage) return;
+      if (e.target.closest('.wpane')) return; // window gestures are an isolated input surface
       if (snipdockEl.contains(e.target) || snipHandle.contains(e.target)) return;
       closeSnipdock();
     }, true);
@@ -6740,6 +6741,7 @@
       // (which we exclude), and before xterm re-selects on a fresh press.
       document.addEventListener('pointerdown', (e) => {
         if (!active) return;
+        if (e.target.closest('.wpane')) return; // don't let pane gestures mutate terminal selection
         if (e.target.closest('#sel-toolbar, #sel-handle-start, #sel-handle-end')) return;
         clearSelection();
         // A tap on the terminal itself will fire a follow-up click; swallow it
@@ -6829,7 +6831,8 @@
 
     // Close the recents <details> on any outside click. Native <details>
     // doesn't have this behavior — only the summary toggles it — so a
-    // dropdown left open after picking a row would shadow the terminal.
+    // dropdown left open after picking a row would shadow the terminal. This
+    // runs in capture phase so pane click isolation cannot hide an outside tap.
     document.addEventListener('click', (e) => {
       const recents = document.getElementById('recents');
       if (recents && recents.open && !recents.contains(e.target)) {
@@ -6847,7 +6850,7 @@
       if (host && host.open && !host.contains(e.target)) {
         host.open = false;
       }
-    });
+    }, true);
     // While the Host dropdown is open, poll the stats live and refresh the
     // panel; stop polling when it closes.
     let hostPollTimer = null;
@@ -7602,7 +7605,26 @@
       paneDrag(pane, bar);
       paneResize(pane, rz);
       paneInput(pane, img);
-      el.addEventListener('pointerdown', () => focusPane(w.id));
+      // A pane is its own gesture surface. Stop bubbling pointer/touch/wheel
+      // events into page-level docks, terminal selection and scroll handlers.
+      // Target handlers still run first; this fence is on the pane's bubble
+      // phase, while the capture-phase globals explicitly ignore .wpane above.
+      el.addEventListener('pointerdown', (e) => { e.stopPropagation(); focusPane(w.id); });
+      for (const type of ['pointermove', 'pointerup', 'pointercancel', 'click', 'dblclick', 'contextmenu', 'wheel']) {
+        el.addEventListener(type, (e) => e.stopPropagation());
+      }
+      for (const type of ['touchstart', 'touchmove', 'touchend', 'touchcancel']) {
+        el.addEventListener(type, (e) => {
+          e.stopPropagation();
+          // The pane currently owns every touch gesture. If native scrollable
+          // or selectable controls are added inside it later, exempt those
+          // targets here before preventing touchmove's browser default.
+          if (type === 'touchmove') e.preventDefault();
+        }, { passive: false });
+      }
+      for (const type of ['gesturestart', 'gesturechange', 'gestureend']) {
+        el.addEventListener(type, (e) => { e.preventDefault(); e.stopPropagation(); }, { passive: false });
+      }
       closeBtn.addEventListener('click', (e) => { e.stopPropagation(); closePane(w.id); });
       popBtn.addEventListener('click', (e) => { e.stopPropagation(); popOutPane(pane); });
       kbdBtn.addEventListener('click', (e) => {
@@ -8905,10 +8927,11 @@
         if (ptrs.size === 2 && e.pointerType !== 'mouse') {
           const [a, b] = [...ptrs.values()];
           const cx = (a.x + b.x) / 2, cy = (a.y + b.y) / 2, d0 = dist(a, b);
-          // Two-finger gesture: locked to 'zoom' (fingers spread → pinch-zoom the
-          // pane) or 'scroll' (fingers move together → scroll the window) on the
-          // first decisive movement, so the two don't fight each other.
-          pinch = { d: d0 || 1, mx: cx, my: cy, z: pane.zoom, px: pane.panX, py: pane.panY, startD: d0, lastCx: cx, lastCy: cy, mode: null, t: Date.now() };
+          // Both pinch and parallel movement enter one deterministic viewport
+          // mode. Midpoint movement pans while room remains; any movement the
+          // pan bounds cannot consume chains into remote scrolling. At 1×
+          // there is no pan room, so a parallel swipe scrolls immediately.
+          pinch = { d: d0 || 1, mx: cx, my: cy, z: pane.zoom, startD: d0, lastCx: cx, lastCy: cy, mode: null, scaled: false, t: Date.now() };
           downAt = 0; path = null; endDrag(false);
           return;
         }
@@ -8936,21 +8959,34 @@
         if (pinch && ptrs.size >= 2) {
           const [a, b] = [...ptrs.values()];
           const d = dist(a, b), cx = (a.x + b.x) / 2, cy = (a.y + b.y) / 2;
+          const fingerDX = cx - pinch.lastCx, fingerDY = cy - pinch.lastCy;
+          const scaleMoved = Math.abs(d - pinch.startD) > 16;
+          const midpointMoved = Math.hypot(cx - pinch.mx, cy - pinch.my) > 16;
           if (!pinch.mode) {
-            if (Math.abs(d - pinch.startD) > 16) pinch.mode = 'zoom';
-            else if (Math.hypot(cx - pinch.mx, cy - pinch.my) > 16) pinch.mode = 'scroll';
+            if (scaleMoved || midpointMoved) pinch.mode = 'view';
           }
-          if (pinch.mode === 'zoom') {
-            pane.zoom = Math.max(1, Math.min(MAX_ZOOM, pinch.z * (d / pinch.d)));
-            pane.panX = pinch.px + (cx - pinch.mx);
-            pane.panY = pinch.py + (cy - pinch.my);
+          if (scaleMoved) pinch.scaled = true;
+          if (pinch.mode === 'view') {
+            // Once a real distance change wins the threshold, keep the whole
+            // gesture local: combined pinch+pan must not accidentally scroll.
+            if (pinch.scaled) pane.zoom = Math.max(1, Math.min(MAX_ZOOM, pinch.z * (d / pinch.d)));
+            const beforeX = pane.panX, beforeY = pane.panY;
+            pane.panX += fingerDX;
+            pane.panY += fingerDY;
             clampPan(); applyTransform();
-          } else if (pinch.mode === 'scroll') {
-            // Map finger travel to window pixels (the pane is downscaled) so the
-            // content tracks the fingers. Fingers up → scroll down.
-            const rr = img.getBoundingClientRect();
-            const scaleX = (pane.w.w || rr.width) / rr.width, scaleY = (pane.w.h || rr.height) / rr.height;
-            queueScroll(fracAt(cx, cy).fx, fracAt(cx, cy).fy, (pinch.lastCx - cx) * scaleX, (pinch.lastCy - cy) * scaleY);
+            if (!pinch.scaled) {
+              // Nested-scroll chaining: consume midpoint travel as local pan
+              // first, then send only the remainder once an axis reaches its
+              // edge. Incremental pan avoids a dead zone when reversing there.
+              const residualX = fingerDX - (pane.panX - beforeX);
+              const residualY = fingerDY - (pane.panY - beforeY);
+              if (Math.abs(residualX) > 0.25 || Math.abs(residualY) > 0.25) {
+                const rr = img.getBoundingClientRect();
+                const scaleX = (pane.w.w || rr.width) / rr.width, scaleY = (pane.w.h || rr.height) / rr.height;
+                const f = fracAt(cx, cy);
+                queueScroll(f.fx, f.fy, -residualX * scaleX, -residualY * scaleY);
+              }
+            }
           }
           pinch.lastCx = cx; pinch.lastCy = cy;
           return;
@@ -8964,7 +9000,10 @@
           if (mouseBtn === 0 && moved && dragPhasesOK()) {
             const f = frac(e);
             if (!dragLive) dragBegin(path && path.length ? path[0] : f);
-            else dragMove(f);
+            // Include the threshold-crossing movement itself. Previously the
+            // first move only pressed the button; a quick release then had no
+            // dragged event, so many apps treated it as a click, not a drag.
+            dragMove(f);
           }
           return;
         }
@@ -9037,7 +9076,7 @@
       img.addEventListener('pointercancel', endPointer);
       // Desktop: mouse wheel / trackpad scroll over the pane scrolls the window.
       img.addEventListener('wheel', (e) => {
-        e.preventDefault();
+        e.preventDefault(); e.stopPropagation();
         focusPane(pane.w.id);
         const f = frac(e);
         const m = e.deltaMode === 1 ? 16 : (e.deltaMode === 2 ? img.getBoundingClientRect().height : 1);
