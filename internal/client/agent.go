@@ -308,6 +308,11 @@ type Agent struct {
 	// are delivered on, so streamWindow can pace to the viewer (see streamWindow).
 	// Guarded by winMu.
 	winAck map[string]chan uint64
+	// winQuality carries browser-requested capture profiles to live streams.
+	// The request is derived from the pane's rendered pixel size and the
+	// browser's current network hint, so a large pane on a good link can be
+	// sharp without forcing that cost on every viewer. Guarded by winMu.
+	winQuality map[string]chan windowQuality
 	// winKeyReq maps a streaming window's id to a flag a viewer raises when it
 	// detects a gap in the H.264 frame sequence and needs a fresh keyframe to
 	// resync. A flag rather than a channel: many gapped frames coalesce into
