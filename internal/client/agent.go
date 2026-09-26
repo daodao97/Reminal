@@ -105,6 +105,9 @@ type Agent struct {
 	// spawn creates a detached session on this host for TypeNewSession. A
 	// field so tests can watch it; nil means Spawn.
 	spawn func(name, cwd string) (*SpawnedSession, error)
+	// integrate runs this binary's `integrate` subcommand for TypeDirIntegrate.
+	// A field so tests can watch it; nil means runIntegrateCommand.
+	integrate func(args []string) ([]byte, error)
 	// dirLimits rate-limits the machine channel's actions (machine mode only).
 	dirLimits *dirLimits
 	buf       *scrollback
@@ -1182,6 +1185,7 @@ func (a *Agent) activeRecord(viewers int) session.Active {
 	attn := a.attnState
 	attnSince := a.attnSince
 	attnFG := a.attnFG
+	attnFGAt := a.attnFGAt
 	a.metaMu.Unlock()
 	if last.IsZero() {
 		last = a.startedAt
@@ -1202,6 +1206,7 @@ func (a *Agent) activeRecord(viewers int) session.Active {
 		Attn:         attn,
 		AttnSince:    attnSince,
 		Fg:           attnFG,
+		FgSince:      attnFGAt,
 	}
 }
 
@@ -2853,6 +2858,8 @@ func (a *Agent) runReader(conn *websocket.Conn, cursorCh chan uint64) error {
 			a.goGuarded("dir revoke-self", func() { a.handleDirRevokeSelf(conn, msg.Data) })
 		case protocol.TypeDirKill:
 			a.goGuarded("dir kill", func() { a.handleDirKill(conn, msg.Data) })
+		case protocol.TypeDirIntegrate:
+			a.goGuarded("dir integrate", func() { a.handleDirIntegrate(conn, msg.Data) })
 		case protocol.TypeData:
 			data, err := a.box.Decrypt(msg.Data)
 			if err != nil {

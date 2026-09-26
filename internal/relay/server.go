@@ -123,7 +123,7 @@ var forwardableTypes = map[protocol.MessageType]bool{
 	protocol.TypeKexInit: true, protocol.TypeKexResp: true,
 	protocol.TypeOwnerInit: true, protocol.TypeOwnerResp: true,
 	protocol.TypeDirQuery: true, protocol.TypeDirResp: true, protocol.TypeDirRename: true,
-	protocol.TypeDirRevokeSelf: true, protocol.TypeDirKill: true,
+	protocol.TypeDirRevokeSelf: true, protocol.TypeDirKill: true, protocol.TypeDirIntegrate: true,
 	protocol.TypeWindowList: true, protocol.TypeWindowCtl: true,
 	protocol.TypeWindowFrame: true, protocol.TypeWindowInput: true, protocol.TypeWindowAck: true,
 	protocol.TypeWindowClose: true,
