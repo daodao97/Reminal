@@ -99,6 +99,10 @@ type Active struct {
 	// "claude", "python3". It is what tells a session running an agent from one
 	// that is a plain terminal doing a job of its own.
 	Fg string `json:"fg,omitempty"`
+	// FgSince is when Fg last changed — roughly when the foreground program
+	// started. Lets the Machines view tell whether a running agent predates a
+	// `reminal integrate` run (and so still lacks the tools until restarted).
+	FgSince time.Time `json:"fg_since,omitzero"`
 }
 
 // LastActive returns the best available "last used" timestamp: LastActivity

@@ -84,6 +84,14 @@ const (
 	// The host SIGTERMs (then SIGKILLs) the target agent and replies echoing
 	// req_id.
 	TypeDirKill MessageType = "dir_kill"
+	// TypeDirIntegrate asks the directory host about, or to run, `reminal
+	// integrate` for the coding agents on the machine. Data is either
+	// {"check":true} or {"apply":"claude","req_id"} encrypted under the channel
+	// key — owner-gated like new_session, since applying edits the user's own
+	// agent configs. The host runs its own binary's `integrate` subcommand and
+	// replies with a TypeDirIntegrate echoing req_id: ok/error, the command's
+	// output on apply, and the per-agent IntegrationStatus list either way.
+	TypeDirIntegrate MessageType = "dir_integrate"
 	// TypeCopyAck is sent by the paste side of a rendezvous AFTER it has
 	// received every chunk and written the file, to tell the source the
 	// transfer landed. The source waits for it before closing — otherwise
@@ -379,6 +387,11 @@ type DirSession struct {
 	// Fg is the program in the session's foreground ("bash", "claude",
 	// "python3") — what says whether an agent or a plain terminal is there.
 	Fg string `json:"fg,omitempty"`
+	// FgSince is when Fg last changed (unix seconds): roughly when the
+	// foreground program was started. Against IntegrationStatus.ConfigMtime it
+	// says whether a running agent predates its reminal setup and so still
+	// lacks the tools until it is restarted. Zero from hosts too old to report.
+	FgSince int64 `json:"fg_since,omitempty"`
 	// SearchHits is filled when the directory query carried a regex: snippets
 	// from this session's live scrollback. Omitted on a plain listing, and by
 	// hosts that do not search yet (they still return the session list).
@@ -389,6 +402,41 @@ type DirSession struct {
 	Transcript          string `json:"transcript,omitempty"`
 	TranscriptTruncated bool   `json:"transcript_truncated,omitempty"`
 	TranscriptOK        bool   `json:"transcript_ok,omitempty"`
+}
+
+// IntegrationStatus is what `reminal integrate --check` knows about one coding
+// agent on a machine: whether it is on PATH, whether its config registers a
+// reminal MCP server, whether that registration points at THIS reminal, and how
+// to restart it without losing the conversation. Produced by the CLI (--json)
+// and carried over the machine channel in a TypeDirIntegrate reply.
+type IntegrationStatus struct {
+	Bin  string `json:"bin"`  // the agent's binary name, e.g. "claude"
+	Name string `json:"name"` // human label, e.g. "Claude Code"
+	// Installed is whether the binary was found on the user's PATH.
+	Installed bool `json:"installed"`
+	// Integrated is whether the agent's config registers reminal's MCP server;
+	// Current whether that registration names this very reminal binary (an
+	// entry left by an older install elsewhere is integrated but not current).
+	Integrated bool `json:"integrated"`
+	Current    bool `json:"current"`
+	// Hooks is whether reminal's attention hooks are installed; HooksWanted is
+	// whether this agent supports them at all.
+	Hooks       bool `json:"hooks"`
+	HooksWanted bool `json:"hooks_wanted"`
+	// Known is false when reminal cannot read this agent's registration back
+	// (no config format it understands) — Integrated is then meaningless.
+	Known bool `json:"known"`
+	// Config is the file consulted (~-relative) and ConfigMtime its last
+	// modification time (unix seconds), 0 when it does not exist. A running
+	// agent that started before ConfigMtime has not loaded this setup yet.
+	Config      string `json:"config,omitempty"`
+	ConfigMtime int64  `json:"config_mtime,omitempty"`
+	// Restart is how to restart this agent so the same conversation continues
+	// ("quit with /exit, then run claude --continue"); shown to the user
+	// after a setup, since only a fresh start loads the tools.
+	Restart string `json:"restart,omitempty"`
+	// Error is a read failure (unreadable config), not "not integrated".
+	Error string `json:"error,omitempty"`
 }
 
 // MachineStats is what a machine says about itself as a machine — not about

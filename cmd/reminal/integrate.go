@@ -29,6 +29,7 @@ import (
 	"strings"
 
 	"reminal/internal/piext"
+	"reminal/internal/protocol"
 )
 
 // mcpServerName is the key reminal registers itself under, in every agent.
@@ -61,6 +62,16 @@ type agentTarget struct {
 	// targets carry no cliAdd, file, or hooks of their own.
 	install    func(home, exe string, remove bool) error
 	installHow string // what the plan line says, relative to $HOME
+
+	// Read-back (see integrate_check.go). A CLI-route agent keeps its
+	// registration somewhere its `mcp add` decides; checkFile/checkKey (JSON)
+	// or checkTOML name that place. File-route agents are read from file/keyPath.
+	checkFile string
+	checkKey  []string
+	checkTOML string
+	// resume is the command that starts this agent again on its previous
+	// conversation — the restart hint shown after a setup.
+	resume string
 }
 
 func stdioEntry(exe string) map[string]any {
@@ -232,6 +243,8 @@ func agentTargets() []agentTarget {
 			Name: "Claude Code", Bin: "claude",
 			cliAdd:    []string{"mcp", "add", "--scope", "user", mcpServerName, "--", "%CMD%", "mcp"},
 			cliRemove: []string{"mcp", "remove", "--scope", "user", mcpServerName},
+			checkFile: ".claude.json", checkKey: []string{"mcpServers"},
+			resume: "claude --continue",
 			hooks: &hookSpec{
 				file: ".claude/settings.json", key: []string{"hooks"}, shape: shapeMatcher,
 				events: []hookEvent{
@@ -246,11 +259,15 @@ func agentTargets() []agentTarget {
 			Name: "Codex CLI", Bin: "codex",
 			cliAdd:    []string{"mcp", "add", mcpServerName, "--", "%CMD%", "mcp"},
 			cliRemove: []string{"mcp", "remove", mcpServerName},
+			checkTOML: ".codex/config.toml",
+			resume:    "codex resume --last",
 		},
 		{
 			Name: "Antigravity CLI", Bin: "agy",
 			cliAdd:    []string{"mcp", "add", mcpServerName, "--", "%CMD%", "mcp"},
 			cliRemove: []string{"mcp", "remove", mcpServerName},
+			checkFile: ".gemini/config/mcp_config.json", checkKey: []string{"mcpServers"},
+			resume: "agy --continue",
 		},
 		{
 			// opencode's `mcp add` is interactive, so drive its config instead.
@@ -259,14 +276,17 @@ func agentTargets() []agentTarget {
 			entry: func(exe string) map[string]any {
 				return map[string]any{"type": "local", "command": []string{exe, "mcp"}, "enabled": true}
 			},
+			resume: "opencode --continue",
 		},
 		{
 			Name: "Cursor CLI", Bin: "cursor-agent",
 			file: ".cursor/mcp.json", keyPath: []string{"mcpServers"}, entry: stdioEntry,
+			resume: "cursor-agent --continue",
 		},
 		{
 			Name: "Gemini CLI", Bin: "gemini",
 			file: ".gemini/settings.json", keyPath: []string{"mcpServers"}, entry: stdioEntry,
+			resume: "gemini --resume latest",
 			hooks: &hookSpec{
 				file: ".gemini/settings.json", key: []string{"hooks"}, shape: shapeMatcher,
 				events: []hookEvent{
@@ -279,6 +299,7 @@ func agentTargets() []agentTarget {
 		{
 			Name: "Qwen Code", Bin: "qwen",
 			file: ".qwen/settings.json", keyPath: []string{"mcpServers"}, entry: stdioEntry,
+			resume: "qwen --continue",
 			hooks: &hookSpec{
 				file: ".qwen/settings.json", key: []string{"hooks"}, shape: shapeMatcher,
 				events: []hookEvent{
@@ -291,6 +312,7 @@ func agentTargets() []agentTarget {
 		{
 			Name: "Amp", Bin: "amp",
 			file: ".config/amp/settings.json", keyPath: []string{"amp.mcpServers"}, entry: stdioEntry,
+			resume: "amp threads continue",
 		},
 		{
 			// pi has no MCP client to register with — it takes an extension, which
@@ -304,6 +326,7 @@ func agentTargets() []agentTarget {
 				return piext.Install(home, exe)
 			},
 			installHow: "extension in ~/.pi/agent/extensions + attention",
+			resume:     "pi --continue",
 		},
 	}
 }
@@ -315,12 +338,16 @@ type planStep struct {
 }
 
 func runIntegrate(args []string) error {
-	remove, assumeYes, dryRun := false, false, false
+	remove, assumeYes, dryRun, check, asJSON := false, false, false, false, false
 	var only []string
 	for _, a := range args {
 		switch a {
 		case "--remove", "--uninstall":
 			remove = true
+		case "--check", "--status":
+			check = true
+		case "--json":
+			asJSON = true
 		case "-y", "--yes":
 			assumeYes = true
 		case "--dry-run", "-n":
@@ -344,6 +371,11 @@ func runIntegrate(args []string) error {
 		exe = resolved
 	}
 	home, _ := os.UserHomeDir()
+	widenPATH(home)
+
+	if check {
+		return printIntegrationReport(integrationReport(home, exe, only), asJSON)
+	}
 
 	var plan []planStep
 	var skipped []string
@@ -444,7 +476,15 @@ func runIntegrate(args []string) error {
 	if !remove {
 		fmt.Printf("\nDone. Restart any running agent to pick it up. It can now leave\n" +
 			"notes on your windows (MCP), and its live state — working / needs you /\n" +
-			"done — shows in `reminal list` and the Machines view (attention hooks).\n")
+			"done — shows in `reminal list` and the Machines view (attention hooks).\n" +
+			"\nAn agent loads its tools only when it starts: quit a running one from its\n" +
+			"own prompt and start it again with its resume option, so the same\n" +
+			"conversation continues:\n")
+		for _, p := range plan {
+			if p.target.resume != "" {
+				fmt.Printf("  %-18s %s\n", p.target.Name, cDim(p.target.resume))
+			}
+		}
 	} else {
 		fmt.Printf("\nRemoved.\n")
 	}
@@ -564,6 +604,8 @@ func printIntegrateHelp() {
   reminal integrate --dry-run       show the plan, change nothing
   reminal integrate --remove        undo
   reminal integrate -y              skip the confirmation
+  reminal integrate --check         what is set up, without changing anything
+                                    (--json for machines)
 
 Two things get installed, in each agent's own native format (an ` + "`mcp add`" + `
 subcommand where one exists, a native extension for an agent that prefers one,
@@ -574,4 +616,35 @@ otherwise a merge into its JSON config, backed up first):
     done) to ` + "`reminal list`" + ` and the Machines view. Agents without hook support
     fall back to reminal's screen-based detection automatically.
 `)
+}
+
+// printIntegrationReport renders `--check`: one line per agent for a person,
+// or the JSON the Machines view consumes.
+func printIntegrationReport(report []protocol.IntegrationStatus, asJSON bool) error {
+	if asJSON {
+		enc := json.NewEncoder(os.Stdout)
+		enc.SetIndent("", "  ")
+		return enc.Encode(report)
+	}
+	for _, st := range report {
+		mark, what := "·", "not set up"
+		switch {
+		case !st.Known:
+			what = "cannot tell (unknown config)"
+		case st.Error != "":
+			mark, what = "✗", st.Error
+		case st.Integrated && st.Current:
+			mark, what = "✓", "set up"
+			if st.HooksWanted && !st.Hooks {
+				what += ", attention hooks missing"
+			}
+		case st.Integrated:
+			mark, what = "!", "set up for a different reminal (re-run integrate)"
+		}
+		if !st.Installed {
+			what += cDim(" — not on PATH")
+		}
+		fmt.Printf("  %s %-18s %s\n", mark, st.Name, what)
+	}
+	return nil
 }

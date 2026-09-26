@@ -122,6 +122,7 @@ var machineAccepts = map[protocol.MessageType]bool{
 	protocol.TypeDirRename:     true,
 	protocol.TypeDirRevokeSelf: true,
 	protocol.TypeDirKill:       true,
+	protocol.TypeDirIntegrate:  true,
 	protocol.TypeNewSession:    true,
 	protocol.TypeHostInfo:      true,
 	protocol.TypeChangelog:     true,
@@ -159,6 +160,8 @@ var dirChannelOnly = map[protocol.MessageType]bool{
 	protocol.TypeDirRename:     true,
 	protocol.TypeDirRevokeSelf: true,
 	protocol.TypeDirKill:       true,
+	// Edits the user's own agent configs: an owner's action, never a guest's.
+	protocol.TypeDirIntegrate: true,
 	// Replaces the binary under every session here: never a PIN guest's to ask.
 	protocol.TypeSwitchChannel: true,
 }
