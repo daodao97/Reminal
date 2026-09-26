@@ -9417,12 +9417,28 @@
         // start grip hangs just ABOVE the first cell; end grip just BELOW the last
         placeHandle(hStart, s, s.vrow >= 0 && s.vrow < rows, -22);
         placeHandle(hEnd, e, e.vrow >= 0 && e.vrow < rows, e.h);
-        // toolbar centred above the higher grip
-        const topPt = s.vrow <= e.vrow ? s : e;
-        if (topPt.vrow >= 0 && topPt.vrow < rows) {
-          toolbar.style.left = Math.max(60, s.x) + 'px';
-          toolbar.style.top = Math.max(48, topPt.y - 10) + 'px';
-          toolbar.classList.add('visible');
+        // The toolbar sits clear of both grips. Centred on the start grip
+        // with its bottom edge ten pixels above the row, it covered the grip
+        // itself — exactly where a finger lands to move the start — and the
+        // start could never be changed. Above the start grip with a gap
+        // now; when that would run into the header, below the end grip.
+        const GRIP = 22, GAP = 12, HEADER = 48;
+        toolbar.classList.add('visible');
+        const th = toolbar.offsetHeight || 36;
+        const clampX = x => Math.min(window.innerWidth - 60, Math.max(60, x));
+        const startOn = s.vrow >= 0 && s.vrow < rows, endOn = e.vrow >= 0 && e.vrow < rows;
+        if (startOn && s.y - GRIP - GAP - th >= HEADER) {
+          toolbar.style.transform = 'translate(-50%, -100%)';
+          toolbar.style.left = clampX(s.x) + 'px';
+          toolbar.style.top = (s.y - GRIP - GAP) + 'px';
+        } else if (endOn) {
+          toolbar.style.transform = 'translate(-50%, 0)';
+          toolbar.style.left = clampX(e.x) + 'px';
+          toolbar.style.top = (e.y + e.h + GRIP + GAP) + 'px';
+        } else if (startOn) {
+          toolbar.style.transform = 'translate(-50%, 0)';
+          toolbar.style.left = clampX(s.x) + 'px';
+          toolbar.style.top = (s.y + s.h + GAP) + 'px';
         } else {
           toolbar.classList.remove('visible');
         }
