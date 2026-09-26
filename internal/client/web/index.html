@@ -217,8 +217,13 @@
        selection. touch-action:none so a drag never scrolls the page. */
     .sel-handle {
       position: fixed;
-      width: 22px; height: 22px;
-      margin-left: -11px;              /* centre the grip on its column edge */
+      /* The visible ball is 14px, but the touch target is a 40x40 box that
+         also reaches INTO the selected line: a fingertip lands lower than
+         where the eye aims it, so a start ball that only accepted touches
+         above the line was near-impossible to grab on a phone (the finger
+         hit the terminal underneath and scrolled instead). */
+      width: 40px; height: 40px;
+      margin-left: -20px;              /* centre the grip on its column edge */
       z-index: 60;
       display: none;
       touch-action: none;
@@ -227,7 +232,7 @@
     .sel-handle::after {
       content: '';
       position: absolute;
-      left: 4px; top: 4px;
+      left: 13px; top: 4px;
       width: 14px; height: 14px;
       background: #58a6ff;
       border: 1px solid #0d1117;
@@ -240,11 +245,14 @@
     .sel-handle::before {
       content: '';
       position: absolute;
-      left: 10px; width: 2px; height: 8px;
+      left: 19px; width: 2px; height: 8px;
       background: #58a6ff;
     }
+    /* Start: box spans 22px above the line to 18px into it; ball on top.
+       End: box spans 18px into the line to 22px below it; ball at the bottom. */
     #sel-handle-start::before { top: 14px; }   /* stem points down into the line */
-    #sel-handle-end::before   { top: 0; }      /* stem points up into the line   */
+    #sel-handle-end::before   { top: 18px; }   /* stem points up into the line   */
+    #sel-handle-end::after    { top: 22px; }
 
     #sel-toolbar {
       position: fixed;
@@ -9416,13 +9424,29 @@
         const e = cellToPoint(sel.end.col, sel.end.row);
         // start grip hangs just ABOVE the first cell; end grip just BELOW the last
         placeHandle(hStart, s, s.vrow >= 0 && s.vrow < rows, -22);
-        placeHandle(hEnd, e, e.vrow >= 0 && e.vrow < rows, e.h);
-        // toolbar centred above the higher grip
-        const topPt = s.vrow <= e.vrow ? s : e;
-        if (topPt.vrow >= 0 && topPt.vrow < rows) {
-          toolbar.style.left = Math.max(60, s.x) + 'px';
-          toolbar.style.top = Math.max(48, topPt.y - 10) + 'px';
-          toolbar.classList.add('visible');
+        placeHandle(hEnd, e, e.vrow >= 0 && e.vrow < rows, e.h - 18);
+        // The toolbar sits clear of both grips. Centred on the start grip
+        // with its bottom edge ten pixels above the row, it covered the grip
+        // itself — exactly where a finger lands to move the start — and the
+        // start could never be changed. Above the start grip with a gap
+        // now; when that would run into the header, below the end grip.
+        const GRIP = 22, GAP = 12, HEADER = 48;
+        toolbar.classList.add('visible');
+        const th = toolbar.offsetHeight || 36;
+        const clampX = x => Math.min(window.innerWidth - 60, Math.max(60, x));
+        const startOn = s.vrow >= 0 && s.vrow < rows, endOn = e.vrow >= 0 && e.vrow < rows;
+        if (startOn && s.y - GRIP - GAP - th >= HEADER) {
+          toolbar.style.transform = 'translate(-50%, -100%)';
+          toolbar.style.left = clampX(s.x) + 'px';
+          toolbar.style.top = (s.y - GRIP - GAP) + 'px';
+        } else if (endOn) {
+          toolbar.style.transform = 'translate(-50%, 0)';
+          toolbar.style.left = clampX(e.x) + 'px';
+          toolbar.style.top = (e.y + e.h + GRIP + GAP) + 'px';
+        } else if (startOn) {
+          toolbar.style.transform = 'translate(-50%, 0)';
+          toolbar.style.left = clampX(s.x) + 'px';
+          toolbar.style.top = (s.y + s.h + GAP) + 'px';
         } else {
           toolbar.classList.remove('visible');
         }
@@ -9507,10 +9531,17 @@
         applySelection();
       }
 
+      // Where the finger landed relative to the cell the grip marks. The drag
+      // then keeps that offset, so wherever on the (large) grip the finger
+      // came down, the selection edge tracks the finger 1:1 instead of jumping.
+      let dragOff = { x: 0, y: 0 };
       function beginHandleDrag(which, e) {
         e.preventDefault();
         dropFocusIfKeyboardDown();      // dragging a grip is selection, not typing
         dragWhich = which;
+        const cell = which === 'start' ? sel.start : sel.end;
+        const pt = cellToPoint(cell.col, cell.row);
+        dragOff = { x: pt.x - e.clientX, y: pt.y + pt.h / 2 - e.clientY };
         toolbar.classList.remove('visible');       // out of the way while dragging
         const el = which === 'start' ? hStart : hEnd;
         try { el.setPointerCapture(e.pointerId); } catch (_) {}
@@ -9518,12 +9549,10 @@
       function moveHandleDrag(e) {
         if (!dragWhich) return;
         e.preventDefault();
-        // Aim at the character row the grip points into, not the fingertip
-        // itself (the ball sits above/below the line), so the mapping feels right.
-        const aimY = e.clientY + (dragWhich === 'start' ? 14 : -6);
-        lastDragClient = { x: e.clientX, y: aimY };
+        const aimX = e.clientX + dragOff.x, aimY = e.clientY + dragOff.y;
+        lastDragClient = { x: aimX, y: aimY };
         startAutoScroll(edgeDir(e.clientY));
-        updateDragTo(e.clientX, aimY);
+        updateDragTo(aimX, aimY);
       }
       function endHandleDrag(e) {
         if (!dragWhich) return;
