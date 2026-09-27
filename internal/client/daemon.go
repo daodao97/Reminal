@@ -66,6 +66,10 @@ func RunDaemon(version string) error {
 	// overwrite each other. Served on every platform: the badge is macOS-only
 	// today, but mirroring notes to a phone is not.
 	go ServeNotes(stop)
+	// Uploads carry an "auto-delete in …" promise made to whoever sent the
+	// file. The session that took it is usually gone long before the deadline,
+	// so the always-on process is what actually keeps the promise.
+	go sweepUploadsLoop(stop)
 	// Phone alerts (CPU, battery, charger) for every owner phone that asked.
 	// Idle — no sampling at all — until one has.
 	go runPushWatcher(stop)
