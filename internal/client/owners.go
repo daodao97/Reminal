@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reminal/internal/atomicfile"
 	"runtime"
 	"strings"
 	"time"
@@ -268,33 +269,9 @@ func loadOwners() (*ownersFile, error) {
 	return &of, nil
 }
 
-// atomicWrite writes data to path via a UNIQUE temp file in the same directory
-// then renames it into place with perm, so a crash or a concurrent reader never
-// sees a partial file and two concurrent writers can't interleave.
+// atomicWrite is atomicfile.Write, by the name this file has always used.
 func atomicWrite(path string, data []byte, perm os.FileMode) error {
-	f, err := os.CreateTemp(filepath.Dir(path), ".reminal-*.tmp")
-	if err != nil {
-		return err
-	}
-	tmp := f.Name()
-	_, werr := f.Write(data)
-	cerr := f.Close()
-	if werr != nil || cerr != nil {
-		_ = os.Remove(tmp)
-		if werr != nil {
-			return werr
-		}
-		return cerr
-	}
-	if err := os.Chmod(tmp, perm); err != nil {
-		_ = os.Remove(tmp)
-		return err
-	}
-	if err := os.Rename(tmp, path); err != nil {
-		_ = os.Remove(tmp)
-		return err
-	}
-	return nil
+	return atomicfile.Write(path, data, perm)
 }
 
 // sudoHint annotates a permission error on the owners store with the fix, since

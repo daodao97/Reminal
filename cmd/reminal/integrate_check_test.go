@@ -4,7 +4,9 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 )
 
 func targetNamed(t *testing.T, bin string) agentTarget {
@@ -154,5 +156,43 @@ func TestIntegrationReportJSONShape(t *testing.T) {
 		if _, ok := back[0][k]; !ok {
 			t.Fatalf("missing %q in %s", k, raw)
 		}
+	}
+}
+
+// TestSetUpTimeAndBackupOnce: integrate notes when it set an agent up (the
+// config's own mtime says nothing — Claude rewrites its file as it runs),
+// forgets it on remove, and keeps the FIRST backup of a config rather than
+// overwriting it with a file it had already changed.
+func TestSetUpTimeAndBackupOnce(t *testing.T) {
+	home := t.TempDir()
+	exe := filepath.Join(home, "reminal")
+	tg := targetNamed(t, "gemini")
+	writeJSON(t, filepath.Join(home, tg.file), map[string]any{"theme": "dark"})
+	if before := checkIntegration(tg, home, exe); before.Since != 0 {
+		t.Fatalf("since before any setup: %+v", before)
+	}
+	if err := applyViaFile(tg, home, exe, false); err != nil {
+		t.Fatal(err)
+	}
+	noteSetUp(home, tg.Bin, true)
+	after := checkIntegration(tg, home, exe)
+	if after.Since == 0 || time.Since(time.Unix(after.Since, 0)) > time.Minute {
+		t.Fatalf("since after setup: %+v", after)
+	}
+	bak, _ := os.ReadFile(filepath.Join(home, tg.file+".bak"))
+	if !strings.Contains(string(bak), "dark") || strings.Contains(string(bak), "reminal") {
+		t.Fatalf("the backup should be the file before reminal touched it: %s", bak)
+	}
+	// A second run must not replace that backup with the changed file.
+	if err := applyViaFile(tg, home, exe, false); err != nil {
+		t.Fatal(err)
+	}
+	bak2, _ := os.ReadFile(filepath.Join(home, tg.file+".bak"))
+	if string(bak2) != string(bak) {
+		t.Fatalf("the backup was overwritten on a re-run")
+	}
+	noteSetUp(home, tg.Bin, false)
+	if gone := checkIntegration(tg, home, exe); gone.Since != 0 {
+		t.Fatalf("since after remove: %+v", gone)
 	}
 }

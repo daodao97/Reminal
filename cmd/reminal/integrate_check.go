@@ -11,7 +11,9 @@ import (
 	"strings"
 	"time"
 
+	"reminal/internal/atomicfile"
 	"reminal/internal/piext"
+	"reminal/internal/procgroup"
 	"reminal/internal/protocol"
 )
 
@@ -42,6 +44,7 @@ func checkIntegration(t agentTarget, home, exe string) protocol.IntegrationStatu
 		HooksWanted: t.hooks != nil,
 		Restart:     restartHint(t),
 		Resume:      t.resume,
+		Since:       setUpAt(home)[t.Bin],
 	}
 	if _, err := exec.LookPath(t.Bin); err == nil {
 		st.Installed = true
@@ -271,6 +274,41 @@ func restartHint(t agentTarget) string {
 	return fmt.Sprintf("Quit %s with its exit command, then run `%s` — a plain `%s` starts a new chat.", t.Name, t.resume, t.Bin)
 }
 
+// ---- When each agent was set up -------------------------------------------
+//
+// An agent's config file is a poor clock: Claude Code rewrites ~/.claude.json
+// as it runs, so its mtime says nothing about when reminal registered there.
+// integrate keeps its own note of the moment instead.
+
+func setUpFile(home string) string { return filepath.Join(home, ".reminal", "integrated.json") }
+
+func setUpAt(home string) map[string]int64 {
+	out := map[string]int64{}
+	raw, err := os.ReadFile(setUpFile(home))
+	if err == nil {
+		_ = json.Unmarshal(raw, &out)
+	}
+	return out
+}
+
+// noteSetUp records (or forgets) that bin was set up by reminal just now.
+func noteSetUp(home, bin string, on bool) {
+	m := setUpAt(home)
+	if on {
+		m[bin] = time.Now().Unix()
+	} else {
+		delete(m, bin)
+	}
+	raw, err := json.Marshal(m)
+	if err != nil {
+		return
+	}
+	if err := os.MkdirAll(filepath.Dir(setUpFile(home)), 0o700); err != nil {
+		return
+	}
+	_ = atomicfile.Write(setUpFile(home), raw, 0o600)
+}
+
 // ---- PATH as the user's shell sees it -------------------------------------
 
 // widenPATH extends this process's PATH with the user's login-shell PATH and
@@ -289,10 +327,12 @@ func widenPATH(home string) {
 		have[p] = true
 		parts = append(parts, p)
 	}
-	for _, p := range strings.Split(os.Getenv("PATH"), sep) {
+	// The login shell's PATH first: it is the order the user's own shell
+	// resolves `claude` in, and this process is standing in for that shell.
+	for _, p := range strings.Split(loginPATH(), sep) {
 		add(p)
 	}
-	for _, p := range strings.Split(loginPATH(), sep) {
+	for _, p := range strings.Split(os.Getenv("PATH"), sep) {
 		add(p)
 	}
 	if runtime.GOOS != "windows" {
@@ -308,7 +348,10 @@ func widenPATH(home string) {
 }
 
 // loginPATH asks the user's login shell for its PATH; "" when that fails or
-// takes too long (a shell rc that blocks must not hang a check).
+// takes too long. The value is read between sentinels: an rc file that
+// prints a banner would otherwise put that banner at the head of PATH. The
+// shell runs in its own process group with a short wait on its pipes, so an
+// rc that starts something long-lived cannot hold a check open.
 func loginPATH() string {
 	if runtime.GOOS == "windows" {
 		return ""
@@ -319,9 +362,22 @@ func loginPATH() string {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, shell, "-l", "-c", `printf %s "$PATH"`).Output()
+	cmd := exec.CommandContext(ctx, shell, "-l", "-c", `printf '\n__REMINAL_PATH__%s__REMINAL_PATH__' "$PATH"`)
+	procgroup.Bound(cmd)
+	out, err := cmd.Output()
 	if err != nil {
 		return ""
 	}
-	return strings.TrimSpace(string(out))
+	const mark = "__REMINAL_PATH__"
+	s := string(out)
+	a := strings.Index(s, mark)
+	if a < 0 {
+		return ""
+	}
+	s = s[a+len(mark):]
+	b := strings.Index(s, mark)
+	if b < 0 {
+		return ""
+	}
+	return strings.TrimSpace(s[:b])
 }

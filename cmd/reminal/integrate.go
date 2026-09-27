@@ -28,6 +28,7 @@ import (
 	"sort"
 	"strings"
 
+	"reminal/internal/atomicfile"
 	"reminal/internal/piext"
 	"reminal/internal/protocol"
 )
@@ -151,7 +152,7 @@ func applyHooks(spec *hookSpec, home, exe string, remove bool) error {
 				return fmt.Errorf("%s is not valid JSON; leaving it alone", path)
 			}
 		}
-		if err := os.WriteFile(path+".bak", raw, 0o600); err != nil {
+		if err := backupOnce(path, raw); err != nil {
 			return fmt.Errorf("writing backup: %w", err)
 		}
 	} else if !os.IsNotExist(err) {
@@ -211,7 +212,17 @@ func applyHooks(spec *hookSpec, home, exe string, remove bool) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, append(buf, '\n'), 0o600)
+	return atomicfile.Write(path, append(buf, '\n'), 0o600)
+}
+
+// backupOnce keeps the file as it was BEFORE reminal first touched it. A
+// backup rewritten on every run would, by the second run, hold a file
+// reminal had already changed — no backup at all.
+func backupOnce(path string, raw []byte) error {
+	if _, err := os.Stat(path + ".bak"); err == nil {
+		return nil
+	}
+	return atomicfile.Write(path+".bak", raw, 0o600)
 }
 
 // hookEntry builds one config entry in the agent's expected shape, tagged with
@@ -371,6 +382,9 @@ func runIntegrate(args []string) error {
 		exe = resolved
 	}
 	home, _ := os.UserHomeDir()
+	if home == "" {
+		return fmt.Errorf("no home directory: the agents' configs live there")
+	}
 	widenPATH(home)
 
 	if check {
@@ -467,6 +481,7 @@ func runIntegrate(args []string) error {
 			fmt.Printf("  ✗ %-18s %v\n", p.target.Name, err)
 			continue
 		}
+		noteSetUp(home, p.target.Bin, !remove)
 		fmt.Printf("  ✓ %-18s %s\n", p.target.Name, cDim(p.how))
 	}
 
@@ -534,7 +549,7 @@ func applyViaFile(t agentTarget, home, exe string, remove bool) error {
 				return fmt.Errorf("%s is not valid JSON; leaving it alone", path)
 			}
 		}
-		if err := os.WriteFile(path+".bak", raw, 0o600); err != nil {
+		if err := backupOnce(path, raw); err != nil {
 			return fmt.Errorf("writing backup: %w", err)
 		}
 	} else if !os.IsNotExist(err) {
@@ -569,7 +584,7 @@ func applyViaFile(t agentTarget, home, exe string, remove bool) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, append(buf, '\n'), 0o600)
+	return atomicfile.Write(path, append(buf, '\n'), 0o600)
 }
 
 func matchesAny(t agentTarget, names []string) bool {
