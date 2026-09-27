@@ -265,10 +265,9 @@ func tildePath(home, path string) string {
 // again — with its resume option, or the conversation is gone.
 func restartHint(t agentTarget) string {
 	if t.resume == "" {
-		return fmt.Sprintf("Quit %s from its own prompt and start it again so it loads the tools.", t.Name)
+		return fmt.Sprintf("Quit %s and start it again so it loads the tools.", t.Name)
 	}
-	return fmt.Sprintf("Quit %s from its own prompt (its exit command, or Ctrl-D at an empty prompt), then start it again with `%s` so it picks the same conversation back up — a plain `%s` would start a new one.",
-		t.Name, t.resume, t.Bin)
+	return fmt.Sprintf("Quit %s with its exit command, then run `%s` — a plain `%s` starts a new chat.", t.Name, t.resume, t.Bin)
 }
 
 // ---- PATH as the user's shell sees it -------------------------------------
