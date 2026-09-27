@@ -439,6 +439,11 @@ type IntegrationStatus struct {
 	// conversation ("claude --continue"), for a viewer that lays the restart
 	// out as steps of its own.
 	Resume string `json:"resume,omitempty"`
+	// Since is when reminal last set this agent up here (unix seconds), 0
+	// when unknown. Unlike ConfigMtime it moves only on a setup — an agent's
+	// config file may be its live state file too — so it is what a running
+	// copy's start time should be compared with.
+	Since int64 `json:"since,omitempty"`
 	// Error is a read failure (unreadable config), not "not integrated".
 	Error string `json:"error,omitempty"`
 }
