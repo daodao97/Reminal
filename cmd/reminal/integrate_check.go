@@ -41,6 +41,7 @@ func checkIntegration(t agentTarget, home, exe string) protocol.IntegrationStatu
 		Bin: t.Bin, Name: t.Name,
 		HooksWanted: t.hooks != nil,
 		Restart:     restartHint(t),
+		Resume:      t.resume,
 	}
 	if _, err := exec.LookPath(t.Bin); err == nil {
 		st.Installed = true

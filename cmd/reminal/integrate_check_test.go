@@ -59,8 +59,8 @@ func TestCheckReadsBackWhatIntegrateWrote(t *testing.T) {
 		if tg.hooks != nil && !after.Hooks {
 			t.Fatalf("%s: hooks written but not seen: %+v", bin, after)
 		}
-		if after.Restart == "" {
-			t.Fatalf("%s: no restart hint", bin)
+		if after.Restart == "" || after.Resume == "" {
+			t.Fatalf("%s: no restart hint / resume command: %+v", bin, after)
 		}
 		// A registration left by another reminal is set up, but not for us.
 		other := checkIntegration(tg, home, filepath.Join(home, "elsewhere", "reminal"))
