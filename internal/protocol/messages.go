@@ -435,6 +435,10 @@ type IntegrationStatus struct {
 	// ("quit with /exit, then run claude --continue"); shown to the user
 	// after a setup, since only a fresh start loads the tools.
 	Restart string `json:"restart,omitempty"`
+	// Resume is the bare command that starts the agent on its previous
+	// conversation ("claude --continue"), for a viewer that lays the restart
+	// out as steps of its own.
+	Resume string `json:"resume,omitempty"`
 	// Error is a read failure (unreadable config), not "not integrated".
 	Error string `json:"error,omitempty"`
 }
