@@ -16,21 +16,14 @@ func snap(pct int, state string, mins int, at time.Time, stale bool) *client.Bat
 }
 
 func TestBatteryLabel(t *testing.T) {
-	now := time.Now()
-	// Deterministic offsets, not wall-clock times: a fixed "3:04pm today" is in
-	// the FUTURE on a runner whose clock has not reached 3pm, and whenLabel
-	// (correctly) calls a future timestamp "just now". Three hours ago is
-	// always in the past, and stays on the same calendar day unless the test
-	// runs in the first three hours of one — which the guard below handles.
-	today := now.Add(-3 * time.Hour)
-	if today.Day() != now.Day() {
-		// Early in the day: halfway between midnight and now is always both
-		// in the past and today. A fixed "-2 minutes" crossed midnight itself
-		// in the first two minutes of a day, and CI caught it at 00:01.
-		midnight := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
-		today = midnight.Add(now.Sub(midnight) / 2)
-	}
-	yest := now.AddDate(0, 0, -1)
+	// A fixed clock, not the runner's. What a stale reading reads as depends on
+	// how long ago it was taken, and against the real clock some of these cases
+	// cannot be arranged at all: "taken today, and long enough ago to deserve a
+	// clock time" does not exist in the first minute of a day. Two midnights
+	// reported this test as a failure of the code it was checking.
+	now := time.Date(2026, 3, 4, 15, 4, 0, 0, time.UTC)
+	today := now.Add(-3 * time.Hour) // 12:04pm, same day
+	yest := now.AddDate(0, 0, -1)    // 3:04pm yesterday
 
 	cases := []struct {
 		name string
@@ -57,12 +50,17 @@ func TestBatteryLabel(t *testing.T) {
 		{
 			name: "stale reads as past tense with a clock time",
 			in:   snap(20, "discharging", 62, today, true),
-			want: []string{"was 20%", "at " + today.Format("3:04pm"), "1h 2m", "then"},
+			want: []string{"was 20%", "at 12:04pm", "1h 2m", "then"},
 		},
 		{
 			name: "stale from yesterday says so",
 			in:   snap(20, "discharging", 0, yest, true),
-			want: []string{"was 20%", "yesterday", yest.Format("3:04pm")},
+			want: []string{"was 20%", "yesterday", "3:04pm"},
+		},
+		{
+			name: "stale from within the last minute is just now, not a clock time",
+			in:   snap(20, "discharging", 0, now.Add(-30*time.Second), true),
+			want: []string{"was 20%", "just now"},
 		},
 		{
 			name: "no OS estimate omits the duration entirely",
@@ -72,7 +70,7 @@ func TestBatteryLabel(t *testing.T) {
 	}
 
 	for _, c := range cases {
-		got := batteryLabel(c.in)
+		got := batteryLabelAt(c.in, now)
 		if c.none {
 			if got != "" {
 				t.Errorf("%s: want empty, got %q", c.name, got)
@@ -92,6 +90,16 @@ func TestBatteryLabel(t *testing.T) {
 		if !c.in.Stale && strings.Contains(got, "was ") {
 			t.Errorf("%s: fresh reading %q reads as history", c.name, got)
 		}
+	}
+}
+
+// The label every caller actually uses reads the real clock, and must agree
+// with the injectable one — otherwise the tests above prove nothing about it.
+func TestBatteryLabelUsesTheRealClock(t *testing.T) {
+	now := time.Now()
+	b := snap(20, "discharging", 62, now.Add(-3*time.Hour), true)
+	if got, want := batteryLabel(b), batteryLabelAt(b, now); got != want {
+		t.Errorf("batteryLabel = %q, batteryLabelAt with time.Now() = %q", got, want)
 	}
 }
 

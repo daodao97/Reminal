@@ -265,13 +265,21 @@ func sessionMeta(s protocol.DirSession) string {
 // session ids, and colour already carries the urgency. The stale form is the
 // reason the feature exists — a machine that has gone dark cannot tell you
 // anything, so the last thing it said, and when, is the whole answer.
-func batteryLabel(b *client.BatterySnapshot) string {
+func batteryLabel(b *client.BatterySnapshot) string { return batteryLabelAt(b, time.Now()) }
+
+// batteryLabelAt takes "now" for the same reason whenLabelAt does: the wording
+// of a stale reading depends on how long ago it was taken, and a test that has
+// to arrange that against the real clock cannot arrange it at every hour. This
+// one could not be satisfied at all in the first minute of a day — "today, and
+// long enough ago to be worth a clock time" does not exist at 00:00 — so the
+// test said the code was broken twice, at midnight, when it was not.
+func batteryLabelAt(b *client.BatterySnapshot, now time.Time) string {
 	if b == nil {
 		return ""
 	}
 	dur := durLabel(b.Mins)
 	if b.Stale {
-		out := fmt.Sprintf("was %d%% %s", b.Pct, whenLabel(b.At))
+		out := fmt.Sprintf("was %d%% %s", b.Pct, whenLabelAt(b.At, now))
 		// Quoted as of that moment, not extrapolated to now: we have no idea
 		// what the machine did after it stopped answering.
 		if dur != "" && b.State == "discharging" {
