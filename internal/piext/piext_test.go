@@ -5,6 +5,7 @@ package piext
 
 import (
 	"encoding/json"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -97,6 +98,76 @@ func TestInstallIsIdempotentAndRepointable(t *testing.T) {
 	pin, _ := os.ReadFile(filepath.Join(dir, "bin.json"))
 	if !strings.Contains(string(pin), "/second/reminal") {
 		t.Errorf("reinstall did not repoint bin.json: %s", pin)
+	}
+}
+
+// `reminal upgrade` replaces the binary at the same path and leaves the
+// installed extension alone, so nothing about the path changes while the code pi
+// loads goes stale. Only what was written can say whether the two still agree.
+func TestUpToDateNoticesAStaleInstall(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("PI_CODING_AGENT_DIR", "")
+
+	if UpToDate(home) {
+		t.Error("nothing is installed, so nothing can be up to date")
+	}
+	if err := Install(home, "/opt/reminal/reminal"); err != nil {
+		t.Fatalf("install: %v", err)
+	}
+	if !UpToDate(home) {
+		t.Error("a fresh install is not recognised as current")
+	}
+
+	// What an older reminal left behind: the same path, different sources.
+	dir := Dir(home)
+	if err := os.WriteFile(filepath.Join(dir, "index.ts"), []byte("// an older build\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if UpToDate(home) {
+		t.Error("an install whose sources differ was reported as current")
+	}
+
+	// And re-running integrate brings it back.
+	if err := Install(home, "/opt/reminal/reminal"); err != nil {
+		t.Fatalf("reinstall: %v", err)
+	}
+	if !UpToDate(home) {
+		t.Error("re-installing did not make it current again")
+	}
+
+	// A file missing entirely is not current either — that is a half-install.
+	if err := os.Remove(filepath.Join(dir, "mcp.ts")); err != nil {
+		t.Fatal(err)
+	}
+	if UpToDate(home) {
+		t.Error("an install missing a file was reported as current")
+	}
+}
+
+// Every file the binary embeds has to be in the list the fingerprint reads, or
+// a change to it would not count as a change.
+func TestShippedNamesEveryEmbeddedFile(t *testing.T) {
+	var embedded []string
+	if err := fs.WalkDir(files, "extension", func(p string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return err
+		}
+		embedded = append(embedded, strings.TrimPrefix(p, "extension/"))
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	named := map[string]bool{}
+	for _, rel := range shipped {
+		named[rel] = true
+	}
+	for _, rel := range embedded {
+		if !named[rel] {
+			t.Errorf("%s is embedded but not named in shipped, so a change to it would go unnoticed", rel)
+		}
+	}
+	if len(embedded) != len(shipped) {
+		t.Errorf("shipped lists %d files, the binary embeds %d", len(shipped), len(embedded))
 	}
 }
 

@@ -19,7 +19,9 @@
 package piext
 
 import (
+	"crypto/sha256"
 	"embed"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io/fs"
@@ -33,6 +35,12 @@ import (
 //
 //go:embed extension/package.json extension/index.ts extension/mcp.ts
 var files embed.FS
+
+// shipped is the extension, file by file, relative to its directory. Named here
+// rather than walked so that both sides of a comparison read the same list in
+// the same order — and so a file added to the embed above without being added
+// here fails the installer's own test rather than going unnoticed.
+var shipped = []string{"package.json", "index.ts", "mcp.ts"}
 
 // dirName is the folder the extension is installed as. pi shows a discovered
 // extension under its directory name, so this is what a user sees in `pi config`
@@ -147,6 +155,44 @@ func Remove(home string) error {
 // install leaves behind, since the manifest is one of the files it had not
 // reached yet. Refusing those meant reminal could neither repair nor remove its
 // own wreckage, and told the user it belonged to someone else.
+// fingerprint identifies a set of extension sources: each file's name and its
+// contents, in a fixed order.
+//
+// read is how to fetch one file's bytes, so the same function serves both the
+// sources this binary carries and the copy on disk — which is the whole point,
+// since the question is only ever whether those two agree.
+func fingerprint(read func(rel string) ([]byte, error)) string {
+	h := sha256.New()
+	for _, rel := range shipped {
+		body, err := read(rel)
+		if err != nil {
+			return "" // incomplete, so it cannot match anything
+		}
+		h.Write([]byte(rel))
+		h.Write(body)
+	}
+	return hex.EncodeToString(h.Sum(nil)[:16])
+}
+
+// UpToDate reports whether the extension installed for this user is the one this
+// binary would write.
+//
+// A path comparison cannot answer this: `reminal upgrade` replaces the binary
+// where it already was and leaves the installed extension alone, so every path
+// still matches while pi goes on loading the older code. Telling a user they are
+// current there is how a fix reaches nobody.
+func UpToDate(home string) bool {
+	dir := Dir(home)
+	onDisk := fingerprint(func(rel string) ([]byte, error) {
+		return os.ReadFile(filepath.Join(dir, filepath.FromSlash(rel)))
+	})
+	return onDisk != "" && onDisk == embeddedFingerprint()
+}
+
+func embeddedFingerprint() string {
+	return fingerprint(func(rel string) ([]byte, error) { return files.ReadFile("extension/" + rel) })
+}
+
 func removeIfOurs(dir string) error {
 	raw, err := os.ReadFile(filepath.Join(dir, "package.json"))
 	if os.IsNotExist(err) {
