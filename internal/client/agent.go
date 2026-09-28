@@ -173,6 +173,17 @@ type Agent struct {
 	kexTokens float64
 	kexLast   time.Time
 
+	// Owner handshakes get their own allowance. An own_init is not a PIN
+	// guess: it carries an Ed25519 signature over a transcript bound to this
+	// session and to the device's own key, so nobody without an enrolled
+	// private key can produce one. What it can cost us is the verification,
+	// so the bucket bounds that — and a proof that checks out refunds its
+	// token (see handleOwnerInit), which means noise from strangers can never
+	// use up an owner's ability to connect.
+	ownMu     sync.Mutex
+	ownTokens float64
+	ownLast   time.Time
+
 	// localActive gates whether pumpPTY echoes shell output to the host's
 	// stdout. Set when Run() puts the local terminal into raw-attached mode
 	// so the user can drive the shell from the agent's terminal directly.
@@ -2939,7 +2950,13 @@ func (a *Agent) runReader(conn *websocket.Conn, cursorCh chan uint64) error {
 			// verifies its owner signature, checks it's in owners.json, and
 			// replies with a TypeOwnerResp carrying the machine signature +
 			// wrapped session key — only if the device checks out.
-			a.handleOwnerInit(conn, msg)
+			//
+			// On its own goroutine, as TypeHostInfo above: it reads
+			// owners.json and the machine key off disk, and the viewer only
+			// waits a few seconds before deciding it isn't an owner at all.
+			// Run inline, one slow handler ahead of it in the reader is
+			// enough to make someone's own machine disown them.
+			go a.handleOwnerInit(conn, msg)
 		case protocol.TypeUpload:
 			a.handleUpload(msg.Data)
 		case protocol.TypeWindowList:
@@ -3206,6 +3223,54 @@ func (a *Agent) allowKex(now time.Time) bool {
 	return true
 }
 
+// ownVerifyBurst is how many owner handshakes we will verify back-to-back.
+// Wide on purpose: every viewer a device opens re-runs the handshake on each
+// socket, and a phone that keeps losing its connection re-runs it on every
+// reconnect. The old code spent the kex bucket here (8, one back per 10s),
+// so a handful of reconnects locked a legitimate owner out for minutes and
+// the viewer told them they did not own the machine.
+const ownVerifyBurst = 32
+
+// ownVerifyRefill is how long one owner-verify token takes to come back. Only
+// unverifiable attempts ultimately spend one, so this paces a stranger's noise
+// without ever pacing an owner.
+const ownVerifyRefill = time.Second
+
+// ownerBusyRetry is how long a TypeOwnerBusy asks a device to wait. Long
+// enough that a retry arrives with a token waiting for it, short enough that
+// a person reconnecting does not notice the pause.
+const ownerBusyRetry = 1200 * time.Millisecond
+
+// allowOwnerVerify reports whether we will verify another owner handshake now,
+// taking a token if so. refundOwnerVerify puts it back once the proof checks
+// out.
+func (a *Agent) allowOwnerVerify(now time.Time) bool {
+	a.ownMu.Lock()
+	defer a.ownMu.Unlock()
+	if a.ownLast.IsZero() {
+		a.ownTokens = ownVerifyBurst
+	} else {
+		a.ownTokens += now.Sub(a.ownLast).Seconds() / ownVerifyRefill.Seconds()
+		if a.ownTokens > ownVerifyBurst {
+			a.ownTokens = ownVerifyBurst
+		}
+	}
+	a.ownLast = now
+	if a.ownTokens < 1 {
+		return false
+	}
+	a.ownTokens--
+	return true
+}
+
+func (a *Agent) refundOwnerVerify() {
+	a.ownMu.Lock()
+	defer a.ownMu.Unlock()
+	if a.ownTokens < ownVerifyBurst {
+		a.ownTokens++
+	}
+}
+
 func (a *Agent) handleKexInit(conn *websocket.Conn, exIDHex, dataB64 string) {
 	if !a.allowKex(time.Now()) {
 		return
@@ -3262,9 +3327,8 @@ func (a *Agent) handleOwnerInit(conn *websocket.Conn, msg protocol.Message) {
 	// The machine channel is answered for every enrolled device at once — a
 	// phone, a laptop and a CLI all opening their Machines lists in the same
 	// second — so it takes the directory's burst, not a session's.
-	if !a.allowOwnerHandshake() {
-		return
-	}
+	// Decoding is cheap, so it happens before we spend anything: garbage
+	// costs a stranger an allowance they could otherwise drain for free.
 	exID, err := crypto.ParseExID(msg.ExID)
 	if err != nil {
 		return
@@ -3281,6 +3345,18 @@ func (a *Agent) handleOwnerInit(conn *websocket.Conn, msg protocol.Message) {
 	if err != nil {
 		return
 	}
+	// Verifying costs us, so it takes a token — and being over the allowance
+	// is said out loud. A device that hears nothing at all is one we refused;
+	// a device that hears "busy" knows to come back, which is what an owner
+	// needs and what a stranger would learn by waiting anyway.
+	if !a.allowOwnerHandshake() {
+		_ = a.writeMsg(conn, protocol.Message{
+			Type:    protocol.TypeOwnerBusy,
+			ExID:    msg.ExID,
+			RetryMS: int(ownerBusyRetry / time.Millisecond),
+		})
+		return
+	}
 	// 1. Prove the sender controls this device key for THIS exchange.
 	if !crypto.VerifyOwner(devicePub, crypto.OwnerClientTranscript(a.sessionID, viewerEph, devicePub), deviceSig) {
 		return
@@ -3289,6 +3365,9 @@ func (a *Agent) handleOwnerInit(conn *websocket.Conn, msg protocol.Message) {
 	if ok, err := IsOwner(devicePub); err != nil || !ok {
 		return
 	}
+	// The proof held: this is an owner, not load. Give the token back so an
+	// owner's own reconnections can never throttle them out of their machine.
+	a.refundOwnerHandshake()
 	// 3. Complete the ECDH.
 	peerKey, err := crypto.PeerPublicKey(viewerEph)
 	if err != nil {
