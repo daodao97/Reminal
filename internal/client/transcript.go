@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -230,11 +231,28 @@ func stripANSI(s string) string {
 		switch in[i+1] {
 		case '[': // CSI
 			i += 2
+			start := i
 			for i < len(in) {
 				if in[i] >= 0x40 && in[i] <= 0x7e {
 					break
 				}
 				i++
+			}
+			// Cursor forward (CSI n C) is how a TUI skips over blanks — claude
+			// draws "Yes, I trust this folder" as words and moves. Dropped, it
+			// read "Yes,Itrustthisfolder"; kept as the spaces it stands for,
+			// capped so a stray huge count cannot bloat the text.
+			if i < len(in) && in[i] == 'C' {
+				n := 1
+				if v, err := strconv.Atoi(string(in[start:i])); err == nil && v > 0 {
+					n = v
+				}
+				if n > 256 {
+					n = 256
+				}
+				for k := 0; k < n; k++ {
+					out = append(out, ' ')
+				}
 			}
 		case ']': // OSC … BEL or ST
 			i += 2

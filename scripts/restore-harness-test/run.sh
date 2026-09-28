@@ -27,7 +27,7 @@ if ! docker info >/dev/null 2>&1; then echo "Docker isn't running." >&2; exit 1;
 docker build -q -t reminal-harnesses -f "$DIR/harnesses.Dockerfile" "$DIR" >/dev/null
 OUT=$(mktemp -d)
 trap 'rm -rf "$OUT"' EXIT
-cp "$DIR/Dockerfile" "$DIR/mcp.sh" "$DIR/sendb.sh" "$DIR/fake-llm.mjs" "$DIR/setup.sh" "$ROOT/scripts/pi-test/fake-provider.ts" "$OUT/"
+cp "$DIR/Dockerfile" "$DIR/mcp.sh" "$DIR/sendb.sh" "$DIR/rig-procs.sh" "$DIR/fake-llm.mjs" "$DIR/setup.sh" "$ROOT/scripts/pi-test/fake-provider.ts" "$OUT/"
 docker run --rm -v "$ROOT":/src:ro -v "$OUT":/out \
     -v reminal-restore-gocache:/root/.cache/go-build -v reminal-restore-gomod:/go/pkg/mod \
     -e GOFLAGS=-buildvcs=false -e CGO_ENABLED=0 -w /src \

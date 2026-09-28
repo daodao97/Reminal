@@ -11,7 +11,9 @@ import * as http from "node:http";
 import * as fs from "node:fs";
 
 const PORT = Number(process.env.FAKE_LLM_PORT ?? 8099);
-const log = (...a) => fs.appendFileSync("/tmp/fake-llm.log", a.join(" ") + "\n");
+// Kept where a reboot does not clear it (macOS empties /tmp at boot).
+const LOG = process.env.FAKE_LLM_LOG ?? "/tmp/fake-llm.log";
+const log = (...a) => fs.appendFileSync(LOG, a.join(" ") + "\n");
 
 // The last thing a user said, in any of the request shapes.
 function lastUserText(body) {

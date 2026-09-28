@@ -231,3 +231,23 @@ func TestShellCommandPerShell(t *testing.T) {
 		}
 	}
 }
+
+// On Windows an npm-installed agent runs as node with its package's script —
+// found by the package, whichever separator the path uses.
+func TestProgramFromWindowsNpmArgs(t *testing.T) {
+	for want, args := range map[string][]string{
+		"qwen":   {`C:\rtest\node\node.exe`, `C:\rtest\npm/node_modules/@qwen-code/qwen-code/cli-entry.js`},
+		"pi":     {`C:\rtest\node\node.exe`, `C:\rtest\npm/node_modules/@earendil-works/pi-coding-agent/dist/bundle/cli.js`},
+		"claude": {`C:\Users\x\AppData\Roaming\npm\node_modules\@anthropic-ai\claude-code\bin\claude.exe`},
+		"gemini": {`C:\rtest\node\node.exe`, `C:\rtest\npm\node_modules\@google\gemini-cli\bundle\gemini.js`},
+		"codex":  {`C:\rtest\node\node.exe`, `C:\rtest\npm\node_modules\@openai\codex\bin\codex.js`},
+	} {
+		if got := programFromArgs(args, "node"); got != want {
+			t.Errorf("%q: got %q, want %q", args, got, want)
+		}
+	}
+	// pi is still pi only where it cannot mean a file called pi.
+	if got := programFromArgs([]string{"python3", "/home/x/pi/pi.py"}, "python3"); got == "pi" {
+		t.Errorf("a script in a folder called pi was taken for pi")
+	}
+}

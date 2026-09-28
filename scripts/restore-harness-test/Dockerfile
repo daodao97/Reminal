@@ -2,7 +2,7 @@
 # Copyright (C) 2026 Harshal Gajjar
 FROM reminal-harnesses
 RUN mkdir -p /opt/rig
-COPY reminal mcp.sh sendb.sh /usr/local/bin/
+COPY reminal mcp.sh sendb.sh rig-procs.sh /usr/local/bin/
 COPY fake-llm.mjs setup.sh fake-provider.ts /opt/rig/
 ENV HOME=/root SHELL=/bin/bash
 # A boot: the model, first-run setup, then the daemon — which restores.
