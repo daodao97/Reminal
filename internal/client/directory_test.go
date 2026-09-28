@@ -14,6 +14,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -282,8 +283,17 @@ func TestDirectoryEndToEnd(t *testing.T) {
 			// owners reach sessions without it. DirSession has no PIN field so this
 			// holds structurally today; assert on the serialized response so a
 			// future field addition that leaks it fails loudly here.
-			if blob, _ := json.Marshal(r); strings.Contains(string(blob), "123456") {
-				t.Fatalf("PIN leaked onto the directory channel: %s", blob)
+			//
+			// Checked value by value rather than as a substring of the whole
+			// blob: the response carries live machine stats, and a runner whose
+			// cpu_pct came out 1.2345679012345678 failed this as a PIN leak.
+			if blob, err := json.Marshal(r); err == nil {
+				var any1 any
+				if json.Unmarshal(blob, &any1) == nil {
+					if where := findPINValue(any1, "123456", "response"); where != "" {
+						t.Fatalf("PIN leaked onto the directory channel at %s: %s", where, blob)
+					}
+				}
 			}
 			byID := map[string]bool{}
 			for _, s := range r.Sessions {
@@ -446,5 +456,65 @@ func TestKillLocalSession(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		_ = cmd.Process.Kill()
 		t.Fatal("child was not killed by killLocalSession")
+	}
+}
+
+// findPINValue reports where a decoded JSON document carries the given PIN as a
+// value of its own: any string containing it, or any number that IS it. It
+// deliberately does not match a PIN that merely appears inside a longer number
+// — a CPU percentage is not a leak.
+func findPINValue(v any, pin, path string) string {
+	switch t := v.(type) {
+	case string:
+		if strings.Contains(t, pin) {
+			return path
+		}
+	case float64:
+		if strconv.FormatFloat(t, 'f', -1, 64) == pin {
+			return path
+		}
+	case []any:
+		for i, e := range t {
+			if w := findPINValue(e, pin, fmt.Sprintf("%s[%d]", path, i)); w != "" {
+				return w
+			}
+		}
+	case map[string]any:
+		for k, e := range t {
+			if strings.Contains(k, pin) {
+				return path + "." + k + " (key)"
+			}
+			if w := findPINValue(e, pin, path+"."+k); w != "" {
+				return w
+			}
+		}
+	}
+	return ""
+}
+
+// The leak check above is only worth having if it still catches a real leak,
+// so this pins both halves: a PIN carried as a value fails, a PIN that merely
+// occurs inside an unrelated number does not.
+func TestFindPINValue(t *testing.T) {
+	const pin = "123456"
+	cases := []struct {
+		name string
+		doc  any
+		want bool
+	}{
+		{"pin as a string field", map[string]any{"sessions": []any{map[string]any{"pin": pin}}}, true},
+		{"pin inside a longer string", map[string]any{"url": "https://x/?p=123456#f"}, true},
+		{"pin as a number", map[string]any{"pin": float64(123456)}, true},
+		{"pin as a key", map[string]any{pin: "x"}, true},
+		{"cpu percentage that contains the digits", map[string]any{"cpu_pct": 1.2345679012345678}, false},
+		{"unrelated content", map[string]any{"hostname": "runner", "sessions": []any{map[string]any{"id": "ABCD2345"}}}, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := findPINValue(c.doc, pin, "response") != ""
+			if got != c.want {
+				t.Fatalf("findPINValue = %v, want %v", got, c.want)
+			}
+		})
 	}
 }
