@@ -850,6 +850,10 @@ func (a *Agent) Run() error {
 	// machine across all its sessions, so running it on every agent is safe.
 	go runDirectoryHost(shellExit, false, a.version)
 
+	// Uploads whose deadline passed while nothing was running — the session
+	// that took them has long exited, and its timer with it.
+	go func() { sweepUploadTTLs(time.Now()) }()
+
 	// Serve this session on a local socket too, so a same-machine viewer can
 	// attach with no relay — when the machine is offline, or just more directly.
 	// See attach.go / serveConn.
@@ -1738,17 +1742,22 @@ func (a *Agent) finalizeUpload(uploadID, safe string, raw []byte, ttlSeconds int
 		ttl := time.Duration(ttlSeconds) * time.Second
 		a.broadcastNotice(fmt.Sprintf("uploaded %s (%s) · auto-delete in %s%s",
 			path, humanByteSize(len(raw)), ttl, clipNote))
-		// AfterFunc runs in its own goroutine; if the agent exits before
-		// it fires, the file remains — the dedicated ~/Downloads/reminal/
-		// directory makes orphans obvious.
+		// Write the deadline down before arming the timer. AfterFunc lives in
+		// this process, and the person it was promised to is often about to
+		// close the session: without a record, ending the session cancelled
+		// the deletion and the file stayed on the host for good. The daemon
+		// (and the next agent to start) sweeps the record — see uploadttl.go.
+		rememberUploadTTL(path, time.Now().Add(ttl))
 		time.AfterFunc(ttl, func() {
 			if err := os.Remove(path); err != nil {
 				if os.IsNotExist(err) {
+					forgetUploadTTL(path)
 					return
 				}
 				a.broadcastNotice(fmt.Sprintf("auto-delete failed for %s: %v", path, err))
-				return
+				return // leave the record: the sweeper tries again
 			}
+			forgetUploadTTL(path)
 			a.broadcastNotice(fmt.Sprintf("auto-deleted %s (TTL %s expired)", path, ttl))
 		})
 	} else {
