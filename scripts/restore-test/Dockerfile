@@ -9,6 +9,6 @@ RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-ins
     && rm -rf /var/lib/apt/lists/*
 COPY reminal /usr/local/bin/reminal
 COPY mcp.sh /usr/local/bin/mcp.sh
-COPY fake-claude /usr/local/bin/claude
+COPY claude /usr/local/bin/claude
 ENV HOME=/root SHELL=/bin/bash
 CMD ["sh", "-c", "reminal daemon >/root/daemon.log 2>&1 & exec sleep infinity"]

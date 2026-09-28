@@ -26,11 +26,11 @@ if ! docker info >/dev/null 2>&1; then echo "Docker isn't running." >&2; exit 1;
 
 OUT=$(mktemp -d)
 trap 'rm -rf "$OUT"' EXIT
-cp "$DIR/Dockerfile" "$DIR/mcp.sh" "$DIR/fake-claude" "$OUT/"
+cp "$DIR/Dockerfile" "$DIR/mcp.sh" "$OUT/"
 docker run --rm -v "$ROOT":/src:ro -v "$OUT":/out \
     -v reminal-restore-gocache:/root/.cache/go-build -v reminal-restore-gomod:/go/pkg/mod \
     -e GOFLAGS=-buildvcs=false -e CGO_ENABLED=0 -w /src \
-    golang:1.26-bookworm go build -o /out/reminal ./cmd/reminal
+    golang:1.26-bookworm sh -c 'go build -o /out/reminal ./cmd/reminal && go build -o /out/claude ./scripts/restore-test/fakeclaude'
 docker build -q -t "$IMG" "$OUT" >/dev/null
 
 down
