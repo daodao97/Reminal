@@ -35,11 +35,6 @@ type Attn = "working" | "input" | "done";
  */
 const REFRESH_MS = 5 * 60 * 1000;
 
-// END_GRACE_MS is how long after agent_end a run is given to go on — a retry,
-// a compaction, a queued follow-up — before it is reported over, on a pi
-// that has no agent_settled to say so itself.
-const END_GRACE_MS = 1500;
-
 export default function reminalExtension(pi: ExtensionAPI): void {
 	const bin = resolveBin();
 
@@ -89,8 +84,40 @@ export default function reminalExtension(pi: ExtensionAPI): void {
 		}
 	};
 
+	/**
+	 * How long agent_end's proposal waits to be overtaken.
+	 *
+	 * Long enough for a retry or a queued continuation to announce itself — those
+	 * follow within a tick — and short enough that a version which never sends
+	 * agent_settled still lands a report nobody notices was late.
+	 */
+	const AGENT_END_GRACE_MS = 1500;
+
+	let pendingDone: ReturnType<typeof setTimeout> | undefined;
+
+	const dropPendingDone = (): void => {
+		if (pendingDone === undefined) return;
+		clearTimeout(pendingDone);
+		pendingDone = undefined;
+	};
+
+	/** Report the end of a run unless something newer happens first. */
+	const proposeDone = (): void => {
+		if (!reporting) return;
+		dropPendingDone();
+		pendingDone = setTimeout(() => {
+			pendingDone = undefined;
+			report("done");
+		}, AGENT_END_GRACE_MS);
+		// Never a reason to keep pi alive: if it is leaving, session_shutdown has
+		// already had the last word.
+		pendingDone.unref?.();
+	};
+
 	const report = (state: Attn): void => {
 		if (!reporting) return;
+		// Anything reported now is newer than a proposal waiting to be made.
+		dropPendingDone();
 		if (last && last.state === state && Date.now() - last.at < REFRESH_MS) return;
 		last = { state, at: Date.now() };
 		// Never block a lifecycle handler: the write happens on its own.
@@ -103,46 +130,31 @@ export default function reminalExtension(pi: ExtensionAPI): void {
 
 	// A run is under way. agent_start covers the whole loop; turn_start and
 	// turn_end keep a long one from aging out mid-work.
-	//
-	// The run is over — "your turn" — is agent_settled: it fires once nothing
-	// more is coming, no retry, compaction or queued follow-up, and it fires
-	// even when the run was interrupted or failed. pi 0.74 has no such
-	// event; its runs end with agent_end, which on a pi that has both comes
-	// a moment BEFORE those follow-ups. So agent_end starts a short clock
-	// and "done" is reported when it runs out; agent_settled reports done at
-	// once and stops the clock; and anything that means the run goes on —
-	// agent_start, turn_start — stops it too. On a pi with both, settled
-	// wins by a wide margin and nothing changes; on 0.74 the clock is the
-	// answer, and the seat reads done a moment late rather than never.
-	let ending: ReturnType<typeof setTimeout> | undefined;
-	const stillGoing = (): void => {
-		if (ending !== undefined) {
-			clearTimeout(ending);
-			ending = undefined;
-		}
-	};
-	pi.on("agent_start", () => {
-		stillGoing();
-		report("working");
-	});
-	pi.on("turn_start", () => {
-		stillGoing();
-		report("working");
-	});
+	pi.on("agent_start", () => report("working"));
+	pi.on("turn_start", () => report("working"));
 	pi.on("turn_end", () => report("working"));
-	pi.on("agent_end", () => {
-		stillGoing();
-		const t = setTimeout(() => {
-			ending = undefined;
-			report("done");
-		}, END_GRACE_MS);
-		t.unref?.();
-		ending = t;
-	});
-	pi.on("agent_settled", () => {
-		stillGoing();
-		report("done");
-	});
+
+	// The run is over: "your turn". Which event says so depends on the pi.
+	//
+	// agent_settled is the one that means it — it fires once nothing is left to
+	// come, retry, compaction and queued follow-up included. pi 0.74 does not
+	// have it at all, so a session there read "working" for good after its first
+	// turn, and in an org nothing queued for that seat was ever delivered.
+	//
+	// agent_end is in every version, but on one that has both it fires EARLIER —
+	// before a retry, a compaction, or a queued continuation. Reporting done
+	// there would say "your turn" while the turn is still going, and something
+	// acts on that: a seat reading done gets its org mail typed in, so mail
+	// would arrive mid-run. Deduplicating the second report does not help; the
+	// problem is the first one being early, not repeated.
+	//
+	// So agent_end only PROPOSES the end, a moment ahead. agent_settled reports
+	// it at once and cancels the proposal, as does anything else that has
+	// something newer to say. On a pi with both, that is exactly the behaviour
+	// of the version before this one. On 0.74 the report lands a second late,
+	// which nobody can perceive.
+	pi.on("agent_end", () => proposeDone());
+	pi.on("agent_settled", () => report("done"));
 
 	// pi is about to ask whether you trust this directory, and will sit there
 	// until you answer. That is the one moment pi genuinely needs you. Stay out
@@ -324,6 +336,7 @@ export default function reminalExtension(pi: ExtensionAPI): void {
 		// looks like an easy saving and is the bug back again: pi is about to exit,
 		// and an asynchronous write has no promise of landing first.
 		if (reporting) {
+			dropPendingDone(); // nothing pending outlives the session it belonged to
 			// Something else may be in flight, and it cannot be waited on — so stop
 			// it before it can land after us. Whatever it already wrote, the
 			// synchronous write below is the last word.
