@@ -75,6 +75,27 @@ func cleanTerm(s string) string {
 	return b.String()
 }
 
+// termSafe is cleanTerm for multi-line output: text that other people or
+// agents wrote, printed to this terminal, keeps its line breaks and tabs and
+// nothing else a terminal would act on — no escape sequence to rewrite the
+// screen, retitle the window, or (OSC 52) fill the clipboard with a command
+// to paste later.
+func termSafe(s string) string {
+	var b strings.Builder
+	b.Grow(len(s))
+	for _, r := range s {
+		if r == '\n' || r == '\t' {
+			b.WriteRune(r)
+			continue
+		}
+		if r == 0x1b || r < 0x20 || r == 0x7f || isC1OrBidi(r) {
+			continue
+		}
+		b.WriteRune(r)
+	}
+	return b.String()
+}
+
 func stripSGR(s string) string {
 	if !strings.Contains(s, "\x1b[") {
 		return s
