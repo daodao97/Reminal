@@ -102,9 +102,14 @@ export default function reminalExtension(pi: ExtensionAPI): void {
 	pi.on("turn_start", () => report("working"));
 	pi.on("turn_end", () => report("working"));
 
-	// agent_settled, not agent_end: it fires once the run is truly over, with no
-	// retry, compaction, or queued follow-up still to come, and it fires even
-	// when the run was interrupted or failed. That is exactly "your turn".
+	// The run is over: "your turn". agent_settled was the event for it — it
+	// fired once nothing was left to come, retry, compaction or queued
+	// follow-up included — and pi 0.74 dropped it, leaving agent_end, which
+	// a version that has both fires a moment earlier. Listening to both
+	// costs nothing (the second report of "done" is deduplicated) and
+	// keeps a seat from reading "working" for good after every turn on a
+	// pi that only has one of them.
+	pi.on("agent_end", () => report("done"));
 	pi.on("agent_settled", () => report("done"));
 
 	// pi is about to ask whether you trust this directory, and will sit there
