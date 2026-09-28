@@ -154,6 +154,38 @@ for (const [event, want] of [
 	assert.equal(await reported(), want, `${event} should report ${want}`);
 }
 
+// agent_end alone (pi 0.74) reports done — after a grace, not at once: on a
+// pi that has both events it comes before a retry, a compaction or a queued
+// follow-up, and agent_settled is what says the run is over.
+await b.emit("agent_start", { type: "agent_start" });
+fs.rmSync(statePath, { force: true });
+let t0 = Date.now();
+await b.emit("agent_end", { type: "agent_end" });
+await b.emit("agent_settled", { type: "agent_settled" });
+assert.equal(await reported(), "done", "agent_end + agent_settled should report done");
+assert.ok(Date.now() - t0 < 1000, "with agent_settled present, done must not wait for the grace");
+// The run going on within the grace cancels the pending done.
+await b.emit("agent_start", { type: "agent_start" });
+fs.rmSync(statePath, { force: true });
+await b.emit("agent_end", { type: "agent_end" });
+await new Promise((r) => setTimeout(r, 300));
+await b.emit("turn_start", { type: "turn_start" });
+await new Promise((r) => setTimeout(r, 2500));
+let after = "(nothing written)";
+try {
+	after = JSON.parse(fs.readFileSync(statePath, "utf8")).state;
+} catch {
+	// nothing written since the rm: the pending done was cancelled and
+	// "working" was deduplicated against the state before it
+}
+assert.notEqual(after, "done", "a run that went on after agent_end was reported done");
+// agent_end alone: done once the grace has passed.
+fs.rmSync(statePath, { force: true });
+t0 = Date.now();
+await b.emit("agent_end", { type: "agent_end" });
+assert.equal(await reported(), "done", "agent_end alone should report done");
+assert.ok(Date.now() - t0 >= 1000, "agent_end alone reported done before the grace");
+
 // Quitting has to leave the file right, whatever was queued behind it. A parked
 // write never gets its turn once pi is going away, and the dedup remembers what
 // was last reported rather than what was last written — so the shutdown report
@@ -193,6 +225,9 @@ for (let round = 0; round < 12; round++) {
 	// agent_settled. Either way the seat must read done.
 	await b.emit("agent_end", { type: "agent_end" });
 	if (round % 2 === 0) await b.emit("agent_settled", { type: "agent_settled" });
+	// With agent_end alone, done comes after the grace; turn_end's "working"
+	// is on disk until then, and reported() would take that fresh write.
+	else await new Promise((r) => setTimeout(r, 2000));
 	const got = await reported();
 	assert.equal(got, "done", `round ${round}: a finished turn left the session reading ${got}`);
 }
