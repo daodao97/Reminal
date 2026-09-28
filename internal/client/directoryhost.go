@@ -186,6 +186,16 @@ func (tb *tokenBucket) allow(now time.Time) bool {
 	return true
 }
 
+// refund puts a token back, for work that turned out to be an owner's own —
+// see refundOwnerHandshake.
+func (tb *tokenBucket) refund() {
+	tb.mu.Lock()
+	defer tb.mu.Unlock()
+	if tb.tokens < tb.max {
+		tb.tokens++
+	}
+}
+
 // applyLocalOpen answers a query that named one exposed port: its public link
 // and the PIN its gate asks for. Ports only — a shell session's PIN stays out of
 // the directory channel, which is the promise protocol.DirSession makes.

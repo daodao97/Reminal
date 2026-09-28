@@ -18,6 +18,7 @@ import (
 	"reminal/internal/atomicfile"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
 	"unicode"
 )
@@ -98,6 +99,13 @@ func ownersPath() (string, error) {
 // orphan its trust relationships); a permission/I-O error is surfaced, never
 // clobbered. The mint is an atomic 0600 write so a crash can't leave a partial
 // key the corrupt-guard would then wedge on.
+// keyMintMu serialises the create half of loadOrCreateKey. Handshakes can now
+// run concurrently, and two goroutines both finding no key would each mint one
+// and race to write it — leaving whoever lost holding an identity the machine
+// no longer has. A machine identity that changes is not a small bug: devices
+// pin it on first connect and treat a change as an attack.
+var keyMintMu sync.Mutex
+
 func loadOrCreateKey(path string) (ed25519.PrivateKey, error) {
 	b, rerr := os.ReadFile(path)
 	switch {
@@ -109,6 +117,16 @@ func loadOrCreateKey(path string) (ed25519.PrivateKey, error) {
 		return nil, fmt.Errorf("key at %s is corrupt; move it aside to mint a new identity", path)
 	case !os.IsNotExist(rerr):
 		return nil, rerr
+	}
+	keyMintMu.Lock()
+	defer keyMintMu.Unlock()
+	// Whoever waited on the lock may be looking at a key the winner just
+	// wrote; take that one rather than replacing it.
+	if b, rerr := os.ReadFile(path); rerr == nil {
+		raw, derr := base64.StdEncoding.DecodeString(strings.TrimSpace(string(b)))
+		if derr == nil && len(raw) == ed25519.PrivateKeySize {
+			return ed25519.PrivateKey(raw), nil
+		}
 	}
 	_, priv, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {

@@ -291,12 +291,25 @@ const (
 )
 
 // allowOwnerHandshake gates owner handshakes: the machine channel's wider
-// bucket in machine mode, a session's PIN-guess bucket otherwise.
+// bucket in machine mode, the session's own owner-verify bucket otherwise.
+// Never the PIN-guess bucket — a signed owner proof is not a PIN guess, and
+// charging it there let a few reconnects lock an owner out of their machine.
 func (a *Agent) allowOwnerHandshake() bool {
 	if a.dirLimits != nil {
 		return a.dirLimits.hshake.allow(time.Now())
 	}
-	return a.allowKex(time.Now())
+	return a.allowOwnerVerify(time.Now())
+}
+
+// refundOwnerHandshake returns the token allowOwnerHandshake took, to whichever
+// bucket took it. Called once a handshake has proven it came from an enrolled
+// owner, so only unprovable attempts end up costing anything.
+func (a *Agent) refundOwnerHandshake() {
+	if a.dirLimits != nil {
+		a.dirLimits.hshake.refund()
+		return
+	}
+	a.refundOwnerVerify()
 }
 
 // allowDir applies the machine channel's limits. A session agent (no limits

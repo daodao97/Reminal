@@ -5108,8 +5108,41 @@
     // the session key — no PIN. Falls back to the PIN handshake if the machine
     // doesn't recognise us. Must byte-match internal/crypto/owner.go.
     const OWNER_TIMEOUT_MS = 4000;
+    // A machine under load can miss the window above without having refused
+    // us, so silence gets one more chance before we conclude anything. And a
+    // machine that says own_busy has told us to come back — that is not a
+    // refusal at all, so those retries are counted separately and allowed to
+    // run longer.
+    const OWNER_SILENT_RETRIES = 1;
+    const OWNER_BUSY_RETRIES = 4;
+    const OWNER_RETRY_MS = 1200;
     let ownerTimer = 0;
+    let ownerSilentTries = 0;
+    let ownerBusyTries = 0;
     const ownerAttempts = new Map();
+
+    // retryOwnerInit re-runs the handshake once the current attempt is over.
+    function retryOwnerInit(waitMs) {
+      if (ownerTimer) { clearTimeout(ownerTimer); ownerTimer = 0; }
+      ownerAttempts.clear();
+      setTimeout(() => { if (!cryptoKey) sendOwnerInit().catch(() => {}); }, waitMs);
+    }
+
+    // ownerGaveUp is the end of the owner path: fall back to a PIN if we have
+    // one, and otherwise say what we actually know. Silence from the machine
+    // means EITHER that this device isn't enrolled OR that nothing answered,
+    // and telling someone they don't own a machine they do own — which is what
+    // the old wording did on every slow handshake — sends them to re-enrol a
+    // device that was fine.
+    function ownerGaveUp(reason) {
+      if (cryptoKey) return;
+      ownerAttempts.clear();
+      dbg('owner handshake gave up: ' + reason);
+      if (pinValue) { sendKexInit().catch(() => {}); return; }
+      setStatus(reason === 'busy'
+        ? 'This machine is too busy to confirm this device right now — retry, or enter the PIN'
+        : 'Couldn’t connect as an owner — enter the PIN, or add this device as an owner', 'error');
+    }
 
     async function loadDeviceKeyPair() {
       try {
@@ -5175,10 +5208,13 @@
         ownerTimer = setTimeout(() => {
           ownerTimer = 0;
           if (cryptoKey) return;
-          ownerAttempts.clear();
-          dbg('owner handshake timed out — falling back to PIN');
-          if (pinValue) sendKexInit().catch(() => {});
-          else setStatus('This device isn’t an owner of this machine — a PIN is required', 'error');
+          if (ownerSilentTries < OWNER_SILENT_RETRIES) {
+            ownerSilentTries++;
+            dbg('owner handshake timed out — retry ' + ownerSilentTries);
+            retryOwnerInit(OWNER_RETRY_MS);
+            return;
+          }
+          ownerGaveUp('timeout');
         }, OWNER_TIMEOUT_MS);
         return true;
       } finally { kexInFlight = false; }
@@ -5235,6 +5271,8 @@
     // else the PIN path.
     async function startHandshake() {
       if (cryptoKey) return;
+      ownerSilentTries = 0;
+      ownerBusyTries = 0;
       const tried = await sendOwnerInit();
       if (!tried) await sendKexInit();
     }
@@ -7721,6 +7759,21 @@
             setStatus('Handshake failed: ' + e.message, 'error');
             fatal = true;
             try { ws.close(); } catch (_) {}
+          }
+          break;
+        case 'own_busy':
+          // Not a refusal: the machine is over its handshake allowance and has
+          // asked us to come back. Waiting is the whole fix — the old silence
+          // here read as "you are not an owner".
+          if (cryptoKey) break;
+          if (ownerBusyTries < OWNER_BUSY_RETRIES) {
+            ownerBusyTries++;
+            const wait = Math.min(Math.max(Number(msg.retry_ms) || OWNER_RETRY_MS, 250), 5000);
+            dbg('own_busy — retry ' + ownerBusyTries + ' in ' + wait + 'ms');
+            setStatus('Machine is busy — retrying…', 'warn');
+            retryOwnerInit(wait);
+          } else {
+            ownerGaveUp('busy');
           }
           break;
         case 'own_resp':

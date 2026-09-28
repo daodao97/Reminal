@@ -57,6 +57,14 @@ const (
 	// device can confirm it's the real host, plus the wrapped session key
 	// (Wrap) — delivered only after the device signature verified.
 	TypeOwnerResp MessageType = "own_resp"
+	// TypeOwnerBusy tells a device that asked to connect PIN-free that we are
+	// not refusing it — we are over our handshake allowance right now and it
+	// should try again shortly (RetryMS). Refusals stay silent, so a device
+	// that is simply not enrolled learns nothing; this says only "ask later",
+	// which any caller could have worked out by waiting anyway. Without it a
+	// throttled owner is indistinguishable from an unenrolled one, and the
+	// viewer tells someone they do not own a machine they do own.
+	TypeOwnerBusy MessageType = "own_busy"
 	// TypeDirQuery is sent by an owner device on a machine's owner-derived
 	// directory channel, AFTER an own_init/own_resp handshake there has proven
 	// ownership, to ask "what sessions are you running?". No payload.
@@ -364,6 +372,9 @@ type Message struct {
 	DeviceSig  string `json:"device_sig,omitempty"`
 	MachinePub string `json:"machine_pub,omitempty"`
 	MachineSig string `json:"machine_sig,omitempty"`
+	// RetryMS is how long a TypeOwnerBusy asks the device to wait before it
+	// tries the handshake again, in milliseconds.
+	RetryMS int `json:"retry_ms,omitempty"`
 }
 
 // DirSession is one live session as reported by a machine's directory host. It
