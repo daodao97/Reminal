@@ -142,10 +142,16 @@ var resumers = map[string]resumer{
 		latest: func(b string, _ []string) []string { return []string{b, "resume"} },
 	},
 	"gemini": {latest: func(b string, f []string) []string { return plainFlags(b, f, "--resume", "latest") }},
-	"qwen":   {latest: func(b string, f []string) []string { return plainFlags(b, f, "--continue") }},
+	"qwen": {
+		byID:   func(b string, f []string, c string) []string { return plainFlags(b, f, "--resume", c) },
+		latest: func(b string, f []string) []string { return plainFlags(b, f, "--continue") },
+	},
 	"opencode": {
 		latest: func(b string, f []string) []string { return plainFlags(b, f, "--continue") },
 	},
+	"pi":  {latest: func(b string, f []string) []string { return plainFlags(b, f, "--continue") }},
+	"agy": {latest: func(b string, f []string) []string { return plainFlags(b, f, "--continue") }},
+	"amp": {latest: func(b string, _ []string) []string { return []string{b, "threads", "continue"} }},
 }
 
 // valueFlags take the next argument as their value. Anything else not
@@ -154,7 +160,8 @@ var valueFlags = map[string]bool{
 	"--model": true, "-m": true, "--permission-mode": true, "--add-dir": true, "--agent": true,
 	"--settings": true, "--mcp-config": true, "--allowedTools": true, "--allowed-tools": true,
 	"--disallowedTools": true, "--disallowed-tools": true, "--append-system-prompt": true,
-	"--fallback-model": true, "--sandbox": true, "-s": true, "--profile": true, "-p": false,
+	"--fallback-model": true, "--sandbox": true, "-s": true, "--profile": true,
+	"--provider": true, "-e": true, "--extension": true, "--thinking": true, "--approval-mode": true,
 }
 
 // resumeDrop are flags that pick or start a conversation — replaced by the

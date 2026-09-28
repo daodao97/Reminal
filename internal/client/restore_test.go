@@ -35,6 +35,15 @@ func TestResumeArgv(t *testing.T) {
 		{"cursor-agent latest",
 			session.Restore{Fg: "cursor-agent", FgArgs: []string{"cursor-agent", "-f"}},
 			[]string{"cursor-agent", "resume"}},
+		{"qwen by id",
+			session.Restore{Fg: "qwen", FgArgs: []string{"node", "/usr/local/bin/qwen"}, Conv: "2e03a898-8ab6"},
+			[]string{"qwen", "--resume", "2e03a898-8ab6"}},
+		{"gemini resumes only by index or latest",
+			session.Restore{Fg: "gemini", FgArgs: []string{"node", "/usr/local/bin/gemini", "--resume", "latest"}, Conv: "6b229456-6e4c"},
+			[]string{"gemini", "--resume", "latest"}},
+		{"pi keeps a provider given as a flag",
+			session.Restore{Fg: "pi", FgArgs: []string{"pi", "--provider", "fake", "-e", "/x/p.ts"}},
+			[]string{"pi", "--provider", "fake", "-e", "/x/p.ts", "--continue"}},
 		{"not an agent", session.Restore{Fg: "vim", FgArgs: []string{"vim", "x"}}, nil},
 	}
 	for _, c := range cases {
