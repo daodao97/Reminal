@@ -25,7 +25,7 @@ node -e '
 const k=process.argv[1]; const fs=require("fs");
 fs.writeFileSync("/root/.claude.json", JSON.stringify({hasCompletedOnboarding:true, theme:"dark",
   customApiKeyResponses:{approved:[k.slice(-20)], rejected:[]},
-  projects:{"/root/p-claude":{hasTrustDialogAccepted:true, hasCompletedProjectOnboarding:true, allowedTools:[]}}}, null, 2));' "$KEY"
+  projects:Object.fromEntries(["/root/p-claude","/root/shared-claude"].map(p=>[p,{hasTrustDialogAccepted:true, hasCompletedProjectOnboarding:true, allowedTools:[]}]))}, null, 2));' "$KEY"
 
 # codex: a provider of its own, the folder trusted.
 mkdir -p /root/.codex
@@ -41,6 +41,9 @@ env_key = "FAKE_KEY"
 wire_api = "responses"
 
 [projects."/root/p-codex"]
+trust_level = "trusted"
+
+[projects."/root/shared-codex"]
 trust_level = "trusted"
 EOC
 

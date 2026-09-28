@@ -32,6 +32,9 @@ import (
 
 const (
 	restoreSaveEvery = 15 * time.Second
+	// restoreSettle is how long a restored session's record keeps saying
+	// which agent it had, while the sessions around it are restored.
+	restoreSettle = 2 * time.Minute
 	envRestore       = "REMINAL_RESTORE"
 )
 
@@ -61,8 +64,13 @@ func (a *Agent) saveRestore() {
 	}
 	// Something else is in the foreground for a moment (a pager the agent
 	// opened, say): keep what was last known. Only the shell's own prompt
-	// says the agent has ended.
-	if r.Fg == "" && !a.restoreFgGone() {
+	// says the agent has ended — except just after a restore, when the
+	// prompt is there because the agent has not been started again yet.
+	// Sessions restored after this one decide from this record whether
+	// they shared a folder with it (see resumePlan), so until the restore
+	// settles it keeps saying what was running.
+	restoringNow := a.restoring && time.Since(a.startedAt) < restoreSettle
+	if r.Fg == "" && (restoringNow || !a.restoreFgGone()) {
 		if prev, err := session.ReadRestore(a.sessionID); err == nil {
 			r.Fg, r.FgArgs, r.Conv = prev.Fg, prev.FgArgs, prev.Conv
 		}
