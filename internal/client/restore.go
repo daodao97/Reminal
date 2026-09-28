@@ -117,6 +117,12 @@ func (a *Agent) settleRestore() {
 type resumer struct {
 	byID   func(bin string, flags []string, conv string) []string
 	latest func(bin string, flags []string) []string
+	// pick opens the agent's own list of conversations to choose from —
+	// what is typed when "latest" could be another session's.
+	pick func(bin string, flags []string) []string
+	// how says, to a person, how to find a conversation again by hand, for
+	// an agent with no list to open.
+	how string
 }
 
 func plainFlags(bin string, flags []string, tail ...string) []string {
@@ -132,26 +138,43 @@ var resumers = map[string]resumer{
 	"claude": {
 		byID:   func(b string, f []string, c string) []string { return plainFlags(b, f, "--resume", c) },
 		latest: func(b string, f []string) []string { return plainFlags(b, f, "--continue") },
+		pick:   func(b string, f []string) []string { return plainFlags(b, f, "--resume") },
 	},
 	"codex": {
 		byID:   func(b string, _ []string, c string) []string { return []string{b, "resume", c} },
 		latest: func(b string, _ []string) []string { return []string{b, "resume", "--last"} },
+		pick:   func(b string, _ []string) []string { return []string{b, "resume"} },
 	},
 	"cursor-agent": {
 		byID:   func(b string, f []string, c string) []string { return plainFlags(b, f, "--resume", c) },
 		latest: func(b string, _ []string) []string { return []string{b, "resume"} },
+		pick:   func(b string, f []string) []string { return plainFlags(b, f, "--resume") },
 	},
-	"gemini": {latest: func(b string, f []string) []string { return plainFlags(b, f, "--resume", "latest") }},
+	"gemini": {
+		latest: func(b string, f []string) []string { return plainFlags(b, f, "--resume", "latest") },
+		how:    "gemini --list-sessions, then gemini --resume <number>",
+	},
 	"qwen": {
 		byID:   func(b string, f []string, c string) []string { return plainFlags(b, f, "--resume", c) },
 		latest: func(b string, f []string) []string { return plainFlags(b, f, "--continue") },
+		pick:   func(b string, f []string) []string { return plainFlags(b, f, "--resume") },
 	},
 	"opencode": {
 		latest: func(b string, f []string) []string { return plainFlags(b, f, "--continue") },
+		how:    "opencode session list, then opencode --session <id>",
 	},
-	"pi":  {latest: func(b string, f []string) []string { return plainFlags(b, f, "--continue") }},
-	"agy": {latest: func(b string, f []string) []string { return plainFlags(b, f, "--continue") }},
-	"amp": {latest: func(b string, _ []string) []string { return []string{b, "threads", "continue"} }},
+	"pi": {
+		latest: func(b string, f []string) []string { return plainFlags(b, f, "--continue") },
+		how:    "start pi and pick the conversation from its session list",
+	},
+	"agy": {
+		latest: func(b string, f []string) []string { return plainFlags(b, f, "--continue") },
+		how:    "start agy and pick the conversation from its session list",
+	},
+	"amp": {
+		latest: func(b string, _ []string) []string { return []string{b, "threads", "continue"} },
+		how:    "amp threads list, then amp threads continue <id>",
+	},
 }
 
 // valueFlags take the next argument as their value. Anything else not
@@ -174,12 +197,65 @@ var resumeDrop = map[string]bool{
 // oneShot marks a run that was never interactive: nothing to resume.
 var oneShot = map[string]bool{"-p": true, "--print": true, "exec": true}
 
-// resumeArgv is the command that resumes r's agent, or nil.
+// resumeArgv is the command that resumes r's agent, or nil — assuming it is
+// the only one of its kind in its folder (see resumePlan).
 func resumeArgv(r session.Restore) []string {
 	rs, ok := resumers[r.Fg]
 	if !ok {
 		return nil
 	}
+	flags, ok := resumeFlags(r)
+	if !ok {
+		return nil
+	}
+	if r.Conv != "" && rs.byID != nil {
+		return rs.byID(r.Fg, flags, r.Conv)
+	}
+	if rs.latest != nil {
+		return rs.latest(r.Fg, flags)
+	}
+	return nil
+}
+
+// resumePlan is what to type into r's restored shell, and a line to show
+// above it, given every other session that is being (or was) restored.
+//
+// Resuming by id is exact. "Latest" is exact only when r was the one
+// session running its agent in its folder: when two claudes shared a
+// folder and a reboot ended both, "the latest conversation here" is one
+// of theirs for both of them. Then the agent's own list is opened so a
+// person picks — or, for an agent with none, it is not started and the
+// line says how to find the conversation.
+func resumePlan(r session.Restore, peers []session.Restore) (argv []string, note string) {
+	argv = resumeArgv(r)
+	rs := resumers[r.Fg]
+	if argv == nil || (r.Conv != "" && rs.byID != nil) || !sharesFolder(r, peers) {
+		return argv, ""
+	}
+	flags, _ := resumeFlags(r)
+	if rs.pick != nil {
+		return rs.pick(r.Fg, flags), "several " + r.Fg + " conversations were running in this folder — pick this session's"
+	}
+	how := rs.how
+	if how == "" {
+		how = "start " + r.Fg + " and pick the conversation"
+	}
+	return nil, r.Fg + " was running here, as it was in another session in this folder; to find this one's conversation: " + how
+}
+
+// sharesFolder says another session ran the same agent in r's folder.
+func sharesFolder(r session.Restore, peers []session.Restore) bool {
+	for _, p := range peers {
+		if p.ID != r.ID && p.Fg == r.Fg && p.Cwd != "" && filepath.Clean(p.Cwd) == filepath.Clean(r.Cwd) {
+			return true
+		}
+	}
+	return false
+}
+
+// resumeFlags are the flags r's agent was started with that a resume keeps;
+// false for a run that was never interactive.
+func resumeFlags(r session.Restore) ([]string, bool) {
 	// Where the program's own arguments start: past an interpreter (node
 	// running claude's script, say) to the argument that names it.
 	args := r.FgArgs
@@ -197,7 +273,7 @@ func resumeArgv(r session.Restore) []string {
 	for i := start; i < len(args); i++ {
 		a := args[i]
 		if oneShot[a] {
-			return nil
+			return nil, false
 		}
 		name := a
 		if k := strings.IndexByte(a, '='); k > 0 {
@@ -218,13 +294,7 @@ func resumeArgv(r session.Restore) []string {
 			i++
 		}
 	}
-	if r.Conv != "" && rs.byID != nil {
-		return rs.byID(r.Fg, flags, r.Conv)
-	}
-	if rs.latest != nil {
-		return rs.latest(r.Fg, flags)
-	}
-	return nil
+	return flags, true
 }
 
 var shellSafe = regexp.MustCompile(`^[A-Za-z0-9_@%+=:,./-]+$`)
@@ -247,30 +317,35 @@ func shellJoin(argv []string) string {
 // LoadRestoreState turns a restore record into what a headless agent starts
 // from: the session's identity and scrollback, no PTY (a new shell is
 // started), and the command that resumes its agent.
-func LoadRestoreState(id string) (*ResumeState, string, error) {
+func LoadRestoreState(id string) (*ResumeState, string, string, error) {
 	r, err := session.ReadRestore(id)
 	if err != nil {
-		return nil, "", fmt.Errorf("no restore record for %s: %w", id, err)
+		return nil, "", "", fmt.Errorf("no restore record for %s: %w", id, err)
 	}
 	if r.PIN == "" {
-		return nil, "", errors.New("restore record has no PIN")
+		return nil, "", "", errors.New("restore record has no PIN")
 	}
 	st := &ResumeState{SessionID: r.ID, PIN: r.PIN, PinHash: r.PinHash, Token: r.Token,
 		StartedAt: time.Now(), Name: r.Name, Headless: true}
 	if p, err := session.RestoreScrollbackPath(r.ID); err == nil {
 		st.Dump = readScrollbackDump(p)
 	}
+	peers, _ := session.ReadRestores()
+	argv, note := resumePlan(*r, peers)
 	run := ""
-	if argv := resumeArgv(*r); argv != nil {
+	if argv != nil {
 		run = shellJoin(argv)
 	}
-	return st, run, nil
+	return st, run, note, nil
 }
 
 // restoreStart runs once the new shell is up: the banner, then — when an
 // agent was running — the command that resumes it, typed at the prompt.
 func (a *Agent) restoreStart() {
 	a.record([]byte(restoreBanner))
+	if a.restoreNote != "" {
+		a.record([]byte("\x1b[2m" + a.restoreNote + "\x1b[0m\r\n"))
+	}
 	run := a.restoreRun
 	if run == "" {
 		return

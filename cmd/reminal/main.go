@@ -771,12 +771,12 @@ func main() {
 		opts := client.AgentOptions{Headless: true, HandshakeFD: *handshakeFD, HandshakeAddr: *handshakeAddr, Name: hlName}
 		// Started by `reminal restore`: the session comes back as itself.
 		if id := client.RestoreEnvID(); id != "" {
-			st, run, err := client.LoadRestoreState(id)
+			st, run, note, err := client.LoadRestoreState(id)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "error: %v\n", err)
 				os.Exit(1)
 			}
-			opts.Resume, opts.RestoreRun = st, run
+			opts.Resume, opts.RestoreRun, opts.RestoreNote = st, run, note
 		}
 		agent, err := client.NewAgentWith(version, opts)
 		if err != nil {

@@ -117,10 +117,11 @@ type Agent struct {
 	// resumes the agent that was running; restoreSeq is the scrollback last
 	// saved for a restore; stopSignal, that a signal (not the shell) ended
 	// the session, so it may come back. See restore.go.
-	restoring  bool
-	restoreRun string
-	restoreSeq uint64
-	stopSignal atomic.Bool
+	restoring   bool
+	restoreRun  string
+	restoreNote string
+	restoreSeq  uint64
+	stopSignal  atomic.Bool
 
 	// screen is a headless terminal emulator fed the same plaintext output
 	// that goes to viewers. On a fresh attach we serialize its current state
@@ -480,6 +481,9 @@ type AgentOptions struct {
 	// restored after its machine restarted (Resume with no PTY): the command
 	// that resumes the coding agent it was running. See restore.go.
 	RestoreRun string
+	// RestoreNote is shown under the restore banner: why the agent was not
+	// simply resumed (see resumePlan).
+	RestoreNote string
 	// Name is an optional human-friendly label for the session, surfaced by
 	// `reminal list` and usable in place of the ID. Set from
 	// `reminal new --name` / `reminal --name`. Empty leaves the session
@@ -562,6 +566,7 @@ func NewAgentWith(version string, opts AgentOptions) (*Agent, error) {
 			resumed:        true,
 			restoring:      r.PTY == nil,
 			restoreRun:     opts.RestoreRun,
+			restoreNote:    opts.RestoreNote,
 			resumeDump:     r.Dump,
 			headless:       opts.Headless || r.Headless,
 			handshakeFD:    opts.HandshakeFD,
