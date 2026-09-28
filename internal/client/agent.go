@@ -112,6 +112,15 @@ type Agent struct {
 	dirLimits *dirLimits
 	buf       *scrollback
 	term      *pty.Session
+	// restoring: this agent is bringing a session back after its machine
+	// restarted — its identity is the old one, its shell is new. restoreRun
+	// resumes the agent that was running; restoreSeq is the scrollback last
+	// saved for a restore; stopSignal, that a signal (not the shell) ended
+	// the session, so it may come back. See restore.go.
+	restoring  bool
+	restoreRun string
+	restoreSeq uint64
+	stopSignal atomic.Bool
 
 	// screen is a headless terminal emulator fed the same plaintext output
 	// that goes to viewers. On a fresh attach we serialize its current state
@@ -467,6 +476,10 @@ type AgentOptions struct {
 	// verbatim instead of being freshly generated, so viewers
 	// reconnect to the same session URL.
 	Resume *ResumeState
+	// RestoreRun is typed at the new shell's prompt when a session is
+	// restored after its machine restarted (Resume with no PTY): the command
+	// that resumes the coding agent it was running. See restore.go.
+	RestoreRun string
 	// Name is an optional human-friendly label for the session, surfaced by
 	// `reminal list` and usable in place of the ID. Set from
 	// `reminal new --name` / `reminal --name`. Empty leaves the session
@@ -547,6 +560,8 @@ func NewAgentWith(version string, opts AgentOptions) (*Agent, error) {
 			term:           r.PTY,
 			startedAt:      r.StartedAt,
 			resumed:        true,
+			restoring:      r.PTY == nil,
+			restoreRun:     opts.RestoreRun,
 			resumeDump:     r.Dump,
 			headless:       opts.Headless || r.Headless,
 			handshakeFD:    opts.HandshakeFD,
@@ -678,6 +693,7 @@ func (a *Agent) Run() error {
 		if !a.restarting.Load() {
 			_ = session.ClearActive(a.sessionID)
 			_ = session.ClearHookState(a.sessionID)
+			a.settleRestore()
 		}
 	}()
 	// During a Windows hot restart, Run winds down the moment the successor
@@ -721,7 +737,7 @@ func (a *Agent) Run() error {
 	// multiple agents or attach-vs-source contexts).
 	// Skipped on hot-restart resume: the shell is already running inside
 	// the inherited PTY; we just need to take over reading + writing.
-	if !a.resumed {
+	if !a.resumed || a.restoring {
 		// Inject the session ID, PIN, and join URL into the shell's
 		// env so `reminal info` works from anywhere — including the
 		// (rare) case where the shell is on a different machine than
@@ -834,6 +850,9 @@ func (a *Agent) Run() error {
 	// very first byte (snapshot-on-attach; REMINAL_SNAPSHOT=0 disables it).
 	a.initScreen()
 	a.restoreResumedScrollback()
+	if a.restoring {
+		go a.restoreStart()
+	}
 
 	// Created before the PTY pump starts: the pump's OSC sniffer kicks this
 	// channel the moment the shell announces a cwd change.
@@ -853,6 +872,7 @@ func (a *Agent) Run() error {
 	// `reminal list` ordering and `reminal prune` idle detection work
 	// regardless of how the session was started. Stops when the shell exits.
 	go a.metaFlushLoop(shellExit)
+	go a.restoreLoop(shellExit)
 
 	// Closed-lid mode's display watcher (macOS; no-op elsewhere): keeps a
 	// virtual display up while the machine is headless so remote view/control
@@ -897,6 +917,11 @@ func (a *Agent) Run() error {
 				os.Exit(130)
 			}
 			first = false
+			// Ended from outside — the machine shutting down, most likely:
+			// the session is kept so it can be restored (see settleRestore).
+			if sig != os.Interrupt {
+				a.stopSignal.Store(true)
+			}
 			agentNotify("\n  [%s] %s received, shutting down… (press again to force exit)\n",
 				time.Now().Format("15:04:05"), sig)
 			_ = a.term.Close()
@@ -1947,6 +1972,7 @@ func (a *Agent) pause() {
 	}
 	_ = session.ClearActive(a.sessionID)
 	_ = session.ClearHookState(a.sessionID)
+	_ = session.ClearRestore(a.sessionID) // stopped on purpose: not to come back
 	a.currentConnMu.Lock()
 	if a.currentConn != nil {
 		closeRelayConn(a.currentConn, "paused")

@@ -50,9 +50,25 @@ func (a *Agent) writeScrollbackDump() (string, error) {
 	if a == nil || a.buf == nil || a.box == nil || a.sessionID == "" {
 		return "", nil
 	}
+	path, err := scrollbackDumpPath(a.sessionID)
+	if err != nil {
+		return "", err
+	}
+	if len(a.buf.From(0)) == 0 {
+		return "", nil
+	}
+	return path, a.writeScrollbackDumpTo(path)
+}
+
+// writeScrollbackDumpTo writes the live buffer, decrypted, to path (0600).
+// An empty buffer writes nothing.
+func (a *Agent) writeScrollbackDumpTo(path string) error {
+	if a == nil || a.buf == nil || a.box == nil {
+		return nil
+	}
 	raw := a.buf.From(0)
 	if len(raw) == 0 {
-		return "", nil
+		return nil
 	}
 	dump := scrollbackDump{
 		Version: scrollbackDumpVersion,
@@ -65,23 +81,22 @@ func (a *Agent) writeScrollbackDump() (string, error) {
 		if e.Data != "" {
 			pt, err := a.box.Decrypt(e.Data)
 			if err != nil {
-				return "", fmt.Errorf("decrypt scrollback seq %d: %w", e.Seq, err)
+				return fmt.Errorf("decrypt scrollback seq %d: %w", e.Seq, err)
 			}
 			de.Data = pt
 		}
 		dump.Entries = append(dump.Entries, de)
 	}
-	path, err := scrollbackDumpPath(a.sessionID)
-	if err != nil {
-		return "", err
-	}
 	body, err := json.Marshal(dump)
 	if err != nil {
-		return "", err
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return err
 	}
 	tmp := path + ".tmp"
 	if err := os.WriteFile(tmp, body, 0o600); err != nil {
-		return "", err
+		return err
 	}
 	// Windows rename refuses to replace an existing dest. A leftover from a
 	// failed restart would then make every later dump fail open (no history).
@@ -90,9 +105,9 @@ func (a *Agent) writeScrollbackDump() (string, error) {
 	_ = os.Remove(path)
 	if err := os.Rename(tmp, path); err != nil {
 		_ = os.Remove(tmp)
-		return "", err
+		return err
 	}
-	return path, nil
+	return nil
 }
 
 // dumpScrollbackForRestart writes the dump if there is history. A write
@@ -123,8 +138,15 @@ func takeScrollbackDump(path string) *scrollbackDump {
 	if path == "" {
 		return nil
 	}
-	body, err := os.ReadFile(path)
+	d := readScrollbackDump(path)
 	removeScrollbackDump(path)
+	return d
+}
+
+// readScrollbackDump loads a dump and leaves it in place — a restore that
+// fails can be tried again. Nil when missing, unreadable or empty.
+func readScrollbackDump(path string) *scrollbackDump {
+	body, err := os.ReadFile(path)
 	if err != nil {
 		return nil
 	}

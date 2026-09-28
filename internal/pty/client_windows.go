@@ -301,3 +301,7 @@ func (s *Session) CopyTo(w io.Writer, done chan<- struct{}) {
 	defer close(done)
 	_, _ = io.Copy(w, s)
 }
+
+// EndedBySignal: Windows has no signals to tell a shutdown from an exit by;
+// every ending counts as on purpose.
+func (s *Session) EndedBySignal() bool { return false }

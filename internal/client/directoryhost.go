@@ -255,6 +255,7 @@ func killLocalSession(id string) error {
 		// the list until the next refresh). The goroutine below still escalates
 		// to SIGKILL if the shell ignores SIGTERM.
 		_ = session.ClearActive(a.ID)
+		_ = session.ClearRestore(a.ID) // killed on purpose: never to be restored
 		go func(pid int) {
 			deadline := time.Now().Add(3 * time.Second)
 			for time.Now().Before(deadline) {
