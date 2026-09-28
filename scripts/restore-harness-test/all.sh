@@ -7,6 +7,10 @@
 # Desktop's VM falls over well before twenty):
 #   1. each agent alone in its folder — resumed exactly (check.sh)
 #   2-4. several of one agent in one folder (check-multi.sh)
+#   5. each started with its flags and a prompt (check-flags.sh)
+# cursor-agent needs a Cursor login, which a fresh box has not got: log in
+# in the box (`cursor-agent login`) and run check-flags.sh and
+# check-cursor-shared.sh by hand for it.
 # Leaves nothing running: `run.sh down` at the end.
 DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 rc=0
@@ -21,5 +25,7 @@ for plan in "claude:3 qwen:2|claude" "codex:2 gemini:2|" "opencode:2 pi:2|"; do
     "$DIR/run.sh" up >/dev/null
     part "shared folders: ${plan%%|*}" env PLAN="${plan%%|*}" NOID="${plan#*|}" "$DIR/check-multi.sh"
 done
+"$DIR/run.sh" up >/dev/null
+part "started with flags" "$DIR/check-flags.sh"
 "$DIR/run.sh" down >/dev/null
 exit $rc

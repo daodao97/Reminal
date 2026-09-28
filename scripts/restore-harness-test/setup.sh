@@ -15,17 +15,21 @@ mkdir -p /root/p-claude /root/p-codex /root/p-gemini /root/p-qwen /root/p-openco
 cat > /root/.bash_profile <<EOP
 export PATH=/root/.local/bin:\$PATH
 export ANTHROPIC_BASE_URL=$M ANTHROPIC_API_KEY=$KEY CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1 DISABLE_AUTOUPDATER=1
-export FAKE_KEY=not-a-secret
+export FAKE_KEY=not-a-secret IS_SANDBOX=1
 export GEMINI_API_KEY=not-a-secret GOOGLE_GEMINI_BASE_URL=$M
 export OPENAI_API_KEY=not-a-secret OPENAI_BASE_URL=$M/v1 OPENAI_MODEL=fake-model
 EOP
 
-# claude: onboarding done, the key approved, the folder trusted.
+# claude: onboarding done, the key approved, the folders trusted, and the
+# bypass-permissions warning accepted once, as a person who uses it has.
 node -e '
 const k=process.argv[1]; const fs=require("fs");
-fs.writeFileSync("/root/.claude.json", JSON.stringify({hasCompletedOnboarding:true, theme:"dark",
+fs.writeFileSync("/root/.claude.json", JSON.stringify({hasCompletedOnboarding:true, theme:"dark", bypassPermissionsModeAccepted:true,
   customApiKeyResponses:{approved:[k.slice(-20)], rejected:[]},
-  projects:Object.fromEntries(["/root/p-claude","/root/shared-claude"].map(p=>[p,{hasTrustDialogAccepted:true, hasCompletedProjectOnboarding:true, allowedTools:[]}]))}, null, 2));' "$KEY"
+  projects:Object.fromEntries(["/root/p-claude","/root/shared-claude","/root/f-claude"].map(p=>[p,{hasTrustDialogAccepted:true, hasCompletedProjectOnboarding:true, allowedTools:[]}]))}, null, 2));' "$KEY"
+
+mkdir -p /root/.claude
+echo '{"skipDangerousModePermissionPrompt":true}' > /root/.claude/settings.json
 
 # codex: a provider of its own, the folder trusted.
 mkdir -p /root/.codex
@@ -44,6 +48,9 @@ wire_api = "responses"
 trust_level = "trusted"
 
 [projects."/root/shared-codex"]
+trust_level = "trusted"
+
+[projects."/root/f-codex"]
 trust_level = "trusted"
 EOC
 

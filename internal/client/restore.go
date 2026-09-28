@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"reminal/internal/config"
 	"reminal/internal/session"
 )
 
@@ -55,12 +56,10 @@ func (a *Agent) saveRestore() {
 		ID: a.sessionID, PIN: a.pin, PinHash: a.pinHash, Token: a.token,
 		Name: name, Cwd: cwd, Headless: a.headless, SavedAt: time.Now(),
 	}
-	if pg := a.term.ForegroundPgrp(); pg > 0 && pg != a.term.Pid() {
-		prog := foregroundProgram(pg, attentionForegroundName(pg))
-		if _, ok := resumers[prog]; ok {
-			r.Fg, r.FgArgs = prog, processArgs(pg)
-			r.Conv = session.ReadConv(a.sessionID)
-		}
+	prog, args, atPrompt := restoreForeground(a.term)
+	if _, ok := resumers[prog]; ok {
+		r.Fg, r.FgArgs = prog, args
+		r.Conv = session.ReadConv(a.sessionID)
 	}
 	// Something else is in the foreground for a moment (a pager the agent
 	// opened, say): keep what was last known. Only the shell's own prompt
@@ -70,7 +69,7 @@ func (a *Agent) saveRestore() {
 	// they shared a folder with it (see resumePlan), so until the restore
 	// settles it keeps saying what was running.
 	restoringNow := a.restoring && time.Since(a.startedAt) < restoreSettle
-	if r.Fg == "" && (restoringNow || !a.restoreFgGone()) {
+	if r.Fg == "" && (restoringNow || !atPrompt) {
 		if prev, err := session.ReadRestore(a.sessionID); err == nil {
 			r.Fg, r.FgArgs, r.Conv = prev.Fg, prev.FgArgs, prev.Conv
 		}
@@ -83,13 +82,6 @@ func (a *Agent) saveRestore() {
 			}
 		}
 	}
-}
-
-// restoreFgGone says the shell itself is in the foreground — whatever was
-// running in it has ended.
-func (a *Agent) restoreFgGone() bool {
-	pg := a.term.ForegroundPgrp()
-	return pg > 0 && pg == a.term.Pid()
 }
 
 func (a *Agent) restoreLoop(stop <-chan struct{}) {
@@ -149,13 +141,13 @@ var resumers = map[string]resumer{
 		pick:   func(b string, f []string) []string { return plainFlags(b, f, "--resume") },
 	},
 	"codex": {
-		byID:   func(b string, _ []string, c string) []string { return []string{b, "resume", c} },
-		latest: func(b string, _ []string) []string { return []string{b, "resume", "--last"} },
-		pick:   func(b string, _ []string) []string { return []string{b, "resume"} },
+		byID:   func(b string, f []string, c string) []string { return append(append([]string{b, "resume"}, f...), c) },
+		latest: func(b string, f []string) []string { return append(append([]string{b, "resume"}, f...), "--last") },
+		pick:   func(b string, f []string) []string { return append([]string{b, "resume"}, f...) },
 	},
 	"cursor-agent": {
 		byID:   func(b string, f []string, c string) []string { return plainFlags(b, f, "--resume", c) },
-		latest: func(b string, _ []string) []string { return []string{b, "resume"} },
+		latest: func(b string, f []string) []string { return plainFlags(b, f, "--continue") },
 		pick:   func(b string, f []string) []string { return plainFlags(b, f, "--resume") },
 	},
 	"gemini": {
@@ -185,25 +177,70 @@ var resumers = map[string]resumer{
 	},
 }
 
-// valueFlags take the next argument as their value. Anything else not
-// starting with "-" is a positional — a prompt, most likely — and dropped.
+// valueFlags take the next argument as their value — used only when an
+// agent's --help could not be read (see restoreflags.go).
 var valueFlags = map[string]bool{
 	"--model": true, "-m": true, "--permission-mode": true, "--add-dir": true, "--agent": true,
 	"--settings": true, "--mcp-config": true, "--allowedTools": true, "--allowed-tools": true,
 	"--disallowedTools": true, "--disallowed-tools": true, "--append-system-prompt": true,
-	"--fallback-model": true, "--sandbox": true, "-s": true, "--profile": true,
+	"--fallback-model": true, "--sandbox": true, "--profile": true,
 	"--provider": true, "-e": true, "--extension": true, "--thinking": true, "--approval-mode": true,
 }
 
-// resumeDrop are flags that pick or start a conversation — replaced by the
-// resume itself — with whether they take a value.
-var resumeDrop = map[string]bool{
-	"--resume": true, "-r": true, "--session-id": true, "--continue": false, "-c": false,
-	"--fork-session": false,
+// argRules are what each agent's arguments mean that its --help cannot say:
+// which make a run one-shot (nothing to resume), which pick or start a
+// conversation (replaced by the resume), and which carry a prompt (never
+// sent twice). They differ by agent — -p is claude's print mode and codex's
+// profile; -c is claude's continue and codex's config.
+type argRules struct {
+	oneShot    []string // flags that make a run non-interactive
+	oneShotSub []string // subcommands that are not a conversation
+	drop       []string // flags a resume replaces, or a prompt rides on
 }
 
-// oneShot marks a run that was never interactive: nothing to resume.
-var oneShot = map[string]bool{"-p": true, "--print": true, "exec": true}
+var agentRules = map[string]argRules{
+	"claude": {oneShot: []string{"-p", "--print"},
+		oneShotSub: []string{"mcp", "config", "update", "doctor", "install", "setup-token", "plugin", "migrate-installer"},
+		drop:       []string{"--resume", "-r", "--continue", "-c", "--session-id", "--fork-session", "--from-pr"}},
+	"codex": {oneShotSub: []string{"exec", "e", "review", "login", "logout", "mcp", "mcp-server", "app-server", "completion", "sandbox", "debug", "apply", "a", "cloud", "features"},
+		drop: []string{"--last", "--all"}},
+	"cursor-agent": {oneShot: []string{"-p", "--print"},
+		oneShotSub: []string{"login", "logout", "status", "whoami", "mcp", "update", "upgrade", "ls", "create-chat", "install-shell-integration", "uninstall-shell-integration"},
+		drop:       []string{"--resume", "--continue"}},
+	"gemini": {oneShot: []string{"-p", "--prompt", "--list-sessions", "--delete-session", "--list-extensions"},
+		oneShotSub: []string{"mcp", "extensions"},
+		drop:       []string{"--resume", "-r", "--session-id", "--session-file", "-i", "--prompt-interactive"}},
+	"qwen": {oneShot: []string{"-p", "--prompt"},
+		oneShotSub: []string{"mcp", "extensions"},
+		drop:       []string{"--resume", "-r", "--continue", "-c", "--session-id", "--fork-session", "-i", "--prompt-interactive"}},
+	"opencode": {oneShotSub: []string{"run", "serve", "web", "acp", "mcp", "models", "session", "export", "import", "github", "stats", "auth", "upgrade", "agent", "plugin", "uninstall", "debug"},
+		drop: []string{"--continue", "-c", "--session", "-s", "--fork", "--prompt"}},
+	"pi": {oneShot: []string{"-p", "--print"},
+		drop: []string{"--continue", "-c", "--resume", "-r", "--session"}},
+}
+
+func inList(l []string, s string) bool {
+	for _, x := range l {
+		if x == s {
+			return true
+		}
+	}
+	return false
+}
+
+// flagSpecFor is the flag spec an agent's --help gives, asked once per agent
+// in a process. Replaced in tests.
+var flagSpecFor = func() func(string) flagSpec {
+	cache := map[string]flagSpec{}
+	return func(bin string) flagSpec {
+		if s, ok := cache[bin]; ok {
+			return s
+		}
+		s := helpSpec(bin)
+		cache[bin] = s
+		return s
+	}
+}()
 
 // resumeArgv is the command that resumes r's agent, or nil — assuming it is
 // the only one of its kind in its folder (see resumePlan).
@@ -261,43 +298,83 @@ func sharesFolder(r session.Restore, peers []session.Restore) bool {
 	return false
 }
 
-// resumeFlags are the flags r's agent was started with that a resume keeps;
-// false for a run that was never interactive.
+// resumeFlags are the flags r's agent was started with that its resume
+// takes, each with its value; false for a run that was never interactive.
+//
+// With its --help to go by, a flag is carried only if the resume command
+// lists it, and a value only where the help says the flag takes one — so
+// neither a flag the resume would refuse nor a prompt ever gets through.
+// Without it, only the flags known here are.
 func resumeFlags(r session.Restore) ([]string, bool) {
-	// Where the program's own arguments start: past an interpreter (node
-	// running claude's script, say) to the argument that names it.
+	// Where the program's own arguments start: past its interpreter and the
+	// interpreter's own options, to the LAST argument naming its file.
+	// cursor-agent runs as `cursor-agent --use-system-ca
+	// …/cursor-agent/versions/…/index.js <its args>` — the first mention is a
+	// launcher, and --use-system-ca is node's, not cursor's to be given.
 	args := r.FgArgs
 	start := 0
 	for i, a := range args {
-		if strings.Contains(filepath.Base(a), r.Fg) {
+		if strings.HasPrefix(a, "-") || !strings.Contains(a, r.Fg) {
+			continue
+		}
+		if i == 0 || isRegularFile(a) {
 			start = i + 1
-			break
 		}
 	}
 	if start == 0 && len(args) > 0 {
 		start = 1
 	}
+	rules := agentRules[r.Fg]
+	spec := flagSpecFor(r.Fg)
+	known := func(name string) (takes, ok bool) {
+		if spec == nil {
+			return valueFlags[name], strings.HasPrefix(name, "-")
+		}
+		if v, ok := spec[name]; ok {
+			return v, true
+		}
+		// yargs takes --no-<flag> for any boolean it lists.
+		if strings.HasPrefix(name, "--no-") {
+			if v, ok := spec["--"+strings.TrimPrefix(name, "--no-")]; ok && !v {
+				return false, true
+			}
+		}
+		return false, false
+	}
 	var flags []string
+	sawPositional := false
 	for i := start; i < len(args); i++ {
 		a := args[i]
-		if oneShot[a] {
+		if a == "--" {
+			break // what follows is a prompt
+		}
+		if !strings.HasPrefix(a, "-") || a == "-" {
+			if !sawPositional && inList(rules.oneShotSub, a) {
+				return nil, false
+			}
+			sawPositional = true
+			continue // a prompt, or a subcommand: not carried over
+		}
+		name, _, hasValue := strings.Cut(a, "=")
+		if inList(rules.oneShot, name) {
 			return nil, false
 		}
-		name := a
-		if k := strings.IndexByte(a, '='); k > 0 {
-			name = a[:k]
-		}
-		if takes, drop := resumeDrop[name]; drop {
-			if takes && !strings.Contains(a, "=") {
+		takes, ok := known(name)
+		if inList(rules.drop, name) {
+			// Its value goes with it: taken when the help says so, or — for
+			// an optional one ([id]) — whatever does not look like a flag.
+			if !hasValue && i+1 < len(args) && !strings.HasPrefix(args[i+1], "-") && (takes || spec == nil) {
 				i++
 			}
 			continue
 		}
-		if !strings.HasPrefix(a, "-") {
-			continue // a prompt, or a subcommand: not carried over
+		if !ok {
+			// Not a flag this resume takes. Its value, if it has one, is
+			// not a flag either, and is dropped as a positional would be.
+			continue
 		}
 		flags = append(flags, a)
-		if valueFlags[a] && i+1 < len(args) {
+		if takes && !hasValue && i+1 < len(args) {
 			flags = append(flags, args[i+1])
 			i++
 		}
@@ -306,6 +383,35 @@ func resumeFlags(r session.Restore) ([]string, bool) {
 }
 
 var shellSafe = regexp.MustCompile(`^[A-Za-z0-9_@%+=:,./-]+$`)
+
+// shellCommand is argv as a line for the session's shell to run: POSIX
+// quoting, or PowerShell's or cmd's on Windows.
+func shellCommand(argv []string, shell string) string {
+	base := strings.ToLower(shell[strings.LastIndexAny(shell, `/\`)+1:])
+	switch {
+	case strings.HasPrefix(base, "pwsh"), strings.HasPrefix(base, "powershell"):
+		q := make([]string, len(argv))
+		for i, a := range argv {
+			if shellSafe.MatchString(a) && !strings.ContainsAny(a, "@") {
+				q[i] = a
+			} else {
+				q[i] = "'" + strings.ReplaceAll(a, "'", "''") + "'"
+			}
+		}
+		return strings.Join(q, " ")
+	case strings.HasPrefix(base, "cmd"):
+		q := make([]string, len(argv))
+		for i, a := range argv {
+			if shellSafe.MatchString(a) && !strings.ContainsAny(a, "%") {
+				q[i] = a
+			} else {
+				q[i] = `"` + strings.ReplaceAll(a, `"`, `""`) + `"`
+			}
+		}
+		return strings.Join(q, " ")
+	}
+	return shellJoin(argv)
+}
 
 // shellJoin quotes an argv for a POSIX shell.
 func shellJoin(argv []string) string {
@@ -342,7 +448,7 @@ func LoadRestoreState(id string) (*ResumeState, string, string, error) {
 	argv, note := resumePlan(*r, peers)
 	run := ""
 	if argv != nil {
-		run = shellJoin(argv)
+		run = shellCommand(argv, config.Shell())
 	}
 	return st, run, note, nil
 }
@@ -460,4 +566,9 @@ func restoreAtStart() {
 			agentNotify("  reminal: could not restore session %s: %v\n", r.ID, err)
 		}
 	}
+}
+
+func isRegularFile(p string) bool {
+	fi, err := os.Stat(p)
+	return err == nil && fi.Mode().IsRegular()
 }

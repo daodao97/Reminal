@@ -66,7 +66,7 @@ resume_of() {
         gemini) echo "gemini --resume latest" ;;
         codex) echo "codex resume --last" ;;
         opencode) echo "opencode --continue" ;;
-        cursor) echo "cursor-agent resume" ;;
+        cursor) echo "cursor-agent --continue" ;;
     esac
 }
 for h in $HARNESSES; do send $(id ${h%%:*}) "what number"; done
@@ -77,7 +77,7 @@ for h in $HARNESSES; do
     want=$(resume_of $n)
     if [ -n "$want" ]; then
         if [ $n = cursor ]; then
-            since_restore $id | grep -q "cursor-agent resume" && ok "$n: typed cursor-agent resume" || fail "$n: resume not typed"
+            since_restore $id | grep -q "cursor-agent --continue" && ok "$n: typed cursor-agent --continue" || fail "$n: resume not typed"
             continue
         fi
         echo "$procs" | grep -q -- "$want" && ok "$n: started again as: $want" || fail "$n: not started as '$want'"

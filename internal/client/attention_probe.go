@@ -284,7 +284,9 @@ func programFromArgs(args []string, comm string) string {
 	return ""
 }
 
-// processArgs is a process's command line: /proc on Linux, ps elsewhere.
+// processArgs is a process's command line, each argument whole: /proc on
+// Linux, the kernel's own copy on macOS and Windows (see processargs_*.go),
+// ps elsewhere — where an argument with a space in it comes apart.
 func processArgs(pid int) []string {
 	if runtime.GOOS == "linux" {
 		b, err := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/cmdline")
@@ -292,6 +294,9 @@ func processArgs(pid int) []string {
 			return nil
 		}
 		return strings.FieldsFunc(string(b), func(r rune) bool { return r == 0 })
+	}
+	if args, ok := processArgsNative(pid); ok {
+		return args
 	}
 	out, err := exec.Command("ps", "-o", "args=", "-p", strconv.Itoa(pid)).Output()
 	if err != nil {
