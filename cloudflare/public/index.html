@@ -4586,10 +4586,20 @@
             while (common < min && prevCP[common] === nextCP[common]) common++;
             const recon = '\x7f'.repeat(prevCP.length - common) + nextCP.slice(common).join('');
             if (recon) {
-              // A lone \x7f is exactly what sendInput's phantom-backspace gate
-              // drops — this one is a real, mirrored edit, so fund it.
-              if (recon === '\x7f') realBackspacesPending++;
-              sendInput(recon, { ime: true });
+              // Already sent by xterm's keydown path for this same keystroke?
+              // Then this edit is its echo, not a second character. The field
+              // and the mirror still take it below, so the shell and the model
+              // agree and a later backspace deletes the right thing.
+              const echoOfKeydown = recon === lastNonMirrorSend &&
+                (performance.now() - lastNonMirrorSendAt) < MIRROR_DUP_WINDOW_MS;
+              if (echoOfKeydown) {
+                lastNonMirrorSend = null;
+              } else {
+                // A lone \x7f is exactly what sendInput's phantom-backspace gate
+                // drops — this one is a real, mirrored edit, so fund it.
+                if (recon === '\x7f') realBackspacesPending++;
+                sendInput(recon, { ime: true });
+              }
             }
             imeField = next;
             helperTA.value = next;
@@ -8099,6 +8109,14 @@
     let suppressNextDataChunk = null;
     let suppressTimer = 0;
     let realBackspacesPending = 0;
+    // See sendInput: the last thing sent by a path other than the iOS mirror.
+    let lastNonMirrorSend = null;
+    let lastNonMirrorSendAt = -Infinity;
+    // How long the mirror treats an identical non-mirror send as the same
+    // keystroke. Generous next to the gap between a keydown and its edit (a
+    // millisecond or two), tight next to two deliberate taps of the same key,
+    // which stay correct anyway: each has its own keydown, and each sends.
+    const MIRROR_DUP_WINDOW_MS = 250;
     // After a suspicious compositionend, drop ANY multi-char data
     // xterm tries to forward for the next SUSPICIOUS_DROP_MS. xterm's
     // composition-commit path doesn't always call sendInput with the
@@ -8374,6 +8392,17 @@
       // (autocorrect suppression, phantom IME backspace, offline drop)
       // and they'd then linger on screen until the 700ms stale-timer
       // wiped them — visible noise for the user.
+      // What went out by any path other than the mirror, and when. The mirror
+      // consults this before sending: on iOS a SHIFTED letter arrives as a real
+      // keydown carrying the character (an unshifted one is keyCode 229 with no
+      // character at all), so xterm's own keydown handler sends it — and then
+      // the edit reaches the mirror, which sends it again. One tap of shift+S
+      // put "SS" on the shell, and at a password prompt, where nothing echoes,
+      // it looked like the password was simply wrong.
+      if (!(opts && opts.ime)) {
+        lastNonMirrorSend = data;
+        lastNonMirrorSendAt = now;
+      }
       predictLocalEcho(data);
       const result = sendChain.then(async () => {
         const bytes = new TextEncoder().encode(data);
