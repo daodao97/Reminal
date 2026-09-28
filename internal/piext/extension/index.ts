@@ -35,6 +35,11 @@ type Attn = "working" | "input" | "done";
  */
 const REFRESH_MS = 5 * 60 * 1000;
 
+// END_GRACE_MS is how long after agent_end a run is given to go on — a retry,
+// a compaction, a queued follow-up — before it is reported over, on a pi
+// that has no agent_settled to say so itself.
+const END_GRACE_MS = 1500;
+
 export default function reminalExtension(pi: ExtensionAPI): void {
 	const bin = resolveBin();
 
@@ -98,14 +103,46 @@ export default function reminalExtension(pi: ExtensionAPI): void {
 
 	// A run is under way. agent_start covers the whole loop; turn_start and
 	// turn_end keep a long one from aging out mid-work.
-	pi.on("agent_start", () => report("working"));
-	pi.on("turn_start", () => report("working"));
+	//
+	// The run is over — "your turn" — is agent_settled: it fires once nothing
+	// more is coming, no retry, compaction or queued follow-up, and it fires
+	// even when the run was interrupted or failed. pi 0.74 has no such
+	// event; its runs end with agent_end, which on a pi that has both comes
+	// a moment BEFORE those follow-ups. So agent_end starts a short clock
+	// and "done" is reported when it runs out; agent_settled reports done at
+	// once and stops the clock; and anything that means the run goes on —
+	// agent_start, turn_start — stops it too. On a pi with both, settled
+	// wins by a wide margin and nothing changes; on 0.74 the clock is the
+	// answer, and the seat reads done a moment late rather than never.
+	let ending: ReturnType<typeof setTimeout> | undefined;
+	const stillGoing = (): void => {
+		if (ending !== undefined) {
+			clearTimeout(ending);
+			ending = undefined;
+		}
+	};
+	pi.on("agent_start", () => {
+		stillGoing();
+		report("working");
+	});
+	pi.on("turn_start", () => {
+		stillGoing();
+		report("working");
+	});
 	pi.on("turn_end", () => report("working"));
-
-	// agent_settled, not agent_end: it fires once the run is truly over, with no
-	// retry, compaction, or queued follow-up still to come, and it fires even
-	// when the run was interrupted or failed. That is exactly "your turn".
-	pi.on("agent_settled", () => report("done"));
+	pi.on("agent_end", () => {
+		stillGoing();
+		const t = setTimeout(() => {
+			ending = undefined;
+			report("done");
+		}, END_GRACE_MS);
+		t.unref?.();
+		ending = t;
+	});
+	pi.on("agent_settled", () => {
+		stillGoing();
+		report("done");
+	});
 
 	// pi is about to ask whether you trust this directory, and will sit there
 	// until you answer. That is the one moment pi genuinely needs you. Stay out
