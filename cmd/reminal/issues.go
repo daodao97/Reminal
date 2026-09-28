@@ -43,7 +43,7 @@ func runIssues(args []string) error {
 	if sub == "export" {
 		fmt.Printf("# reminal: %d problem(s) reported by agents on this machine\n\n", len(issues))
 		for _, is := range issues {
-			fmt.Println(client.IssueMarkdown(is))
+			fmt.Println(termSafe(client.IssueMarkdown(is)))
 		}
 		return nil
 	}
@@ -55,7 +55,7 @@ func runIssues(args []string) error {
 		if is.Version != "" {
 			where += " · reminal " + is.Version
 		}
-		fmt.Printf("%s  %-40s  %s\n", is.At.Local().Format(time.DateTime), clip(is.Title, 40), where)
+		fmt.Printf("%s  %-40s  %s\n", is.At.Local().Format(time.DateTime), clip(termSafe(is.Title), 40), termSafe(where))
 	}
 	fmt.Println("\n`reminal issues export` prints them in full, as a bug report to paste; `reminal issues clear` forgets them.")
 	return nil

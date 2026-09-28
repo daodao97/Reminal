@@ -4974,6 +4974,12 @@
     async function sendKexInit() {
       if (!ws || ws.readyState !== WebSocket.OPEN) return;
       if (cryptoKey || kexInFlight) return;
+      // The socket this handshake is for. Deriving the keys below takes a
+      // moment, and a second connect in that moment — a tap that lands twice,
+      // a switch of session — replaces `ws` with a socket still connecting.
+      // Sending on that one throws and marked the session fatal; the new
+      // socket runs its own handshake, so this one just stops.
+      const sock = ws;
       kexInFlight = true;
       try {
       // Generate a fresh ephemeral keypair per connection — the privkey
@@ -4992,10 +4998,11 @@
         .map(b => b.toString(16).padStart(2, '0')).join('');
       // Keep this attempt alongside any earlier one — completeKex accepts a
       // reply to whichever is answered first.
+      if (sock !== ws || sock.readyState !== WebSocket.OPEN) return; // superseded while deriving
       kexAttempts.set(exID, { eph, mask, exIDBytes });
       kexExID = exID;
 
-      ws.send(JSON.stringify({
+      sock.send(JSON.stringify({
         type: 'kex_init',
         ex_id: exID,
         data: u8ToBase64(blinded),
@@ -5134,6 +5141,7 @@
     async function sendOwnerInit() {
       if (!ws || ws.readyState !== WebSocket.OPEN) return false;
       if (cryptoKey || kexInFlight) return false;
+      const sock = ws; // see sendKexInit: the handshake belongs to this socket
       const dk = await loadDeviceKeyPair();
       if (!dk) return false; // no owner key → can't try PIN-free
       kexInFlight = true;
@@ -5146,7 +5154,8 @@
         const sig = new Uint8Array(await crypto.subtle.sign({ name: 'Ed25519' }, dk.privateKey, tr));
         ownerAttempts.set(exID, { eph, exIDBytes, viewerEph, devicePubRaw: dk.pubRaw });
         dbg('▶ own_init sent ex=' + exID.slice(0, 6));
-        ws.send(JSON.stringify({
+        if (sock !== ws || sock.readyState !== WebSocket.OPEN) return true; // superseded: the new socket handshakes itself
+        sock.send(JSON.stringify({
           type: 'own_init', ex_id: exID,
           data: u8ToBase64(viewerEph),
           device_pub: u8ToBase64(dk.pubRaw),
