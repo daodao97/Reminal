@@ -58,7 +58,11 @@ func checkIntegration(t agentTarget, home, exe string) protocol.IntegrationStatu
 		st.Known = true
 		if raw, err := os.ReadFile(filepath.Join(dir, "package.json")); err == nil {
 			st.Integrated = strings.Contains(string(raw), `"reminal-pi"`)
-			st.Current = st.Integrated && extensionNames(dir, exe)
+			// Also whether it is the extension THIS binary carries. Upgrading
+			// reminal replaces the binary at the same path and leaves the installed
+			// copy alone, so every path can match while pi loads older code — and
+			// saying "current" there is how a fix reaches nobody.
+			st.Current = st.Integrated && extensionNames(dir, exe) && piext.UpToDate(home)
 			st.ConfigMtime = mtime(filepath.Join(dir, "package.json"))
 		} else if !os.IsNotExist(err) {
 			st.Error = err.Error()

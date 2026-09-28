@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"reminal/internal/piext"
 )
 
 func targetNamed(t *testing.T, bin string) agentTarget {
@@ -194,5 +196,61 @@ func TestSetUpTimeAndBackupOnce(t *testing.T) {
 	noteSetUp(home, tg.Bin, false)
 	if gone := checkIntegration(tg, home, exe); gone.Since != 0 {
 		t.Fatalf("since after remove: %+v", gone)
+	}
+}
+
+// The pi target's registration is a package in pi's extensions directory, not a
+// JSON entry, so --check reads it back differently — and the part that is easy
+// to lose is "current". `reminal upgrade` replaces the binary where it already
+// was and leaves the extension alone, so the path it records still matches while
+// pi loads older code. This goes through checkIntegration rather than the helper
+// it calls, because it is the wiring that decides whether --check tells the truth.
+func TestCheckNoticesAPiExtensionFromAnOlderReminal(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("PI_CODING_AGENT_DIR", "")
+	exe := filepath.Join(home, "reminal")
+	if err := os.WriteFile(exe, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	tg := targetNamed(t, "pi")
+
+	if st := checkIntegration(tg, home, exe); st.Integrated || st.Current {
+		t.Fatalf("nothing installed, yet integrated=%v current=%v", st.Integrated, st.Current)
+	}
+
+	if err := piext.Install(home, exe); err != nil {
+		t.Fatalf("install: %v", err)
+	}
+	st := checkIntegration(tg, home, exe)
+	if !st.Integrated || !st.Current {
+		t.Fatalf("a fresh install reads integrated=%v current=%v", st.Integrated, st.Current)
+	}
+
+	// What an older reminal left behind: the same path it records, different
+	// sources. Still integrated — pi will load it — but not what this binary
+	// would write, so not current.
+	stale := filepath.Join(piext.Dir(home), "index.ts")
+	if err := os.WriteFile(stale, []byte("// an older build\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if st := checkIntegration(tg, home, exe); !st.Integrated || st.Current {
+		t.Errorf("an extension from an older reminal reads integrated=%v current=%v, want true/false",
+			st.Integrated, st.Current)
+	}
+
+	// Re-running integrate is the remedy --check points at, so it has to work.
+	if err := piext.Install(home, exe); err != nil {
+		t.Fatalf("reinstall: %v", err)
+	}
+	if st := checkIntegration(tg, home, exe); !st.Current {
+		t.Error("re-installing left --check still reporting it as not current")
+	}
+
+	// A file missing entirely is a half-install, and equally not current.
+	if err := os.Remove(filepath.Join(piext.Dir(home), "mcp.ts")); err != nil {
+		t.Fatal(err)
+	}
+	if st := checkIntegration(tg, home, exe); st.Current {
+		t.Error("an install missing a file reads as current")
 	}
 }
