@@ -1292,7 +1292,9 @@ func (a *Agent) refreshCwd() {
 // since activeRecord reads a.name from other goroutines.
 func (a *Agent) setName(name string) {
 	a.metaMu.Lock()
-	a.name = strings.TrimSpace(name)
+	// Names arrive from other hands too and are shown in lists, viewers
+	// and terminals: text only.
+	a.name = sanitizeTitle(name)
 	a.metaMu.Unlock()
 	if !a.paused.Load() {
 		a.recordActive(int(a.curViewers.Load()))
