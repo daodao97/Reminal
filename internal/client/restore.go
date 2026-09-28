@@ -35,7 +35,7 @@ const (
 	// restoreSettle is how long a restored session's record keeps saying
 	// which agent it had, while the sessions around it are restored.
 	restoreSettle = 2 * time.Minute
-	envRestore       = "REMINAL_RESTORE"
+	envRestore    = "REMINAL_RESTORE"
 )
 
 // restoreBanner marks, in the scrollback, where the old session ends and
