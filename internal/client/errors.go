@@ -151,6 +151,14 @@ func classify(err error) string {
 // so release the parent now; reachable-but-failed → keep retrying so the parent
 // is released on the eventual relay registration (so the printed URL is joinable
 // the moment `reminal new` returns).
+// Winsock's codes for an unreachable peer (WSAECONNREFUSED, WSAENETUNREACH,
+// WSAEHOSTUNREACH). No Unix errno has these values.
+const (
+	wsaECONNREFUSED syscall.Errno = 10061
+	wsaENETUNREACH  syscall.Errno = 10051
+	wsaEHOSTUNREACH syscall.Errno = 10065
+)
+
 func isRelayUnreachable(err error) bool {
 	if err == nil {
 		return false
@@ -160,6 +168,19 @@ func isRelayUnreachable(err error) bool {
 		errors.Is(err, syscall.ENETUNREACH) {
 		return true
 	}
+	// Windows reports these as Winsock codes, which syscall's portable
+	// constants do not match: an offline Windows machine's "connectex: No
+	// connection could be made because the target machine actively refused
+	// it" was never taken for unreachable, so `reminal new` — and every
+	// restore at boot, before the network is up — waited out its timeout and
+	// failed.
+	var errno syscall.Errno
+	if errors.As(err, &errno) {
+		switch errno {
+		case wsaECONNREFUSED, wsaENETUNREACH, wsaEHOSTUNREACH:
+			return true
+		}
+	}
 	var dnsErr *net.DNSError
 	if errors.As(err, &dnsErr) {
 		return true
@@ -168,6 +189,7 @@ func isRelayUnreachable(err error) bool {
 	// surface these as strings).
 	raw := err.Error()
 	return strings.Contains(raw, "no such host") ||
+		strings.Contains(raw, "actively refused") ||
 		strings.Contains(raw, "network is unreachable") ||
 		strings.Contains(raw, "no route to host")
 }
