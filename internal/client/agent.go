@@ -229,6 +229,11 @@ type Agent struct {
 	// attnFGAt is when attnFG last changed: a harness that has only just
 	// started is drawing itself, and keys typed into it then are lost.
 	attnFGAt time.Time
+	// attnShells is how many shells the foreground harness says it still has
+	// running. Reported beside the state, not folded into it: a turn that ended
+	// having left work going is still "done", and the count is what says whether
+	// done means finished.
+	attnShells int
 	// attnFG is the command in the terminal's foreground, as the attention
 	// detector last saw it. Written to the session record so a list can tell
 	// an agent from a plain terminal.
@@ -1201,6 +1206,7 @@ func (a *Agent) activeRecord(viewers int) session.Active {
 	attnSince := a.attnSince
 	attnFG := a.attnFG
 	attnFGAt := a.attnFGAt
+	attnShells := a.attnShells
 	a.metaMu.Unlock()
 	if last.IsZero() {
 		last = a.startedAt
@@ -1222,6 +1228,7 @@ func (a *Agent) activeRecord(viewers int) session.Active {
 		AttnSince:    attnSince,
 		Fg:           attnFG,
 		FgSince:      attnFGAt,
+		Shells:       attnShells,
 	}
 }
 

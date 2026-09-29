@@ -1854,9 +1854,24 @@ func runList(args []string) error {
 		}
 		// Presence marker: dim, orthogonal to activity. Wide terminals only —
 		// on a phone the activity state is what matters; watchers can wait.
-		presence, presenceLen := "", 0
+		// Shells still running are activity, not presence, so they show at every
+		// width — but a phone has no room for a column of its own. Wide, they sit
+		// beside the watcher count; narrow, the number folds into the state word
+		// itself, which the state column already has room for. Either way the row
+		// stays the width it was.
+		if !a.IsPort() && a.Shells > 0 && narrow {
+			state = fmt.Sprintf("%s ·%d", state, a.Shells)
+		}
+		var parts []string
+		if !narrow && !a.IsPort() && a.Shells > 0 {
+			parts = append(parts, fmt.Sprintf("· %d shell%s", a.Shells, plural(a.Shells)))
+		}
 		if !narrow && !a.IsPort() && a.Viewers > 0 {
-			txt := fmt.Sprintf("· %d watching", a.Viewers)
+			parts = append(parts, fmt.Sprintf("· %d watching", a.Viewers))
+		}
+		presence, presenceLen := "", 0
+		if len(parts) > 0 {
+			txt := strings.Join(parts, " ")
 			presence, presenceLen = "  "+cDim(txt), 2+len(txt)
 		}
 

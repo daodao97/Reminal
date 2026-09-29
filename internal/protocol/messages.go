@@ -395,6 +395,10 @@ type DirSession struct {
 	// or a host too old to report it. Lets the fleet view show which session
 	// needs you. See internal/client/attention_probe.go (writer side).
 	Attn string `json:"attn,omitempty"`
+	// Shells is how many shells the session's harness still has running, beside
+	// Attn rather than folded into it — "done · 1 shell" is a finished turn that
+	// left work going, which is not the same as nothing to come back for.
+	Shells int `json:"shells,omitempty"`
 	// Fg is the program in the session's foreground ("bash", "claude",
 	// "python3") — what says whether an agent or a plain terminal is there.
 	Fg string `json:"fg,omitempty"`

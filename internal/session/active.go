@@ -95,6 +95,12 @@ type Active struct {
 	// field. Heuristic — see internal/client/attention_probe.go. Surfaced by
 	// `reminal list` so you can tell which session needs you without attaching.
 	Attn string `json:"attn,omitempty"`
+	// Shells is how many shells the foreground harness still has running. It
+	// sits BESIDE Attn rather than inside it: a turn that ended having left a
+	// build going is honestly "done", and folding that into "working" would
+	// leave a session parked on a long-lived process looking busy for ever.
+	// The count is what says whether done means finished.
+	Shells int `json:"shells,omitempty"`
 	// Fg is the name of the command holding the terminal's foreground — "bash",
 	// "claude", "python3". It is what tells a session running an agent from one
 	// that is a plain terminal doing a job of its own.

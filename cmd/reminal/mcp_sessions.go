@@ -28,7 +28,10 @@ type mcpSessionRow struct {
 	Headless bool   `json:"headless,omitempty"`
 	Viewers  int    `json:"viewers,omitempty"`
 	IdleSecs int64  `json:"idle_secs,omitempty"`
-	Current  bool   `json:"current,omitempty"`
+	// Shells is how many shells the session's harness still has running — a
+	// finished turn that left a build going reads "done" and is not finished.
+	Shells  int  `json:"shells,omitempty"`
+	Current bool `json:"current,omitempty"`
 }
 
 type mcpMachineRow struct {
@@ -192,6 +195,7 @@ func fleetMachineRow(m client.FleetMachine, currentID string) mcpMachineRow {
 			Headless: s.Headless,
 			Viewers:  s.Viewers,
 			IdleSecs: s.IdleSecs,
+			Shells:   s.Shells,
 			Current:  currentID != "" && strings.EqualFold(s.ID, currentID),
 		})
 	}
