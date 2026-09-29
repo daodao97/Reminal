@@ -177,7 +177,7 @@ func (a *Agent) runAttention(logPath string) {
 		// state rather than folded into it: a finished turn that left a build
 		// going is honestly "done", and "done · 1 shell" is the thing worth
 		// knowing before deciding it needs nothing from you.
-		a.noteShells(attnShellCount(bottom))
+		a.noteShells(attnShellCount(agentActive, bottom))
 		state, source := resolveAttn(screenState, session.ReadHookState(a.sessionID), last, fgAt, idleMs,
 			attnLooksLikePrompt(bottom), attnLooksBusy(bottom))
 		if a.harnessDown() {
@@ -457,7 +457,17 @@ var attnBusyCues = []string{"esc to interrupt", "ctrl+c to interrupt", "to run i
 var attnShellPattern = regexp.MustCompile(`·\s*([0-9]+)\s*shells?\b`)
 
 // attnShellCount reads that count off the bottom of the screen, or 0.
-func attnShellCount(tail string) int {
+//
+// agentActive is what makes the reading trustworthy, and it is not a detail: a
+// count is only as live as the program that drew it. When a harness exits, its
+// last footer stays in the scrollback until something scrolls past it, so a
+// session sitting back at its own shell would go on reporting the shells the
+// dead harness had — the stuck pill again, in the count instead of the state.
+// No agent in the foreground, no count, whatever is still painted.
+func attnShellCount(agentActive bool, tail string) int {
+	if !agentActive {
+		return 0
+	}
 	t := strings.ToLower(stripANSI(tail))
 	// By match position, not by searching for the matched text: two matches can
 	// render the identical string, and looking the text up again finds the first
