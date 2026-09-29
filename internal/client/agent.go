@@ -2679,7 +2679,9 @@ func (a *Agent) pumpHostStdin() {
 		}
 		if n > 0 {
 			data := buf[:n]
-			a.markInput()
+			if typedByPerson(data) {
+				a.markInput()
+			}
 			if i := bytes.IndexByte(data, escapeKey); i >= 0 {
 				// Flush bytes before the escape to the PTY.
 				if i > 0 {
@@ -2950,7 +2952,9 @@ func (a *Agent) runReader(conn *websocket.Conn, cursorCh chan uint64) error {
 			if err != nil {
 				continue
 			}
-			a.markInput()
+			if typedByPerson(data) {
+				a.markInput()
+			}
 			if _, err := a.term.Write(data); err != nil {
 				return err
 			}
