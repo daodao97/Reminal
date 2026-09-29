@@ -84,6 +84,11 @@ type Active struct {
 	// records written before this field existed — LastActive() falls back to
 	// StartedAt in that case.
 	LastActivity time.Time `json:"last_activity,omitempty"`
+	// LastInput is when a person last typed into the session — at its own
+	// terminal or from a viewer. Output alone cannot say whether anyone is
+	// there: a program can redraw a clock forever, and a viewer can be a tab
+	// left open. Zero until someone types.
+	LastInput time.Time `json:"last_input,omitzero"`
 	// AttnSince is when Attn last changed. HOW LONG a session has been parked
 	// at a prompt is a signal of its own — the state alone cannot tell an
 	// approval someone is about to click from one nobody is watching — and

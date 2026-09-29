@@ -228,6 +228,7 @@ type Agent struct {
 	// seen. See inject.go.
 	bracketedPaste atomic.Bool
 	pasteCarry     []byte
+	lastInput      time.Time // a person typing, not programs printing (session.Active.LastInput)
 	// attnState is the detected attention state of the foreground agent —
 	// "working", "input" (awaiting the user), "done", or "" (no agent / bare
 	// shell). Written by the attention detector goroutine, read by activeRecord
@@ -1239,6 +1240,7 @@ func (a *Agent) activeRecord(viewers int) session.Active {
 	a.metaMu.Lock()
 	title := a.title
 	last := a.lastActivity
+	lastIn := a.lastInput
 	name := a.name
 	cwd := a.cwd
 	attn := a.attnState
@@ -1263,6 +1265,7 @@ func (a *Agent) activeRecord(viewers int) session.Active {
 		Cwd:          cwd,
 		Title:        title,
 		LastActivity: last,
+		LastInput:    lastIn,
 		Attn:         attn,
 		AttnSince:    attnSince,
 		Fg:           attnFG,
@@ -1375,6 +1378,15 @@ func (a *Agent) updateActiveViewers(viewers int) {
 func (a *Agent) markActivity(now time.Time) {
 	a.metaMu.Lock()
 	a.lastActivity = now
+	a.metaMu.Unlock()
+	a.metaDirty.Store(true)
+}
+
+// markInput stamps when a person last typed, for the record; throttled to
+// disk like markActivity.
+func (a *Agent) markInput() {
+	a.metaMu.Lock()
+	a.lastInput = time.Now()
 	a.metaMu.Unlock()
 	a.metaDirty.Store(true)
 }
@@ -2664,6 +2676,7 @@ func (a *Agent) pumpHostStdin() {
 		}
 		if n > 0 {
 			data := buf[:n]
+			a.markInput()
 			if i := bytes.IndexByte(data, escapeKey); i >= 0 {
 				// Flush bytes before the escape to the PTY.
 				if i > 0 {
@@ -2934,6 +2947,7 @@ func (a *Agent) runReader(conn *websocket.Conn, cursorCh chan uint64) error {
 			if err != nil {
 				continue
 			}
+			a.markInput()
 			if _, err := a.term.Write(data); err != nil {
 				return err
 			}
