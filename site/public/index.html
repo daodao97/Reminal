@@ -166,15 +166,25 @@ header figcaption{max-width:720px}
 @media (max-width:1200px){.popout{display:none !important}}
 
 /* ── the storyline  [FEATURES.story] ───────────────── */
-/* One pinned scene, six chapters of copy scrolling past it. The copy is the
-   page's real text in normal flow; the scene is decoration (aria-hidden) and
-   every transform in it is a pure function of how far you have read. */
+/* One pinned scene and six chapters of copy. The copy is the page's real
+   text in normal flow; each chapter of the scene is drawn from how far that
+   chapter has been read, so scrolling back rewinds it exactly.
+
+   Reading area: beside the scene, everything under the nav; on a narrow
+   screen, the strip under the pinned scene. JS measures it and sets:
+     --stick  where a chapter's copy (or a tall chapter's heading) holds
+     --gap    the space between the reading area's top and --stick
+   and gives each chapter that fits the room to hold while its scene plays.
+   A chapter too tall for the reading area (.tall) never freezes, since a
+   frozen block that size has to hide a line somewhere: its heading holds
+   and its body keeps scrolling up beneath it. Without JS nothing holds and
+   the copy simply scrolls. */
 .story{padding-top:48px}
 .story-grid{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.15fr);gap:56px;align-items:start}
 section.s .story-grid > *{max-width:none}
 .story-copy{grid-column:1;grid-row:1}
 .story-stage{grid-column:2;grid-row:1;align-self:stretch}
-.story-pin{position:sticky;top:max(76px,calc(calc(50 * var(--svh)) - 240px));height:min(calc(calc(100 * var(--svh)) - 100px),500px);display:grid;place-items:center}
+.story-pin{position:sticky;top:max(76px,calc(50 * var(--svh) - 240px));height:min(calc(100 * var(--svh) - 100px),500px);display:grid;place-items:center}
 .sx{position:relative;width:100%;height:100%;border-radius:16px;background:var(--wall);border:1px solid var(--figline);overflow:hidden}
 :root[data-theme="dark"] .sx{border-color:var(--figline2)}
 @media (prefers-color-scheme:dark){:root:not([data-theme="light"]) .sx{border-color:var(--figline2)}}
@@ -186,17 +196,23 @@ section.s .story-grid > *{max-width:none}
 .sx-count b{color:#0a0a0a;font-weight:600}
 .ly{position:absolute;inset:0;opacity:0;visibility:hidden}
 .ly.on{visibility:visible}
-.ly *{will-change:auto}
 
-.ch{min-height:calc(115 * var(--svh));padding:calc(18 * var(--svh)) 0 calc(10 * var(--svh))}
-/* The copy holds still (beside the scene, or under it on a narrow screen)
-   while its chapter plays — but only a chapter whose copy fits in the space
-   it holds in: a sticky block taller than that would hide its own end. JS
-   decides which fit (.fits) and where they hold (--stick). A chapter that
-   does not fit simply scrolls, and is no taller than its copy, so it never
-   leaves an empty stretch beside the scene. */
-.ch.fits > .ch-in{position:sticky;top:var(--stick,120px)}
-.ch:not(.fits){min-height:0!important}
+.ch{padding:calc(18 * var(--svh)) 0 calc(10 * var(--svh))}
+.ch:first-child{padding-top:calc(10 * var(--svh))}
+.story.js .ch-in{position:sticky;top:var(--stick)}
+.story.js .tall .ch-in{position:static}
+/* A tall chapter's heading: the page-coloured strip above it is exactly
+   --gap tall (enough to hide body text passing under the heading, never
+   enough to cover the chapter before), and text fades out beneath it
+   rather than being sliced by a hard edge. The fade covers only the
+   heading's own bottom margin, which in normal flow is the empty gap before
+   the body — so nothing is faded until text actually slides under it. */
+.story.js .tall .ch-head{position:sticky;top:var(--stick);z-index:2;background:var(--page);margin-bottom:20px}
+.story.js .tall .ch-head h2{margin-bottom:0}
+.story.js .tall .ch-head::before,.story.js .tall .ch-head::after{content:"";position:absolute;left:0;right:0}
+.story.js .tall .ch-head::before{bottom:100%;height:var(--gap);background:var(--page)}
+.story.js .tall .ch-head::after{top:100%;height:20px;background:linear-gradient(var(--page),transparent);pointer-events:none}
+.story.measuring .ch-in,.story.measuring .ch-head{position:static}
 .story .beats{list-style:none;margin:28px 0 0;padding:0;counter-reset:beat}
 .story .beat{position:relative;padding:14px 0 14px 40px;border-top:1px solid var(--line);color:var(--mute);font-size:15px;line-height:1.55;transition:color .3s}
 .story .beat:last-child{border-bottom:1px solid var(--line)}
@@ -204,9 +220,6 @@ section.s .story-grid > *{max-width:none}
 .story .beat::before{counter-increment:beat;content:counter(beat,decimal-leading-zero);position:absolute;left:0;top:17px;font:500 12px var(--mono);color:var(--mute)}
 .story .beat.lit{color:var(--dim)}
 .story .beat.lit b,.story .beat.lit::before{color:var(--ink)}
-.ch:first-child{padding-top:calc(10 * var(--svh))}
-.ch#windows{min-height:calc(190 * var(--svh))}
-.ch#bus{min-height:calc(150 * var(--svh));padding-bottom:calc(4 * var(--svh))}
 .ch h2{font-size:44px}
 .ch .body{font-size:17px}
 .ch .trace li{transition:opacity .3s}
@@ -300,7 +313,7 @@ section.s .story-grid > *{max-width:none}
 .t-sweep{position:absolute;left:25px;right:25px;top:30%;height:2px;background:var(--figyes);box-shadow:0 0 12px var(--figyes)}
 .t-shell{position:absolute;inset:0;padding:34px 9px 0;background:#161616;opacity:0}
 .t-shell p{white-space:nowrap}
-.t-caret,.k-caret{display:inline-block;width:5px;height:9px;background:#ededed;vertical-align:-1px;animation:blink 1s steps(1) infinite}
+.t-caret{display:inline-block;width:5px;height:9px;background:#ededed;vertical-align:-1px;animation:blink 1s steps(1) infinite}
 .t-back{position:absolute;left:8px;right:8px;top:8px;text-align:center;font:500 7px var(--mono);color:#0a0a0a;background:var(--figyes);border-radius:99px;padding:3px 0;opacity:0}
 
 /* 04 dock */
@@ -363,24 +376,18 @@ section.s .story-grid > *{max-width:none}
 .b-badge .nm-dot{width:6px;height:6px}
 
 @media (max-width:900px){
-  /* The scene pins to the top; the copy scrolls up underneath it. */
+  /* The scene pins under the nav and the copy reads in the strip below it.
+     The panel keeps the drawing's proportions rather than stretching across
+     a tablet with the scene marooned in the middle of it. */
   .story{padding-top:24px}
   .story-grid{display:block}
-  .story-stage{position:sticky;top:52px;z-index:3;margin:0 -16px;padding:10px 16px 12px;background:var(--page);border-bottom:1px solid var(--line)}
-  /* The panel keeps the drawing's proportions rather than stretching across
-     a wide tablet with the scene marooned in the middle of it. */
+  .story-stage{position:sticky;top:var(--nav);z-index:3;margin:0 -16px;padding:10px 16px 12px;background:var(--page);border-bottom:1px solid var(--line)}
   .story-pin{position:relative;top:0;height:auto;display:block}
-  .sx{--h:min(calc(40 * var(--svh)),calc((100vw - 32px) * .84));height:var(--h);width:min(100%,calc(var(--h) * 1.19));margin:0 auto}
-  .ch,.ch#windows,.ch#bus{min-height:0;padding:32px 0 24px}
-  /* A chapter that holds under the scene needs scroll room to play in —
-     as height, not padding: sticky copy stops at its chapter's padding, so
-     padding would scroll by as an empty band. */
-  .ch.fits{min-height:calc(95 * var(--svh))}
-  .story .beat{color:var(--dim)} .story .beat b{color:var(--ink)}
+  .sx{--h:min(40 * var(--svh),(100vw - 32px) * .84);height:var(--h);width:min(100%,var(--h) * 1.19);margin:0 auto}
+  .ch{padding:32px 0 24px}
   .ch h2{font-size:32px}
   .ch .body{font-size:16px}
 }
-@media (prefers-reduced-motion:reduce){.story .ly{transition:opacity .2s}}
 
 /* ── the lid stage  [FEATURES.lidStage] ────────────── */
 /* A pinned 3D set piece: the MacBook shuts while its windows escape into a
@@ -996,8 +1003,10 @@ form.signup button:disabled{opacity:.5;cursor:default}
     <div class="story-copy">
     <article class="ch" id="windows" data-ch="0">
       <div class="ch-in">
+      <div class="ch-head">
       <p class="eyebrow reveal">Windows &amp; desktops</p>
       <h2 class="reveal">Reach in and drive the apps.</h2>
+      </div>
       <p class="body reveal">
         Any app window streams live into your browser &mdash; and you don't just watch it,
         you <strong>drive</strong> it.
@@ -1013,8 +1022,10 @@ form.signup button:disabled{opacity:.5;cursor:default}
     </article>
     <article class="ch" id="fps" data-ch="1">
       <div class="ch-in">
+      <div class="ch-head">
       <p class="eyebrow reveal">60 fps</p>
-  <h2 class="reveal">Nothing about it says <em>stream</em>.</h2>
+      <h2 class="reveal">Nothing about it says <em>stream</em>.</h2>
+      </div>
   <p class="body reveal">
     Drag a window, scrub a video inside it, watch a build scroll past — it stays fluid the whole way, on
     hotel Wi-Fi or a phone on cellular. <strong>Sixty frames a second, 17 ms from its screen to yours.</strong>
@@ -1024,8 +1035,10 @@ form.signup button:disabled{opacity:.5;cursor:default}
     </article>
     <article class="ch" id="terminal" data-ch="2">
       <div class="ch-in">
+      <div class="ch-head">
       <p class="eyebrow reveal">Terminal</p>
-  <h2 class="reveal">And a full terminal, too. Scan a QR and you're in.</h2>
+      <h2 class="reveal">And a full terminal, too. Scan a QR and you're in.</h2>
+      </div>
   <p class="body reveal">
     <code>reminal</code> prints a session ID, a PIN and a QR code. Scan it and your phone is a real terminal
     on your machine — true colour, touch text-selection, on-screen modifier keys, find-in-scrollback.
@@ -1036,8 +1049,10 @@ form.signup button:disabled{opacity:.5;cursor:default}
     </article>
     <article class="ch" id="dock" data-ch="3">
       <div class="ch-in">
+      <div class="ch-head">
       <p class="eyebrow reveal">Session dock</p>
-  <h2 class="reveal">Every session, one swipe away.</h2>
+      <h2 class="reveal">Every session, one swipe away.</h2>
+      </div>
   <p class="body reveal">
     You're on one machine and need another. Drag the keybar's <strong>≡ handle up</strong> and your live
     sessions fan out — every machine you own plus your recents, freshest first. Slide onto one,
@@ -1048,8 +1063,10 @@ form.signup button:disabled{opacity:.5;cursor:default}
     </article>
     <article class="ch" id="fleet" data-ch="4">
       <div class="ch-in">
+      <div class="ch-head">
       <p class="eyebrow reveal">Your fleet</p>
-  <h2 class="reveal">Own your machines. Watch them all.</h2>
+      <h2 class="reveal">Own your machines. Watch them all.</h2>
+      </div>
   <p class="body reveal">
     Your machines don't stop when you walk away any more. Builds, patches and test suites run on
     hardware you aren't sitting at — and the hard part isn't starting that work, it's
@@ -1071,8 +1088,10 @@ form.signup button:disabled{opacity:.5;cursor:default}
     </article>
     <article class="ch" id="bus" data-ch="5">
       <div class="ch-in">
+      <div class="ch-head">
       <p class="eyebrow reveal">Agent bus</p>
-  <h2 class="reveal">Your agents can see each other.</h2>
+      <h2 class="reveal">Your agents can see each other.</h2>
+      </div>
   <p class="body reveal">
     Claude Code on the laptop, Codex on the build box, a test suite on the Mini. Same problem, no
     shared anything — every vendor's answer is subagents inside its own product, which is no help
@@ -1292,7 +1311,6 @@ const INSTALL = {
 const FEATURES = {
   liveTerminal: true,   // hero: types `reminal`, prints the banner + a real QR
   edgeLatency:  true,   // stat band: the visitor's own round-trip to the edge
-  scrollScrub:  true,   // closed-lid section: scroll drives the video playhead
   osDetect:     true,   // install box: preselect the visitor's actual OS
   dragWindow:   true,   // hero: a pop-out window card you can throw around
   scrollFX:     true,   // parallax, reading progress, counters — one rAF loop
@@ -1301,6 +1319,15 @@ const FEATURES = {
 };
 
 const reduced = matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+// ── shared scroll-animation maths ──────────────────────────────────────
+// The lid stage and the storyline are both pure functions of scroll
+// progress; they share these.
+const clamp = (v, a = 0, b = 1) => v < a ? a : v > b ? b : v;
+const mix = (a, b, t) => a + (b - a) * t;
+const span = (t, a, b) => clamp((t - a) / (b - a));           // t's progress through [a, b]
+const ease = t => t < .5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+const easeOut = t => 1 - Math.pow(1 - t, 3);                 // for count-ups
 
 // ── scroll reveal ──────────────────────────────────────────────────────
 // Staggered within a section so a block arrives as one gesture rather than
@@ -1375,45 +1402,19 @@ const onScroll = () => nav.classList.toggle("scrolled", scrollY > 12);
 addEventListener("scroll", onScroll, { passive: true });
 onScroll();
 
-// ── play videos only while they're on screen ───────────────────────────
-// Five looping videos decoding at once cooks a phone battery for no reason.
-const videos = document.querySelectorAll("video");
-
-if (reduced) {
-  videos.forEach(v => { v.autoplay = false; v.controls = true; v.pause(); });
-} else if ("IntersectionObserver" in window) {
-  const io = new IntersectionObserver(entries => {
-    for (const e of entries) {
-      if (e.isIntersecting) {
-        e.target.preload = "auto";
-        e.target.play().catch(() => {}); // autoplay refusal is not an error worth surfacing
-      } else {
-        e.target.pause();
-      }
-    }
-  }, { rootMargin: "200px 0px", threshold: 0.15 });
-  videos.forEach(v => io.observe(v));
-} else {
-  videos.forEach(v => { v.preload = "auto"; v.play().catch(() => {}); });
-}
-
 // ── [FEATURES.scrollFX] one scroll loop for everything ─────────────────
 // Every scroll-linked effect reads layout in a single rAF pass and writes
 // only transforms/opacity. Separate listeners per effect would each force
 // their own layout flush and turn a smooth page into a stuttering one.
 if (FEATURES.scrollFX && !reduced) {
   const bar    = document.getElementById("progress");
-  const sky    = document.querySelector(".sky");
-  const mesh   = document.querySelector(".mesh");
   // The lead copy only — NOT header .wrap, which also holds the terminal.
   // Fading the whole wrap dims the hero terminal to nothing at the exact
   // moment you scroll down to read it.
   const heroIn = [...document.querySelectorAll(
     "header h1, header .lede, header .cta, header .stats, header .chips")];
-  const frames = [...document.querySelectorAll(".frame")].filter(f => !f.closest(".pin-media"));
-  const beats  = [...document.querySelectorAll(".beat")].filter(b => !b.closest(".story"));
+  const frames = [...document.querySelectorAll(".frame")];
 
-  const clamp = (v, a, b) => v < a ? a : v > b ? b : v;
   let queued = false;
 
   function pass() {
@@ -1427,11 +1428,8 @@ if (FEATURES.scrollFX && !reduced) {
       bar.style.transform = `scaleX(${max > 0 ? clamp(y / max, 0, 1) : 0})`;
     }
 
-    // Hero parallax: the glow lags behind, the grid runs ahead, and the copy
-    // drifts up and dims as you leave — depth from three different rates.
+    // Hero: the copy drifts up and dims as you leave.
     if (y < vh * 1.6) {
-      if (sky)  sky.style.transform  = `translate3d(0, ${y * 0.28}px, 0)`;
-      if (mesh) mesh.style.transform = `translate3d(0, ${y * -0.12}px, 0)`;
       const fade = String(clamp(1 - y / (vh * 0.95), 0, 1));
       for (const el of heroIn) {
         el.style.transform = `translate3d(0, ${y * 0.06}px, 0)`;
@@ -1448,30 +1446,12 @@ if (FEATURES.scrollFX && !reduced) {
       f.style.transform = `translate3d(0, ${clamp(centred, -1, 1) * -18}px, 0)`;
     }
 
-    // Only the beat nearest the reading line lights. A band test lights every
-    // beat at once on a tall window, which sequences nothing.
-    if (beats.length) {
-      const line = vh * 0.46;
-      let best = -1, bestDist = Infinity;
-      beats.forEach((b, i) => {
-        const r = b.getBoundingClientRect();
-        if (r.bottom < 0 || r.top > vh) return;
-        const d = Math.abs(r.top + r.height / 2 - line);
-        if (d < bestDist) { bestDist = d; best = i; }
-      });
-      beats.forEach((b, i) => b.classList.toggle("lit", i === best));
-    }
   }
 
   const onScroll = () => { if (!queued) { queued = true; requestAnimationFrame(pass); } };
   addEventListener("scroll", onScroll, { passive: true });
   addEventListener("resize", onScroll);
   pass();
-
-  // The .frame hover lift sets its own transform; let the parallax own it
-  // instead of the two fighting each other mid-hover.
-  document.head.insertAdjacentHTML("beforeend",
-    "<style>.frame{transition:box-shadow .4s var(--ease)}.frame:hover{transform:none}</style>");
 }
 
 // ── [FEATURES.lidStage] lid shuts → browser → phone ────────────────────
@@ -1516,11 +1496,6 @@ if (FEATURES.lidStage) {
   fit();
 
   if (sec && lid && catcher) {
-    const clamp01 = v => v < 0 ? 0 : v > 1 ? 1 : v;
-    const span = (p, a, b) => clamp01((p - a) / (b - a));
-    const ease = t => t < .5 ? 4*t*t*t : 1 - Math.pow(-2*t + 2, 3) / 2;
-    const mix  = (a, b, t) => a + (b - a) * t;
-
     // Depth matters as much as position here: perspective magnifies by
     // 1600/(1600−z), so relay.ts parked at z=190 was drawn 13.5% larger and
     // its left edge landed outside the browser it was meant to sit inside.
@@ -1553,7 +1528,7 @@ if (FEATURES.lidStage) {
       ticking = false;
       const r  = sec.getBoundingClientRect();
       const vh = innerHeight;
-      const p  = clamp01(-r.top / Math.max(1, r.height - vh));
+      const p  = clamp(-r.top / Math.max(1, r.height - vh));
 
       // The first four beats keep the scroll distance they always had; the
       // section simply got longer (420vh → 560vh) to make room for the two
@@ -1579,7 +1554,7 @@ if (FEATURES.lidStage) {
       flyers.forEach((el, i) => {
         if (!el) return;
         const q = PLAN[i];
-        const t = ease(clamp01((lift - i * 0.10) / (1 - i * 0.10)));
+        const t = ease(clamp((lift - i * 0.10) / (1 - i * 0.10)));
         let x = mix(q.on[0], q.desk[0], t);
         let y = mix(q.on[1], q.desk[1], t);
         let z = mix(q.on[2], q.desk[2], t);
@@ -1717,8 +1692,7 @@ if (FEATURES.scrollFX && !reduced && "IntersectionObserver" in window) {
         const t0 = performance.now();
         const step = now => {
           const p = Math.min(1, (now - t0) / 900);
-          const eased = 1 - Math.pow(1 - p, 3);
-          cell.innerHTML = Math.round(target * eased) + suffix;
+          cell.innerHTML = Math.round(target * easeOut(p)) + suffix;
           if (p < 1) requestAnimationFrame(step);
         };
         requestAnimationFrame(step);
@@ -1763,8 +1737,7 @@ if (FEATURES.edgeLatency) {
     const started = performance.now();
     const tick = now => {
       const p = Math.min(1, (now - started) / 700);
-      const eased = 1 - Math.pow(1 - p, 3);
-      rttEl.innerHTML = Math.round(ms * eased) + "<span>ms</span>";
+      rttEl.innerHTML = Math.round(ms * easeOut(p)) + "<span>ms</span>";
       if (p < 1) requestAnimationFrame(tick);
     };
     requestAnimationFrame(tick);
@@ -1787,10 +1760,6 @@ if (FEATURES.story) {
   const $$ = (s) => [...story.querySelectorAll(s)];
   story.classList.add("js");
 
-  const clamp = (v, a = 0, b = 1) => v < a ? a : v > b ? b : v;
-  const mix = (a, b, t) => a + (b - a) * t;
-  const span = (t, a, b) => clamp((t - a) / (b - a));
-  const ease = (t) => t < .5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;
   const seg = (t, a, b) => ease(span(t, a, b));
   const css = (el, o) => { if (el) for (const k in o) el.style[k] = o[k]; };
   // Walk a list of [t, x, y] keyframes.
@@ -1972,62 +1941,15 @@ if (FEATURES.story) {
   }
 
   const DRAW = [drive, fps, term, dock, fleet, bus];
+  const stage = story.querySelector(".story-stage");
+  const NAV = parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--nav")) || 52;
+  const HOLD_GAP = { narrow: 20, wide: 68 };  // reading area's top → held copy
+  const FADE = 20;                             // px over which one scene hands to the next
   const narrow = () => innerWidth <= 900;
-  let queued = false;
-
-  // Where each chapter's heading sits when nothing is stuck: the chapter's
-  // top plus the heading's offset inside it. Chapters hand over on these,
-  // not on their boxes — a box starts a screenful above its heading, so
-  // switching on boxes ran the scene a chapter ahead of the copy.
-  let heads = [];
-  // Measured with the copy unstuck for a moment, from the chapter's own box
-  // (offsetTop would count from whichever ancestor happens to be positioned).
-  const measure = () => {
-    heads = chs.map(ch => {
-      const inn = ch.querySelector(".ch-in");
-      inn.style.position = "static";
-      const d = ch.querySelector("h2").getBoundingClientRect().top - ch.getBoundingClientRect().top;
-      inn.style.position = "";
-      return d;
-    });
-  };
-  function frame() {
-    queued = false;
-    const vh = innerHeight;
-    // The reading line: a third of the way down what the reader can see —
-    // the whole window beside the scene, or the strip under it on a phone.
-    const top = narrow() ? box.getBoundingClientRect().bottom : 0;
-    const line = top + (vh - top) / 3;
-    const at = chs.map((ch, i) => ch.getBoundingClientRect().top + heads[i]);
-    const last = chs[chs.length - 1].getBoundingClientRect();
-    at.push(last.bottom - (vh - line));
-    // A chapter whose copy has already scrolled out of the reading area (up
-    // under the pinned scene, or under the nav) hands over at once, rather
-    // than holding a scene next to words the reader can no longer see.
-    const readTop = narrow() ? top : 52;
-    for (let i = 0; i < chs.length - 1; i++) {
-      const gone = chs[i].querySelector(".ch-in").getBoundingClientRect().bottom - (readTop + 8);
-      at[i + 1] = Math.min(at[i + 1], line + gone);
-    }
-    // t runs 0 → 1 from this chapter's heading crossing the line to the next one's
-    const ts = chs.map((ch, i) => clamp((line - at[i]) / (at[i + 1] - at[i])));
-    // Chapter i hands over to i+1 in the last 20px before i+1's heading
-    // reaches the line, so the two overlap briefly instead of leaving an
-    // empty frame. Each chapter's own animation is finished before that.
-    const FADE = 20;
-    const out = ts.map((t, i) => i < chs.length - 1 ? clamp((line - at[i + 1] + FADE) / FADE) : 0);
-    let c = 0;
-    lys.forEach((ly, i) => {
-      const o = (i === 0 ? 1 : out[i - 1]) * (1 - out[i]);
-      ly.style.opacity = String(o);
-      ly.classList.toggle("on", o > 0);
-      if (o > .5) c = i;
-      if (o > 0) DRAW[i](reduced ? 1 : span(ts[i], .02, .92));
-    });
-    num.textContent = "0" + (c + 1);
-  }
-  // Which chapters' copy can hold still, and where: under the pinned scene
-  // on a narrow screen, below the nav beside it otherwise.
+  // The reading area's top: under the nav beside the scene; under the pinned
+  // scene on a narrow screen — where it is now, or where it sits once pinned.
+  const readTop = (pinned) => !narrow() ? NAV : pinned ? NAV + stage.offsetHeight : stage.getBoundingClientRect().bottom;
+  // A viewport height that holds still while a phone's address bar slides.
   const stableHeight = () => {
     const probe = document.createElement("div");
     probe.style.cssText = "position:fixed;top:0;height:calc(100 * var(--svh));visibility:hidden;pointer-events:none";
@@ -2035,70 +1957,80 @@ if (FEATURES.story) {
     const h = probe.offsetHeight; probe.remove();
     return h || innerHeight;
   };
+
+  // Layout: where copy holds, which chapters are too tall to hold whole,
+  // and how tall each chapter is. One that holds gets room to hold in: most
+  // of a screen, a whole one for the five-beat opener. A tall one is just
+  // as tall as its copy — its scene plays out as the body is read.
   function hold() {
-    const vh = stableHeight();
-    const stick = narrow() ? 52 + story.querySelector(".story-stage").offsetHeight + 20 : 120;
+    const vh = stableHeight(), top = readTop(true);
+    const stick = top + HOLD_GAP[narrow() ? "narrow" : "wide"];
     story.style.setProperty("--stick", stick + "px");
-    chs.forEach(ch => ch.classList.toggle("fits", ch.querySelector(".ch-in").offsetHeight <= vh - stick - 24));
+    story.style.setProperty("--gap", (stick - top) + "px");
+    for (const ch of chs) {
+      const h = ch.querySelector(".ch-in").offsetHeight;
+      const tall = h > vh - stick - 24;
+      ch.classList.toggle("tall", tall);
+      const room = vh * (ch.id === "windows" ? 1 : .6);
+      ch.style.minHeight = tall ? "" : (parseFloat(getComputedStyle(ch).paddingTop) + h + room) + "px";
+    }
   }
-  // Which chapters hold is a layout decision, so it is made only when the
-  // layout really changes: a new width, or fonts and images arriving. A
-  // phone's address bar sliding in and out changes only the height, and
-  // re-deciding on that flipped chapters between held and not mid-scroll.
+
+  // Each heading's offset inside its chapter, measured with nothing held.
+  // Chapters hand over on their headings, not their boxes: a box starts a
+  // screenful above its heading.
+  let heads = [];
+  function measure() {
+    story.classList.add("measuring");
+    heads = chs.map(ch => ch.querySelector("h2").getBoundingClientRect().top - ch.getBoundingClientRect().top);
+    story.classList.remove("measuring");
+  }
+
+  let queued = false;
+  function frame() {
+    queued = false;
+    const vh = innerHeight, top = readTop(false);
+    // The reading line: a third of the way down the reading area.
+    const line = top + (vh - top) / 3;
+    // at[i]: where chapter i's heading is. A chapter whose copy has left the
+    // reading area hands over at once, whatever the next heading is doing.
+    const at = chs.map((ch, i) => ch.getBoundingClientRect().top + heads[i]);
+    at.push(chs[chs.length - 1].getBoundingClientRect().bottom - (vh - line));
+    for (let i = 0; i < chs.length - 1; i++) {
+      const left = chs[i].querySelector(".ch-in").getBoundingClientRect().bottom - (top + 8);
+      at[i + 1] = Math.min(at[i + 1], line + left);
+    }
+    // t: 0 → 1 from this heading crossing the line to the next one doing so.
+    // out: the hand-over to the next scene, in the last FADE px before that.
+    const ts = chs.map((ch, i) => clamp((line - at[i]) / (at[i + 1] - at[i])));
+    const out = chs.map((ch, i) => i < chs.length - 1 ? clamp((line - at[i + 1] + FADE) / FADE) : 0);
+    let shown = 0;
+    lys.forEach((ly, i) => {
+      const o = (i === 0 ? 1 : out[i - 1]) * (1 - out[i]);
+      ly.style.opacity = String(o);
+      ly.classList.toggle("on", o > 0);
+      if (o > .5) shown = i;
+      if (o > 0) DRAW[i](reduced ? 1 : span(ts[i], .02, .92));
+    });
+    num.textContent = "0" + (shown + 1);
+  }
+
+  // Holding is a layout decision, remade only when the layout really
+  // changes: a new width, or fonts and images arriving. A height-only resize
+  // (a phone's address bar) would otherwise flip chapters mid-scroll.
   let laidOutWidth = -1;
   function fit(e) {
-    if (innerWidth !== laidOutWidth || !e || e.type !== "resize") { laidOutWidth = innerWidth; hold(); }
+    if (!(e && e.type === "resize" && innerWidth === laidOutWidth)) { laidOutWidth = innerWidth; hold(); }
     measure();
     const r = box.getBoundingClientRect();
     kEl.style.setProperty("--sxk", String(Math.min((r.width - 32) / 560, (r.height - 56) / 440)));
     frame();
   }
-  const onScroll = () => { if (!queued) { queued = true; requestAnimationFrame(frame); } };
-  addEventListener("scroll", onScroll, { passive: true });
+  addEventListener("scroll", () => { if (!queued) { queued = true; requestAnimationFrame(frame); } }, { passive: true });
   addEventListener("resize", fit);
-  // Geist arrives after first paint and changes how tall each chapter is.
-  if (document.fonts) document.fonts.ready.then(() => fit());
+  if (document.fonts) document.fonts.ready.then(() => fit());   // Geist changes every chapter's height
   addEventListener("load", () => fit());
   fit();
-}
-
-// ── [FEATURES.scrollScrub] scroll closes the lid ───────────────────────
-// Pointer-driven scrubbing only where it feels good: a real pointer, a wide
-// window, motion allowed. Everywhere else the video just loops as before.
-const lidVideo = document.querySelector("#lidshot video");
-const scrubbing = FEATURES.scrollScrub && !reduced && lidVideo &&
-                  matchMedia("(min-width:900px) and (pointer:fine)").matches;
-
-if (scrubbing) {
-  lidVideo.autoplay = false;
-  lidVideo.preload = "auto";
-  lidVideo.pause();
-
-  let want = 0, have = 0, raf = 0;
-  const figure = document.getElementById("lidshot");
-
-  const measure = () => {
-    const r = figure.getBoundingClientRect();
-    // 0 as the figure enters from the bottom, 1 once it has risen past the
-    // middle of the viewport — the lid shuts exactly as you read the section.
-    const span = innerHeight * 0.9;
-    want = Math.max(0, Math.min(1, (span - r.top) / span));
-  };
-
-  const frame = () => {
-    have += (want - have) * 0.14;
-    if (lidVideo.readyState >= 2 && lidVideo.duration) {
-      const t = have * (lidVideo.duration - 0.05);
-      if (Math.abs(lidVideo.currentTime - t) > 0.02) lidVideo.currentTime = t;
-    }
-    raf = Math.abs(want - have) > 0.001 ? requestAnimationFrame(frame) : 0;
-  };
-
-  const onMove = () => { measure(); if (!raf) raf = requestAnimationFrame(frame); };
-  addEventListener("scroll", onMove, { passive: true });
-  addEventListener("resize", onMove);
-  lidVideo.addEventListener("loadedmetadata", onMove);
-  onMove();
 }
 
 // ── [FEATURES.dragWindow] throw a remote window around ─────────────────

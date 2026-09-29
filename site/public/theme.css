@@ -30,6 +30,7 @@
   /* A viewport-height unit that holds still while a phone's address bar
      slides in and out (svh where supported), for anything that sizes layout. */
   --svh:1vh;
+  --nav:52px;
 }
 @supports (height:1svh){:root{--svh:1svh}}
 @media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
@@ -65,14 +66,14 @@ svg{display:block}
 .nav{position:sticky;top:0;z-index:50;background:color-mix(in srgb,var(--page) 80%,transparent);
   backdrop-filter:saturate(180%) blur(12px);-webkit-backdrop-filter:saturate(180%) blur(12px);
   border-bottom:1px solid var(--line)}
-.navin{max-width:1080px;margin:0 auto;padding:0 24px;height:52px;display:flex;align-items:center;gap:22px;
+.navin{max-width:1080px;margin:0 auto;padding:0 24px;height:var(--nav);display:flex;align-items:center;gap:22px;
   overflow-x:auto;overflow-y:hidden;scrollbar-width:none}
 .navin::-webkit-scrollbar{display:none}
 .brand{flex:0 0 auto;display:flex;align-items:center;gap:8px;font-weight:600;font-size:15px;letter-spacing:-.02em;
   color:var(--ink);text-decoration:none;margin-right:10px}
 .brand img{width:22px;height:22px;border-radius:6px;display:block}
 .nav .sp{flex:1}
-.nav a.l{flex:0 0 auto;font-size:14px;color:var(--mute);text-decoration:none;white-space:nowrap;height:52px;
+.nav a.l{flex:0 0 auto;font-size:14px;color:var(--mute);text-decoration:none;white-space:nowrap;height:var(--nav);
   display:flex;align-items:center;gap:7px;border-bottom:2px solid transparent;transition:color .15s}
 .nav a.l:hover{color:var(--ink)}
 .nav a.l.on{color:var(--ink);border-color:var(--ink)}
@@ -110,7 +111,7 @@ header.hero .wrap{z-index:1}
    zero the side gutters .wrap sets. */
 section.s{padding-top:112px;position:relative}
 section.s > .wrap > *,section.s.wrap > *{max-width:720px}
-section.s > .band,section.s > .pin-grid{max-width:none}
+section.s > .band{max-width:none}
 section.s h2,.band h2{font:600 52px/1.05 var(--sans);letter-spacing:-.05em;margin:0 0 20px}
 .body{color:var(--dim);font-size:18px;line-height:1.6;letter-spacing:-.011em;margin:0}
 .body + .body{margin-top:14px}
