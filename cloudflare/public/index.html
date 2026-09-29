@@ -6244,6 +6244,12 @@
           const extra = sessionMetaWeb(s);
           if (extra) bits.push(extra);
         }
+        // Shells the harness still has running, beside the state and never folded
+        // into it: a turn that ended leaving a build going is honestly "done",
+        // and this is what says whether done means finished.
+        if (s.kind !== 'port' && s.shells > 0) {
+          bits.push(s.shells + (s.shells === 1 ? ' shell' : ' shells'));
+        }
         meta.textContent = bits.join(' · ');
         main.appendChild(label);
         main.appendChild(meta);

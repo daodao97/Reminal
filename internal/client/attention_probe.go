@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strconv"
 	"strings"
@@ -172,6 +173,11 @@ func (a *Agent) runAttention(logPath string) {
 		fgAt := a.attnFGAt
 		a.metaMu.Unlock()
 		bottom := attentionProbeTail(render, attnPromptRows)
+		// How many shells the harness still has running, reported alongside the
+		// state rather than folded into it: a finished turn that left a build
+		// going is honestly "done", and "done · 1 shell" is the thing worth
+		// knowing before deciding it needs nothing from you.
+		a.noteShells(attnShellCount(bottom))
 		state, source := resolveAttn(screenState, session.ReadHookState(a.sessionID), last, fgAt, idleMs,
 			attnLooksLikePrompt(bottom), attnLooksBusy(bottom))
 		if a.harnessDown() {
@@ -297,6 +303,25 @@ func processArgs(pid int) []string {
 // noteForeground records the foreground command and, when it changes, flushes
 // the session record — `claude` starting or exiting is what turns a terminal
 // into an agent and back, and `reminal list` should see it within a tick.
+// noteShells records how many shells the harness still has running, and flushes
+// the record when it changes so `reminal list` sees it within a tick.
+func (a *Agent) noteShells(n int) {
+	a.metaMu.Lock()
+	changed := n != a.attnShells
+	a.attnShells = n
+	a.metaMu.Unlock()
+	if !changed {
+		return
+	}
+	a.metaDirty.Store(true)
+	if a.metaKick != nil {
+		select {
+		case a.metaKick <- struct{}{}:
+		default:
+		}
+	}
+}
+
 func (a *Agent) noteForeground(fg string) {
 	a.metaMu.Lock()
 	changed := fg != a.attnFG
@@ -421,6 +446,36 @@ func resolveAttn(screenState string, hs *session.HookState, lastActivity, fgAt t
 // footer has no such words. Matched the way attnLooksLikePrompt matches —
 // as text, with the styling and the spaces taken out.
 var attnBusyCues = []string{"esc to interrupt", "ctrl+c to interrupt", "to run in background"}
+
+// attnShellPattern finds a harness's count of the shells it still has running.
+//
+// Claude Code puts it in the footer as "· 1 shell" / "· 4 shells", and keeps it
+// there after the turn has ended — which is the case worth reporting, since the
+// hook says done while the work carries on. The leading separator is what makes
+// this safe to match: transcripts are full of "Ran 2 shell commands", which is a
+// count of commands already finished and means the opposite.
+var attnShellPattern = regexp.MustCompile(`·\s*([0-9]+)\s*shells?\b`)
+
+// attnShellCount reads that count off the bottom of the screen, or 0.
+func attnShellCount(tail string) int {
+	t := strings.ToLower(stripANSI(tail))
+	// By match position, not by searching for the matched text: two matches can
+	// render the identical string, and looking the text up again finds the first
+	// one every time. A footer under a decoy of the same shape was read against
+	// the decoy's suffix and thrown away, leaving the session with no count.
+	for _, loc := range attnShellPattern.FindAllStringSubmatchIndex(t, -1) {
+		// "· 2 shell commands" would be a report of finished work, not of work
+		// still running; the footer never says that, but a transcript line ending
+		// in the same shape could.
+		if strings.HasPrefix(strings.TrimSpace(t[loc[1]:]), "command") {
+			continue
+		}
+		if n, err := strconv.Atoi(t[loc[2]:loc[3]]); err == nil && n > 0 {
+			return n
+		}
+	}
+	return 0
+}
 
 // attnLooksBusy reports whether the bottom of the screen says a turn is
 // running.

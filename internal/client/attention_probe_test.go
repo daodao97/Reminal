@@ -377,3 +377,51 @@ func TestBusyFooterKeepsATurnWorking(t *testing.T) {
 		t.Fatalf("a question on screen still wins over the footer, got %q", got)
 	}
 }
+
+// The shell count is read off real footers, including the ones that made this
+// worth reporting: a turn that has ended and still has work running. The strings
+// below were taken from live sessions, not invented.
+func TestShellCountReadsTheFooterAndNotTheTranscript(t *testing.T) {
+	cases := []struct {
+		name string
+		tail string
+		want int
+	}{
+		{"claude mid-turn, one shell",
+			"⏵⏵ bypass permissions on · 1 shell · esc to interrupt · ← 2 agents · ↓ to manage", 1},
+		{"claude mid-turn, several",
+			"⏵⏵ bypass permissions on · 2 shells · esc to interrupt · ← 2 agents · ↓ to m", 2},
+		{"claude with subagents",
+			"⏵⏵ bypass permissions on · 4 shells · /tasks to see subagents · esc to interrupt", 4},
+		{"the case this is for: the turn ended, the work did not",
+			"⏵⏵ bypass permissions on · 1 shell · ← 2 agents · ↓ to manage", 1},
+		{"the turn's own summary says it too",
+			"✻ Baked for 15s · done 8:38 PM · 1 shell still running", 1},
+		{"backgrounded from the tool row",
+			"⏺ in the background (↓ to manage)· 1 shell · esc to interrupt", 1},
+		{"nothing running",
+			"⏵⏵ bypass permissions on · esc to interrupt · ← 2 agents · ↓ to manage", 0},
+		{"a plain shell's prompt", "harshal@mac ~/src %", 0},
+		// "Ran N shell commands" is a count of commands that have FINISHED, and it
+		// appears in transcripts constantly. Reading it as work still running
+		// would put a permanent count on every session that ever ran a command.
+		{"finished commands are not running shells", "Ran 2 shell commands", 0},
+		{"…even punctuated the way the footer is", "· Ran 3 shell commands", 0},
+		// This one is the guard's whole reason to exist: it has the footer's exact
+		// shape, and still means commands that finished.
+		{"footer-shaped, but a count of finished commands", "· 2 shell commands were run", 0},
+		{"zero is not a count", "⏵⏵ bypass permissions on · 0 shells · esc to interrupt", 0},
+		// Both of these render the identical "· 1 shell", so a guard that looks
+		// the matched text up again instead of using the match's own position
+		// tests the footer against the decoy and reports nothing at all.
+		{"a decoy of the same shape sits above the footer",
+			"⎿ · 1 shell command was run\n⏵⏵ bypass permissions on · 1 shell · ← 2 agents", 1},
+		{"…and below it",
+			"⏵⏵ bypass permissions on · 2 shells · ← 2 agents\n⎿ · 2 shell commands were run", 2},
+	}
+	for _, c := range cases {
+		if got := attnShellCount(c.tail); got != c.want {
+			t.Errorf("%s: attnShellCount = %d, want %d\n  tail: %s", c.name, got, c.want, c.tail)
+		}
+	}
+}
