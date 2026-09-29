@@ -420,8 +420,25 @@ func TestShellCountReadsTheFooterAndNotTheTranscript(t *testing.T) {
 			"⏵⏵ bypass permissions on · 2 shells · ← 2 agents\n⎿ · 2 shell commands were run", 2},
 	}
 	for _, c := range cases {
-		if got := attnShellCount(c.tail); got != c.want {
+		if got := attnShellCount(true, c.tail); got != c.want {
 			t.Errorf("%s: attnShellCount = %d, want %d\n  tail: %s", c.name, got, c.want, c.tail)
 		}
+	}
+}
+
+// A count is only as live as the program that drew it. When a harness exits its
+// last footer stays in the scrollback until something scrolls past it, so a
+// session back at its own shell would go on reporting the dead harness's shells
+// — which is the stuck pill again, in the count instead of the state.
+func TestShellCountExpiresWithTheProgramThatDrewIt(t *testing.T) {
+	// The exact screen a harness leaves behind when it exits: its footer is
+	// still there, but the foreground is the user's shell again.
+	leftBehind := "⏵⏵ bypass permissions on · 4 shells · ← 2 agents · ↓ to manage\nharshal@mac ~/src %"
+
+	if got := attnShellCount(true, leftBehind); got != 4 {
+		t.Errorf("with an agent in the foreground the count should be read: got %d, want 4", got)
+	}
+	if got := attnShellCount(false, leftBehind); got != 0 {
+		t.Errorf("a dead harness's footer still reported %d shells; a session at its own shell has none", got)
 	}
 }
