@@ -165,29 +165,214 @@ header figcaption{max-width:720px}
 /* No room to throw it around below this, and it would overlap the copy. */
 @media (max-width:1200px){.popout{display:none !important}}
 
-/* ── pinned section  [FEATURES.pinnedSection] ──────── */
-.pin-grid{display:grid;grid-template-columns:1fr 1fr;gap:56px}
-section.s .pin-grid > *{max-width:none}
-.pin-media{position:relative}
-.pin-sticky{position:sticky;top:96px}
-.pin-copy{padding:20px 0 24px}
-.beats{list-style:none;margin:32px 0 0;padding:0;counter-reset:beat}
-.beat{position:relative;padding:18px 0 18px 42px;margin:0;border-top:1px solid var(--line);color:var(--mute);font-size:15.5px;line-height:1.6;
-  opacity:.45;transition:opacity .45s var(--ease),color .45s var(--ease)}
-.beat:last-child{border-bottom:1px solid var(--line)}
-.beat b{color:var(--dim);font-weight:600;transition:color .45s var(--ease)}
-.beat::before{counter-increment:beat;content:counter(beat,decimal-leading-zero);position:absolute;left:0;top:21px;font:500 12px var(--mono);color:var(--mute)}
-.beat.lit{opacity:1;color:var(--dim)}
-.beat.lit b{color:var(--ink)}
-.beat.lit::before{color:var(--ink)}
+/* ── the storyline  [FEATURES.story] ───────────────── */
+/* One pinned scene, six chapters of copy scrolling past it. The copy is the
+   page's real text in normal flow; the scene is decoration (aria-hidden) and
+   every transform in it is a pure function of how far you have read. */
+.story{padding-top:48px}
+.story-grid{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.15fr);gap:56px;align-items:start}
+section.s .story-grid > *{max-width:none}
+.story-copy{grid-column:1;grid-row:1}
+.story-stage{grid-column:2;grid-row:1;align-self:stretch}
+.story-pin{position:sticky;top:max(76px,calc(50vh - 240px));height:min(calc(100vh - 100px),500px);display:grid;place-items:center}
+.sx{position:relative;width:100%;height:100%;border-radius:16px;background:var(--fig);border:1px solid var(--figline);overflow:hidden}
+:root[data-theme="dark"] .sx{border-color:var(--figline2)}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]) .sx{border-color:var(--figline2)}}
+.sx::before{content:"";position:absolute;inset:0;pointer-events:none;
+  background-image:linear-gradient(rgba(255,255,255,.035) 1px,transparent 1px),linear-gradient(90deg,rgba(255,255,255,.035) 1px,transparent 1px);
+  background-size:32px 32px;-webkit-mask-image:radial-gradient(ellipse 80% 70% at 50% 40%,#000 30%,transparent 80%);mask-image:radial-gradient(ellipse 80% 70% at 50% 40%,#000 30%,transparent 80%)}
+.sx-k{position:absolute;left:50%;top:50%;width:560px;height:440px;margin:-220px 0 0 -280px;transform:scale(var(--sxk,1));transform-origin:50% 50%}
+.sx-count{position:absolute;left:-2px;top:-26px;margin:0;font:500 11px var(--mono);color:var(--figmute);letter-spacing:.04em}
+.sx-count b{color:var(--figink);font-weight:500}
+.ly{position:absolute;inset:0;opacity:0;visibility:hidden}
+.ly.on{visibility:visible}
+.ly *{will-change:auto}
+
+.ch{min-height:115vh;padding:18vh 0 10vh}
+/* The copy holds beside the scene while its chapter plays. Not the agent-bus
+   chapter: it is taller than a screen, and a sticky block that tall would
+   hide its own end. */
+.ch:not(#bus) > .ch-in{position:sticky;top:120px}
+.story .beats{list-style:none;margin:28px 0 0;padding:0;counter-reset:beat}
+.story .beat{position:relative;padding:14px 0 14px 40px;border-top:1px solid var(--line);color:var(--mute);font-size:15px;line-height:1.55;transition:color .3s}
+.story .beat:last-child{border-bottom:1px solid var(--line)}
+.story .beat b{color:var(--dim);font-weight:600;transition:color .3s}
+.story .beat::before{counter-increment:beat;content:counter(beat,decimal-leading-zero);position:absolute;left:0;top:17px;font:500 12px var(--mono);color:var(--mute)}
+.story .beat.lit{color:var(--dim)}
+.story .beat.lit b,.story .beat.lit::before{color:var(--ink)}
+.ch:first-child{padding-top:10vh}
+.ch#windows{min-height:190vh}
+.ch#bus{min-height:150vh;padding-bottom:4vh}
+.ch h2{font-size:44px}
+.ch .body{font-size:17px}
+.ch .trace li{transition:opacity .3s}
+.story.js .ch .trace li{opacity:.35}
+.story.js .ch .trace li.on{opacity:1}
+
+/* shared scene parts */
+.sx-bar{display:flex;align-items:center;gap:8px;height:24px;padding:0 9px;background:var(--figbar);border-bottom:1px solid var(--figline);border-radius:9px 9px 0 0}
+.sx-bar .dots i{width:7px;height:7px}
+.sx-bar .dots{gap:4px}
+.sx-url{flex:1;text-align:center;font:400 8.5px var(--mono);color:var(--figmute);overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.sx-chip{flex:none;font:500 8px var(--sans);color:var(--figdim);border:1px solid var(--figline2);border-radius:4px;padding:2px 6px;transition:background .2s,color .2s}
+.sx-chip.hit{background:#ededed;color:#0a0a0a;border-color:#ededed}
+.sx-win{position:absolute;border:1px solid var(--figline2);border-radius:10px;background:#111;box-shadow:0 18px 40px -18px rgba(0,0,0,.9);overflow:hidden}
+.sx-br{position:absolute;left:0;top:14px;width:500px;height:336px;border:1px solid var(--figline2);border-radius:10px;background:#0d0d0d}
+.sx-phone{position:absolute;border-radius:22px;background:linear-gradient(165deg,#2a2a2a,#161616);border:1px solid #3a3a3a;padding:6px;box-shadow:0 30px 60px -24px rgba(0,0,0,.9)}
+.sx-screen{position:relative;width:100%;height:100%;border-radius:17px;background:#080808;overflow:hidden;font:400 8px/1.6 var(--mono);color:#c9c9c9}
+.sx-screen p{margin:0}
+.sx-cur{position:absolute;left:0;top:0;width:18px;height:18px;z-index:9;filter:drop-shadow(0 2px 3px rgba(0,0,0,.6))}
+.sx-ring{position:absolute;left:0;top:0;width:26px;height:26px;margin:-13px 0 0 -13px;border:1.5px solid #fff;border-radius:50%;opacity:0;z-index:8}
+.sx-keys{position:absolute;left:0;right:0;bottom:0;display:flex;gap:3px;padding:5px;background:#141414;border-top:1px solid #222}
+.sx-keys span{flex:1;text-align:center;font:500 7px var(--sans);color:#a1a1a1;background:#222;border-radius:3px;padding:3px 0}
+.g{color:var(--figyes)} .r{color:#ff6b60} .d{color:var(--figmute)}
+
+/* 01 drive */
+.d-br .sx-bar{height:28px}
+.d-desk{position:absolute;left:1px;top:43px;width:498px;height:306px;opacity:0}
+.d-menubar{display:flex;align-items:center;gap:10px;height:12px;padding:0 8px;background:rgba(255,255,255,.08)}
+.d-menubar b{width:6px;height:6px;border-radius:50%;background:#a1a1a1}
+.d-menubar i{width:22px;height:3px;border-radius:2px;background:rgba(255,255,255,.25)}
+.d-menubar span{margin-left:auto;font:400 6.5px var(--mono);color:#a1a1a1}
+.d-dock{position:absolute;left:50%;bottom:6px;transform:translateX(-50%);display:flex;gap:5px;padding:4px 6px;border-radius:7px;background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.1)}
+.d-dock i{width:14px;height:14px;border-radius:4px;background:#3a3a3a}
+.d-dock i:nth-child(2){background:#5a5a5a} .d-dock i:nth-child(4){background:#4a4a4a}
+.d-w1{left:28px;top:70px;width:280px;height:170px;transform-origin:0 0}
+.d-doc{padding:14px 16px;background:#f5f5f5;height:146px}
+.d-doc p{margin:0 0 10px;font:500 11px var(--sans);color:#0a0a0a;min-height:16px}
+.d-doc s{display:block;height:6px;border-radius:3px;background:#dcdcdc;margin:0 0 8px;text-decoration:none}
+.d-doc s.h{width:60%}
+.d-caret{display:inline-block;width:1px;height:12px;background:#0a0a0a;vertical-align:-2px;margin-left:1px;animation:blink 1s steps(1) infinite}
+.d-w2{left:220px;top:130px;width:250px;height:170px;opacity:0;transform-origin:50% 50%;overflow:visible}
+.d-w2 .sx-bar{border-radius:9px 9px 0 0}
+.d-canvas{position:relative;height:145px;background:#1c1c1c;border-radius:0 0 9px 9px;overflow:hidden}
+.d-canvas i{position:absolute;border-radius:4px}
+.d-canvas .a{left:20px;top:18px;width:90px;height:60px;background:#3a3a3a}
+.d-canvas .b{left:124px;top:18px;width:100px;height:100px;border-radius:50%;background:#2c2c2c;border:1px solid #444}
+.d-canvas .c{left:20px;top:90px;width:90px;height:34px;background:#ededed}
+.d-sel{position:absolute;left:122px;top:16px;width:104px;height:104px;border:1px solid #52a8ff;opacity:0}
+.d-own{position:absolute;right:10px;top:-11px;font:600 7.5px var(--mono);letter-spacing:.06em;text-transform:uppercase;color:#ededed;background:#0a0a0a;border:1px solid #444;border-radius:99px;padding:3px 8px;opacity:0}
+.d-menu{position:absolute;left:350px;top:44px;width:130px;padding:5px;border-radius:8px;background:#1a1a1a;border:1px solid #333;box-shadow:0 16px 30px -10px rgba(0,0,0,.9);opacity:0;transform-origin:50% 0;z-index:5}
+.d-menu p{margin:0 0 4px;padding:2px 6px;font:500 7px var(--mono);color:#707070;text-transform:uppercase}
+.d-menu span{display:block;padding:4px 6px;border-radius:4px;font:500 9.5px var(--sans);color:#ededed}
+.d-menu span.hit{background:#2e2e2e}
+.d-ph{left:410px;top:100px;width:130px;height:260px;opacity:0;z-index:6}
+.d-pad{position:absolute;left:0;right:0;top:40%;text-align:center;font:500 8px var(--mono);color:#555;letter-spacing:.1em;text-transform:uppercase}
+.d-fing{position:absolute;left:0;top:0;width:22px;height:22px;margin:-11px 0 0 -11px;border-radius:50%;background:rgba(255,255,255,.28);border:1px solid rgba(255,255,255,.5)}
+
+/* 02 fps */
+.f-win{left:0;top:0;width:250px;height:168px;transform-origin:0 0}
+.f-film{position:relative;height:144px;overflow:hidden;background:#161616}
+.f-pan{position:absolute;inset:0 -200px 22px 0;background:
+  linear-gradient(90deg,#2a2a2a 0 60px,#3a3a3a 60px 110px,#1f1f1f 110px 190px,#4a4a4a 190px 230px,#262626 230px 330px,#353535 330px 400px,#1b1b1b 400px 450px)}
+.f-scrub{position:absolute;left:10px;right:10px;bottom:9px;height:3px;border-radius:2px;background:#333}
+.f-head{position:absolute;left:0;top:-3px;width:9px;height:9px;margin-left:-4px;border-radius:50%;background:#ededed}
+.f-hud{position:absolute;right:0;top:12px;width:210px;padding:14px;border:1px solid var(--figline2);border-radius:12px;background:#0d0d0d}
+.f-row{display:flex;align-items:baseline;gap:6px}
+.f-fps{font:600 44px/1 var(--sans);letter-spacing:-.05em;color:#ededed}
+.f-row span{font:500 11px var(--mono);color:#707070}
+.f-stats{display:flex;flex-direction:column;gap:2px;margin-top:8px;font:400 9px var(--mono);color:#a1a1a1}
+.f-stats b{color:#ededed;font-weight:500}
+.f-graph{position:relative;display:flex;align-items:flex-end;gap:2px;height:40px;margin-top:12px;border-bottom:1px solid #2e2e2e}
+.f-graph b{flex:1;background:var(--figyes);border-radius:1px 1px 0 0;opacity:0}
+.f-line{position:absolute;left:0;right:0;bottom:24px;border-top:1px dashed #555}
+.f-cap{margin:6px 0 0;font:400 8px var(--mono);color:#707070}
+.f-pipe{position:absolute;left:0;right:0;bottom:6px;display:flex;align-items:center;justify-content:center;gap:8px;opacity:0}
+.f-pipe span{font:500 9px var(--mono);color:#ededed;border:1px solid #333;border-radius:6px;padding:4px 9px;background:#111}
+.f-pipe i{width:26px;height:1px;background:linear-gradient(90deg,#333,#707070)}
+
+/* 03 terminal */
+.t-term{left:0;top:16px;width:300px;height:340px}
+.t-out{padding:14px 16px;font:400 10.5px/1.8 var(--mono);color:#c9c9c9}
+.t-out p{margin:0;white-space:pre}
+.t-out b{color:#ededed;font-weight:500}
+.t-l{opacity:0}
+.t-qr{margin-top:8px;display:inline-block;background:#fff;padding:5px;border-radius:3px;line-height:0}
+.t-qr img{display:block}
+.t-ph{left:370px;top:50px;width:150px;height:300px;opacity:0}
+.t-cam{position:absolute;inset:0;display:grid;place-items:center;background:#1a1a1a}
+.t-cam img{background:#fff;padding:4px;border-radius:2px;filter:blur(.3px)}
+.t-frame{position:absolute;left:50%;top:50%;width:100px;height:100px;margin:-50px 0 0 -50px;border:1.5px solid #ededed;border-radius:10px}
+.t-sweep{position:absolute;left:25px;right:25px;top:30%;height:2px;background:var(--figyes);box-shadow:0 0 12px var(--figyes)}
+.t-shell{position:absolute;inset:0;padding:34px 9px 0;background:#080808;opacity:0}
+.t-shell p{white-space:nowrap}
+.t-caret,.k-caret{display:inline-block;width:5px;height:9px;background:#ededed;vertical-align:-1px;animation:blink 1s steps(1) infinite}
+.t-back{position:absolute;left:8px;right:8px;top:8px;text-align:center;font:500 7px var(--mono);color:#0a0a0a;background:var(--figyes);border-radius:99px;padding:3px 0;opacity:0}
+
+/* 04 dock */
+.k-ph{left:170px;top:8px;width:210px;height:420px}
+.k-title{position:relative;height:28px;padding:14px 10px 0;font:500 8px var(--mono);color:#a1a1a1;border-bottom:1px solid #1f1f1f;box-sizing:content-box}
+.k-title span{position:absolute;left:10px;top:14px}
+.k-tb{opacity:0}
+.k-a,.k-b{position:absolute;left:10px;right:10px;top:52px;font-size:8.5px}
+.k-b{opacity:0}
+.k-sheet{position:absolute;left:6px;right:6px;bottom:30px;padding:8px;border-radius:12px;background:#161616;border:1px solid #2e2e2e;transform:translateY(120%)}
+.k-h{margin:0 0 6px!important;font:500 7px var(--mono);color:#707070;text-transform:uppercase;letter-spacing:.06em}
+.k-c{display:flex;justify-content:space-between;padding:7px 8px;margin-top:4px;border-radius:7px;background:#1f1f1f;font:400 8px var(--mono);color:#a1a1a1}
+.k-c b{font:600 8.5px var(--sans);color:#ededed}
+.k-c.hit{background:#ededed;color:#0a0a0a}.k-c.hit b{color:#0a0a0a}
+.k-r{opacity:.6}
+.k-handle{color:#ededed!important;background:#3a3a3a!important}
+.k-fing{position:absolute;left:0;top:0;width:24px;height:24px;margin:-12px 0 0 -12px;border-radius:50%;background:rgba(255,255,255,.3);border:1px solid rgba(255,255,255,.55);opacity:0;z-index:4}
+.k-tags{position:absolute;right:0;top:170px;display:flex;flex-direction:column;gap:8px}
+.k-tags span{font:500 10px var(--mono);color:#ededed;border:1px solid #333;background:#111;border-radius:6px;padding:5px 10px;opacity:0}
+
+/* 05 fleet */
+.m-lines{position:absolute;inset:0;overflow:visible}
+.m-lines path{fill:none;stroke-width:1.2}
+.m-own{stroke:#707070;stroke-dasharray:1 1}
+.m-ag{stroke:#a1a1a1;stroke-dasharray:1 1}
+.m-card{position:absolute;width:240px;padding:10px 12px;border-radius:12px;border:1px solid var(--figline2);background:#111;opacity:0}
+.m1{left:20px;top:104px}.m2{left:300px;top:104px}.m3{left:160px;top:232px}
+.m-h{display:flex;justify-content:space-between;align-items:baseline;margin:0 0 6px}
+.m-h b{font:600 12px var(--sans);color:#ededed;letter-spacing:-.02em}
+.m-h span{font:400 8.5px var(--mono);color:#707070}
+.m-s{display:flex;align-items:center;gap:7px;margin:0;padding:5px 0;border-top:1px solid #1f1f1f;font:400 9.5px var(--mono);color:#c9c9c9}
+.m-s i{width:6px;height:6px;border-radius:50%;background:#444}
+.m-s i.on{background:var(--figyes)}
+.m-s em{margin-left:auto;font-style:normal;font-size:8.5px;color:#707070}
+.m-new{max-height:0;overflow:hidden;padding:0;opacity:0}
+.m-owner,.m-agent{position:absolute;font:500 9px var(--mono);color:#ededed;border:1px solid #444;background:#0a0a0a;border-radius:99px;padding:4px 11px;opacity:0;white-space:nowrap}
+.m-owner{left:50%;top:392px;transform:translateX(-50%)}
+.m-agent{left:14px;top:26px}
+
+/* 06 bus */
+.b-lines{position:absolute;inset:0;overflow:visible}
+.b-lines path{fill:none;stroke:#3a3a3a;stroke-width:1.2;stroke-dasharray:3 3}
+.b-pulse{position:absolute;left:0;top:0;width:8px;height:8px;margin:-4px 0 0 -4px;border-radius:50%;background:#ededed;box-shadow:0 0 10px 2px rgba(237,237,237,.6);opacity:0;z-index:5}
+.b-n{width:190px}
+.b1{left:0;top:60px;height:124px}
+.b2{left:340px;top:44px;width:220px;height:170px;overflow:visible}
+.b2 .sx-bar{border-radius:9px 9px 0 0}
+.b3{left:210px;top:274px;height:84px}
+.b-out{padding:8px 10px;font:400 8.5px/1.7 var(--mono);color:#c9c9c9}
+.b-out p{margin:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.b-call{white-space:normal!important;color:#ededed}
+.b-call b{display:block;font-weight:500;color:#ededed}
+.b-call span{display:block;color:#707070}
+.b-fail,.b-err,.b-typed{opacity:0}
+.b-err{color:#ff6b60}
+.b-typed{white-space:normal!important}
+.b-n.hot{border-color:#707070}
+.b-badge{position:absolute;right:14px;bottom:100%;margin-bottom:-1px;display:inline-flex;align-items:center;gap:5px;padding:4px 9px 5px;border-radius:8px 8px 2px 2px;
+  background:#0a0a0a;border:1px solid rgba(255,255,255,.22);font:600 8px var(--sans);color:#ededed;opacity:0;transform-origin:100% 100%}
+.b-badge .nm-dot{width:6px;height:6px}
+
 @media (max-width:900px){
-  .pin-grid{grid-template-columns:1fr;gap:26px}
-  .pin-media,.pin-sticky{position:static}
-  .pin-copy{padding:0}
-  .pin-media{order:2}
-  .beat{opacity:1;color:var(--dim);font-size:15px}
-  .beat b{color:var(--ink)}
+  /* The scene pins to the top; the copy scrolls up underneath it. */
+  .story{padding-top:24px}
+  .story-grid{display:block}
+  .story-stage{position:sticky;top:52px;z-index:3;margin:0 -16px;padding:10px 16px 12px;background:var(--page);border-bottom:1px solid var(--line)}
+  .story-pin{position:relative;top:0;height:min(42vh,calc((100vw - 32px) * .86));max-height:none}
+  /* Here the copy sets the pace: each chapter is as tall as its own text,
+     so there is never an empty strip under the scene. */
+  .ch,.ch#windows,.ch#bus{min-height:0;padding:40px 0 18vh}
+  .ch:not(#bus) > .ch-in{position:static}
+  .story .beat{color:var(--dim)} .story .beat b{color:var(--ink)}
+  .ch h2{font-size:32px}
+  .ch .body{font-size:16px}
 }
+@media (prefers-reduced-motion:reduce){.story .ly{transition:opacity .2s}}
 
 /* ── the lid stage  [FEATURES.lidStage] ────────────── */
 /* A pinned 3D set piece: the MacBook shuts while its windows escape into a
@@ -652,28 +837,155 @@ form.signup button:disabled{opacity:.5;cursor:default}
     headless, so window mirroring keeps working with nothing plugged in. Toggle it off and everything
     is undone.
   </p>
-  <figure class="frame reveal" id="lidshot">
-    <div class="bar"><span class="dots"><i></i><i></i><i></i></span><span class="url">live.reminal.app/?s=7f3a2c9e</span><span class="live">live<span> &middot; studio-mac</span></span></div>
-    <video src="/assets/lid.mp4" poster="/assets/lid.jpg" muted loop playsinline autoplay
-           aria-label="A MacBook with VS Code, Keynote and Mail open folds its lid shut — and the same windows keep streaming, live and controllable, into a browser"></video>
-  </figure>
-  <figcaption class="reveal" id="lidcap">The lid shuts with no monitor and no dongle attached &mdash; and the windows keep streaming, live and controllable.</figcaption>
 </section>
 
-<section id="windows" class="pinned s">
-  <div class="wrap pin-grid">
-    <div class="pin-media">
-      <div class="pin-sticky">
-      <figure class="frame">
-        <div class="bar"><span class="dots"><i></i><i></i><i></i></span><span class="url">TextEdit &mdash; studio-mac</span><span class="live">live</span></div>
-        <video src="/assets/hero.mp4" poster="/assets/hero.jpg" muted loop playsinline preload="none"
-               aria-label="A phone opens the Mac's TextEdit window and types into it — the words land in the real app on the Mac — then the phone mirrors the whole desktop"></video>
-      </figure>
-      <figcaption><b>Real capture, unedited.</b> Native capture, streamed peer-to-peer.</figcaption>
+<section class="story s" id="story" aria-label="What reminal does, one feature at a time">
+  <div class="wrap story-grid">
+    <div class="story-stage" aria-hidden="true">
+      <div class="story-pin">
+        <div class="sx" id="sx">
+        <div class="sx-k" id="sxk">
+          <p class="sx-count"><b id="sxn">01</b> / 06</p>
+
+          <!-- 01 drive the apps -->
+          <div class="ly" data-ly="0">
+            <div class="sx-br d-br">
+              <div class="sx-bar"><span class="dots"><i></i><i></i><i></i></span><span class="sx-url">live.reminal.app/?s=7f3a2c9e</span><span class="sx-chip d-apps">Apps</span><span class="sx-chip d-host">Host</span></div>
+            </div>
+            <div class="d-desk">
+              <div class="d-menubar"><b></b><i></i><i></i><i></i><span>Tue 14:22</span></div>
+              <div class="d-dock"><i></i><i></i><i></i><i></i><i></i><i></i></div>
+            </div>
+            <div class="sx-win d-w1">
+              <div class="sx-bar"><span class="dots"><i></i><i></i><i></i></span><span class="sx-url">TextEdit &mdash; studio-mac</span></div>
+              <div class="d-doc"><p><span class="d-type"></span><i class="d-caret"></i></p><s></s><s></s><s class="h"></s></div>
+            </div>
+            <div class="sx-win d-w2">
+              <div class="sx-bar"><span class="dots"><i></i><i></i><i></i></span><span class="sx-url">Figma &mdash; studio-mac</span></div>
+              <div class="d-canvas"><i class="a"></i><i class="b"></i><i class="c"></i><span class="d-sel"></span></div>
+              <span class="d-own">own window</span>
+            </div>
+            <div class="d-menu"><p>Launch on studio-mac</p><span>Safari</span><span>Xcode</span><span class="f">Figma</span><span>Notes</span></div>
+            <div class="sx-phone d-ph"><div class="sx-screen"><p class="d-pad">trackpad</p><i class="d-fing"></i></div></div>
+            <svg class="sx-cur d-cur" viewBox="0 0 20 20" width="20" height="20"><path d="M3 2l13 7.5-6 1.4L7 17z" fill="#fff" stroke="#000" stroke-width="1.2" stroke-linejoin="round"/></svg>
+            <i class="sx-ring d-ring"></i>
+          </div>
+
+          <!-- 02 sixty frames -->
+          <div class="ly" data-ly="1">
+            <div class="sx-win f-win">
+              <div class="sx-bar"><span class="dots"><i></i><i></i><i></i></span><span class="sx-url">Final Cut &mdash; mac-studio</span></div>
+              <div class="f-film"><div class="f-pan"></div><div class="f-scrub"><i class="f-head"></i></div></div>
+            </div>
+            <svg class="sx-cur f-cur" viewBox="0 0 20 20" width="20" height="20"><path d="M3 2l13 7.5-6 1.4L7 17z" fill="#fff" stroke="#000" stroke-width="1.2" stroke-linejoin="round"/></svg>
+            <div class="f-hud">
+              <div class="f-row"><b class="f-fps">60</b><span>fps</span></div>
+              <div class="f-stats"><span><b>17</b> ms screen to screen</span><span><b>2.6</b> Mbps</span></div>
+              <div class="f-graph"><i class="f-line"></i></div>
+              <p class="f-cap">frame time &middot; 16.7 ms</p>
+            </div>
+            <div class="f-pipe"><span>H.264</span><i></i><span>DataChannel</span><i></i><span>peer-to-peer</span></div>
+          </div>
+
+          <!-- 03 terminal + QR -->
+          <div class="ly" data-ly="2">
+            <div class="sx-win t-term">
+              <div class="sx-bar"><span class="dots"><i></i><i></i><i></i></span><span class="sx-url">zsh &mdash; studio-mac</span></div>
+              <div class="t-out">
+                <p class="t-l"><span class="g">~</span> reminal</p>
+                <p class="t-l">Session: <b>7f3a2c9e</b></p>
+                <p class="t-l">PIN:     <b>418902</b></p>
+                <p class="t-l d">Scan to join from your phone:</p>
+                <div class="t-l t-qr"><img src="/qr.svg" alt="" width="96" height="96"></div>
+              </div>
+            </div>
+            <div class="sx-phone t-ph">
+              <div class="sx-screen">
+                <div class="t-cam"><img src="/qr.svg" alt="" width="78" height="78"><i class="t-sweep"></i><em class="t-frame"></em></div>
+                <div class="t-shell">
+                  <p><span class="g">harshal@studio-mac</span> ~ %</p>
+                  <p>git status</p>
+                  <p class="d">On branch main</p>
+                  <p class="d">nothing to commit</p>
+                  <p><span class="g">~</span> <i class="t-caret"></i></p>
+                  <div class="sx-keys"><span>esc</span><span>ctrl</span><span>alt</span><span>tab</span><span>&uarr;</span><span>&darr;</span></div>
+                </div>
+                <p class="t-back">reconnected &middot; painted instantly</p>
+              </div>
+            </div>
+          </div>
+
+          <!-- 04 session dock -->
+          <div class="ly" data-ly="3">
+            <div class="sx-phone k-ph">
+              <div class="sx-screen">
+                <p class="k-title"><span class="k-ta">claude &mdash; studio-mac</span><span class="k-tb">agent-7 &mdash; aws-eu-1</span></p>
+                <div class="k-a"><p><span class="g">&#9679;</span> Reading relay.ts</p><p class="d">&nbsp; 3 files changed</p><p><span class="g">&#9679;</span> Running tests&hellip;</p></div>
+                <div class="k-b"><p class="d">pytest -x tests/</p><p><span class="r">FAILED</span> test_proxy</p><p class="d">retrying in 30s&hellip;</p></div>
+                <div class="k-sheet">
+                  <p class="k-h">Live sessions</p>
+                  <span class="k-c"><b>studio-mac</b> claude</span>
+                  <span class="k-c k-hit"><b>aws-eu-1</b> agent-7</span>
+                  <span class="k-c"><b>mini-01</b> backup</span>
+                  <span class="k-c k-r"><b>hg-ubuntu</b> zsh &middot; recent</span>
+                </div>
+                <div class="sx-keys k-keys"><span>esc</span><span>ctrl</span><span class="k-handle">&equiv;</span><span>tab</span><span>&uarr;</span></div>
+                <i class="k-fing"></i>
+              </div>
+            </div>
+            <div class="k-tags"><span>no IDs</span><span>no PINs</span><span>no typing</span></div>
+          </div>
+
+          <!-- 05 fleet -->
+          <div class="ly" data-ly="4">
+            <svg class="m-lines" viewBox="0 0 560 440" width="560" height="440">
+              <path class="m-own" d="M280 392 C280 330 150 300 140 190"/>
+              <path class="m-own" d="M280 392 C280 330 410 300 420 190"/>
+              <path class="m-own" d="M280 392 L280 330"/>
+              <path class="m-ag" d="M84 40 C 60 70 70 90 90 104"/>
+              <path class="m-ag" d="M84 40 C 200 10 380 30 400 104"/>
+            </svg>
+            <div class="m-card m1"><p class="m-h"><b>studio-mac</b><span>laptop</span></p>
+              <p class="m-s"><i class="on"></i>claude<em>2 watching</em></p>
+              <p class="m-s"><i></i>zsh<em>idle 4m</em></p></div>
+            <div class="m-card m2"><p class="m-h"><b>aws-eu-1</b><span>cloud</span></p>
+              <p class="m-s"><i class="on"></i>agent-7<em>pytest</em></p>
+              <p class="m-s m-kill"><i></i>deploy<em>idle 12m</em></p></div>
+            <div class="m-card m3"><p class="m-h"><b>mini-01</b><span>desktop</span></p>
+              <p class="m-s"><i class="on"></i>backup<em>rsync</em></p>
+              <p class="m-s m-new"><i class="on"></i>zsh<em>just now</em></p></div>
+            <span class="m-owner">this phone &middot; owner &middot; no PIN</span>
+            <span class="m-agent">claude-code &middot; MCP</span>
+          </div>
+
+          <!-- 06 agent bus -->
+          <div class="ly" data-ly="5">
+            <svg class="b-lines" viewBox="0 0 560 440" width="560" height="440">
+              <path id="be1" d="M190 110 C 260 110 290 110 340 110"/>
+              <path id="be2" d="M110 180 C 110 260 170 300 210 310"/>
+            </svg>
+            <i class="b-pulse b-p1"></i><i class="b-pulse b-p2"></i>
+            <div class="sx-win b-n b1">
+              <div class="sx-bar"><span class="dots"><i></i><i></i><i></i></span><span class="sx-url">claude-code &mdash; studio-mac</span></div>
+              <div class="b-out"><p class="b-call"></p></div>
+            </div>
+            <div class="sx-win b-n b2">
+              <div class="sx-bar"><span class="dots"><i></i><i></i><i></i></span><span class="sx-url">agent-7 &mdash; aws-eu-1</span></div>
+              <div class="b-out"><p class="d">pytest tests/</p><p class="b-fail"><span class="r">2 failed</span>, 118 passed</p><p class="b-err">AssertionError: expected 200, got 502</p><p class="b-typed"><span class="g">&rsaquo;</span> <span class="b-type"></span></p></div>
+              <span class="b-badge"><i class="nm-dot attention"></i>needs you</span>
+            </div>
+            <div class="sx-win b-n b3">
+              <div class="sx-bar"><span class="dots"><i></i><i></i><i></i></span><span class="sx-url">backup &mdash; mini-01</span></div>
+              <div class="b-out"><p class="d">rsync -a ~/ /Volumes/b</p><p class="d">no match</p></div>
+            </div>
+          </div>
+        </div>
+      </div>
       </div>
     </div>
-
-    <div class="pin-copy">
+    <div class="story-copy">
+    <article class="ch" id="windows" data-ch="0">
+      <div class="ch-in">
       <p class="eyebrow reveal">Windows &amp; desktops</p>
       <h2 class="reveal">Reach in and drive the apps.</h2>
       <p class="body reveal">
@@ -687,27 +999,22 @@ form.signup button:disabled{opacity:.5;cursor:default}
         <li class="beat"><b>On a phone, the screen becomes a trackpad.</b> Your Mac, fully hands-on, from your pocket.</li>
         <li class="beat"><b>Or pop it out.</b> The window leaves the tab and sits on your desktop like its own app window &mdash; an editor from your MacBook beside a terminal on a cloud box.</li>
       </ol>
-    </div>
-  </div>
-</section>
-
-<section class="wrap s" id="fps">
-  <p class="eyebrow reveal">60 fps</p>
+      </div>
+    </article>
+    <article class="ch" id="fps" data-ch="1">
+      <div class="ch-in">
+      <p class="eyebrow reveal">60 fps</p>
   <h2 class="reveal">Nothing about it says <em>stream</em>.</h2>
   <p class="body reveal">
     Drag a window, scrub a video inside it, watch a build scroll past — it stays fluid the whole way, on
     hotel Wi-Fi or a phone on cellular. <strong>Sixty frames a second, 17 ms from its screen to yours.</strong>
     H.264 down the session's own DataChannel, peer-to-peer, about 2.6 Mbps.
   </p>
-  <figure class="frame reveal">
-    <div class="bar"><span class="dots"><i></i><i></i><i></i></span><span class="url">mac-studio — window mirror</span><span class="live">60 fps</span></div>
-    <video src="/assets/video.mp4" poster="/assets/video.jpg" muted loop playsinline preload="none"
-           aria-label="A window from a Mac Studio streaming live into a browser at 60 frames per second"></video>
-  </figure>
-</section>
-
-<section class="wrap s" id="terminal">
-  <p class="eyebrow reveal">Terminal</p>
+      </div>
+    </article>
+    <article class="ch" id="terminal" data-ch="2">
+      <div class="ch-in">
+      <p class="eyebrow reveal">Terminal</p>
   <h2 class="reveal">And a full terminal, too. Scan a QR and you're in.</h2>
   <p class="body reveal">
     <code>reminal</code> prints a session ID, a PIN and a QR code. Scan it and your phone is a real terminal
@@ -715,16 +1022,11 @@ form.signup button:disabled{opacity:.5;cursor:default}
     Close the laptop, switch device, reconnect from another city: the shell is where you left it, and the
     screen paints instantly.
   </p>
-  <figure class="frame reveal">
-    <div class="bar"><span class="dots"><i></i><i></i><i></i></span><span class="url">zsh — 2 viewers attached</span><span class="live">live</span></div>
-    <video src="/assets/setup.mp4" poster="/assets/setup.jpg" muted loop playsinline preload="none"
-           aria-label="A terminal runs reminal and prints a QR code; a phone scans it and joins the same session"></video>
-  </figure>
-  <figcaption class="reveal">The fastest SSH you'll ever configure — because there's nothing to configure.</figcaption>
-</section>
-
-<section class="wrap s" id="dock">
-  <p class="eyebrow reveal">Session dock</p>
+      </div>
+    </article>
+    <article class="ch" id="dock" data-ch="3">
+      <div class="ch-in">
+      <p class="eyebrow reveal">Session dock</p>
   <h2 class="reveal">Every session, one swipe away.</h2>
   <p class="body reveal">
     You're on one machine and need another. Drag the keybar's <strong>≡ handle up</strong> and your live
@@ -732,16 +1034,11 @@ form.signup button:disabled{opacity:.5;cursor:default}
     release, and you're connected: <strong>no IDs, no PINs, no typing.</strong> The shell is exactly where
     you left it.
   </p>
-  <figure class="frame reveal" style="max-width:700px">
-    <div class="bar"><span class="dots"><i></i><i></i><i></i></span><span class="url">claude — studio-mac → agent-7 — aws-eu-1</span><span class="live">live</span></div>
-    <video src="/assets/switch.mp4" poster="/assets/switch.jpg" muted loop playsinline preload="none"
-           aria-label="A thumb drags the keybar handle up on a phone; a dock of live sessions slides out, the thumb slides onto one and releases, and the terminal switches to that machine"></video>
-  </figure>
-  <figcaption class="reveal">One gesture from your Claude session on the MacBook to the agent on the cloud box.</figcaption>
-</section>
-
-<section class="wrap s" id="fleet">
-  <p class="eyebrow reveal">Your fleet</p>
+      </div>
+    </article>
+    <article class="ch" id="fleet" data-ch="4">
+      <div class="ch-in">
+      <p class="eyebrow reveal">Your fleet</p>
   <h2 class="reveal">Own your machines. Watch them all.</h2>
   <p class="body reveal">
     Your machines don't stop when you walk away any more. Builds, patches and test suites run on
@@ -760,15 +1057,11 @@ form.signup button:disabled{opacity:.5;cursor:default}
     another, with you watching both in the same browser. Or skip the PIN entirely and give it the
     <a href="#bus">MCP server</a> instead.
   </p>
-  <figure class="frame reveal">
-    <div class="bar"><span class="dots"><i></i><i></i><i></i></span><span class="url">reminal machines — 3 online</span><span class="live">live</span></div>
-    <video src="/assets/own.mp4" poster="/assets/own.jpg" muted loop playsinline preload="none"
-           aria-label="A live view of a fleet — three machines online, each showing its running sessions with live indicators and viewer counts"></video>
-  </figure>
-</section>
-
-<section class="wrap s" id="bus">
-  <p class="eyebrow reveal">Agent bus</p>
+      </div>
+    </article>
+    <article class="ch" id="bus" data-ch="5">
+      <div class="ch-in">
+      <p class="eyebrow reveal">Agent bus</p>
   <h2 class="reveal">Your agents can see each other.</h2>
   <p class="body reveal">
     Claude Code on the laptop, Codex on the build box, a test suite on the Mini. Same problem, no
@@ -819,6 +1112,10 @@ form.signup button:disabled{opacity:.5;cursor:default}
   <p class="sub-cta reveal" style="margin-top:26px">
     <a href="/agents/">How the agent bus works, tool by tool →</a>
   </p>
+      </div>
+    </article>
+    </div>
+  </div>
 </section>
 
 <section class="wrap s" id="security">
@@ -989,7 +1286,7 @@ const FEATURES = {
   osDetect:     true,   // install box: preselect the visitor's actual OS
   dragWindow:   true,   // hero: a pop-out window card you can throw around
   scrollFX:     true,   // parallax, reading progress, counters — one rAF loop
-  pinnedSection:true,   // "drive the apps": media pins while the beats scroll
+  story:        true,   // six features, one pinned scene the copy scrolls past
   lidStage:     true,   // 3D set piece: the lid shuts, the windows fly to a browser
 };
 
@@ -1104,7 +1401,7 @@ if (FEATURES.scrollFX && !reduced) {
   const heroIn = [...document.querySelectorAll(
     "header h1, header .lede, header .cta, header .stats, header .chips")];
   const frames = [...document.querySelectorAll(".frame")].filter(f => !f.closest(".pin-media"));
-  const beats  = [...document.querySelectorAll(".beat")];
+  const beats  = [...document.querySelectorAll(".beat")].filter(b => !b.closest(".story"));
 
   const clamp = (v, a, b) => v < a ? a : v > b ? b : v;
   let queued = false;
@@ -1462,6 +1759,245 @@ if (FEATURES.edgeLatency) {
     };
     requestAnimationFrame(tick);
   })();
+}
+
+// ── [FEATURES.story] six features, one pinned scene ────────────────────
+// The copy is ordinary page text in six chapters; the scene beside it (on top
+// of it on a phone) is drawn from how far each chapter has been read. Every
+// value below is a pure function of that, so scrolling back rewinds exactly.
+// Reduced motion shows each chapter's finished frame instead of the build-up.
+if (FEATURES.story) {
+  const story = document.getElementById("story");
+  const chs = [...story.querySelectorAll(".ch")];
+  const lys = [...story.querySelectorAll(".ly")];
+  const box = document.getElementById("sx");
+  const kEl = document.getElementById("sxk");
+  const num = document.getElementById("sxn");
+  const $ = (s) => story.querySelector(s);
+  const $$ = (s) => [...story.querySelectorAll(s)];
+  story.classList.add("js");
+
+  const clamp = (v, a = 0, b = 1) => v < a ? a : v > b ? b : v;
+  const mix = (a, b, t) => a + (b - a) * t;
+  const span = (t, a, b) => clamp((t - a) / (b - a));
+  const ease = (t) => t < .5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;
+  const seg = (t, a, b) => ease(span(t, a, b));
+  const css = (el, o) => { if (el) for (const k in o) el.style[k] = o[k]; };
+  // Walk a list of [t, x, y] keyframes.
+  const path = (t, pts) => {
+    if (t <= pts[0][0]) return pts[0].slice(1);
+    for (let i = 1; i < pts.length; i++) {
+      if (t <= pts[i][0]) {
+        const u = ease((t - pts[i - 1][0]) / (pts[i][0] - pts[i - 1][0]));
+        return [mix(pts[i - 1][1], pts[i][1], u), mix(pts[i - 1][2], pts[i][2], u)];
+      }
+    }
+    return pts[pts.length - 1].slice(1);
+  };
+  const typed = new WeakMap();
+  const type = (el, text, u) => {
+    const n = Math.round(text.length * clamp(u));
+    if (typed.get(el) !== n) { el.textContent = text.slice(0, n); typed.set(el, n); }
+  };
+  const ring = (el, x, y, u) => css(el, { transform: `translate(${x}px,${y}px) scale(${mix(.4, 1.6, u)})`, opacity: String(u > 0 && u < 1 ? 1 - u : 0) });
+
+  // frame-time graph: steady, with the small wobble a real one has
+  const graph = $(".f-graph");
+  const bars = [];
+  for (let i = 0; i < 44; i++) {
+    const b = document.createElement("b");
+    b.style.height = (38 + Math.sin(i * 1.7) * 4 + Math.cos(i * .6) * 3) + "%";
+    graph.appendChild(b); bars.push(b);
+  }
+
+  const beats = $$("#windows .beat");
+  const trace = $$("#bus .trace li");
+
+  // ── 01 drive the apps ────────────────────────────────
+  const D = {
+    cur: $(".d-cur"), ring: $(".d-ring"), type: $(".d-type"), w1: $(".d-w1"), w2: $(".d-w2"),
+    menu: $(".d-menu"), items: $$(".d-menu span"), apps: $(".d-apps"), host: $(".d-host"),
+    desk: $(".d-desk"), ph: $(".d-ph"), fing: $(".d-fing"), sel: $(".d-sel"), own: $(".d-own"),
+  };
+  function drive(t) {
+    beats.forEach((b, i) => b.classList.toggle("lit", i === Math.min(4, Math.floor(t * 5))));
+    // cursor route: into the doc, up to Apps, down the menu, up to Host,
+    // then it follows the finger on the phone
+    let [cx, cy] = path(t, [[0, 520, 420], [.07, 150, 140], [.19, 200, 140], [.24, 386, 29], [.29, 400, 112], [.36, 400, 112],
+      [.42, 436, 29], [.5, 436, 29], [.58, 300, 200]]);
+    const pad = span(t, .66, .8);
+    if (t > .6) { const a = pad * Math.PI * 3; cx = 300 + Math.cos(a) * 60 * pad; cy = 200 + Math.sin(a) * 40 * pad; }
+    if (t > .8) [cx, cy] = [mix(cx, 330, seg(t, .8, .86)), mix(cy, 180, seg(t, .8, .86))];
+    css(D.cur, { transform: `translate(${cx}px,${cy}px)`, opacity: String(t > .9 ? 1 - span(t, .9, .96) : 1) });
+    // clicks
+    const clicks = [[.08, 150, 140], [.25, 386, 29], [.33, 400, 112], [.44, 436, 29]];
+    let rng = 0, rx = 0, ry = 0;
+    for (const [c, x, y] of clicks) if (t >= c && t < c + .05) { rng = (t - c) / .05; rx = x + 2; ry = y + 2; }
+    ring(D.ring, rx, ry, rng);
+    // beat 1: type into TextEdit
+    type(D.type, "Ship the relay fix on Friday.", span(t, .09, .18));
+    // beat 2: Apps menu → Figma launches
+    const menu = span(t, .25, .27) * (1 - span(t, .34, .36));
+    css(D.menu, { opacity: String(menu), transform: `scaleY(${mix(.9, 1, menu)})` });
+    D.apps.classList.toggle("hit", t > .25 && t < .36);
+    D.items.forEach(s => s.classList.toggle("hit", s.classList.contains("f") && t > .29 && t < .36));
+    const w2 = seg(t, .34, .4);
+    // beat 3: Host → full desktop; the windows settle into it
+    D.host.classList.toggle("hit", t > .44 && t < .5);
+    const desk = seg(t, .45, .55);
+    css(D.desk, { opacity: String(desk) });
+    const sk = mix(1, .82, desk);
+    css(D.w1, { transform: `translate(${mix(0, -8, desk)}px,${mix(0, 6, desk)}px) scale(${sk})` });
+    // beat 5: pop out — the Figma window leaves the tab
+    const pop = seg(t, .82, .95);
+    css(D.w2, {
+      opacity: String(w2),
+      transform: `translate(${mix(0, 60, pop) + mix(0, -20, desk) * (1 - pop)}px,${mix(0, 150, pop)}px) scale(${mix(.92, 1, w2) * mix(1, .88, desk * (1 - pop)) * mix(1, 1.06, pop)})`,
+      boxShadow: `0 ${mix(18, 40, pop)}px ${mix(40, 70, pop)}px -18px rgba(0,0,0,${mix(.9, 1, pop)})`,
+    });
+    css(D.own, { opacity: String(span(t, .9, .95)) });
+    css(D.sel, { opacity: String(t > .7 && t < .8 ? 1 : 0) });
+    // beat 4: phone as a trackpad
+    const ph = seg(t, .6, .66) * (1 - seg(t, .8, .86));
+    css(D.ph, { opacity: String(ph), transform: `translate(${mix(60, 0, ph)}px,0)` });
+    if (t > .6) { const a = pad * Math.PI * 3; css(D.fing, { transform: `translate(${59 + Math.cos(a) * 30 * pad}px,${124 + Math.sin(a) * 22 * pad}px)`, opacity: String(pad > 0 ? 1 : 0) }); }
+  }
+
+  // ── 02 sixty frames ──────────────────────────────────
+  const F = { win: $(".f-win"), cur: $(".f-cur"), pan: $(".f-pan"), head: $(".f-head"), pipe: $(".f-pipe") };
+  function fps(t) {
+    // the window is dragged on a long, smooth arc
+    const u = seg(t, .05, .75);
+    const x = mix(10, 40, u) + Math.sin(u * Math.PI) * 30, y = mix(40, 250, u) - Math.sin(u * Math.PI * 2) * 30;
+    css(F.win, { transform: `translate(${x}px,${y}px)` });
+    css(F.cur, { transform: `translate(${x + 120}px,${y + 8}px)` });
+    css(F.pan, { transform: `translateX(${-u * 200}px)` });
+    css(F.head, { left: (u * 100) + "%" });
+    const n = Math.round(bars.length * span(t, .1, .8));
+    bars.forEach((b, i) => { b.style.opacity = i < n ? "1" : "0"; });
+    css(F.pipe, { opacity: String(span(t, .75, .85)), transform: `translateY(${mix(8, 0, span(t, .75, .85))}px)` });
+  }
+
+  // ── 03 terminal + QR ─────────────────────────────────
+  const T = { lines: $$(".t-l"), ph: $(".t-ph"), cam: $(".t-cam"), sweep: $(".t-sweep"), shell: $(".t-shell"), back: $(".t-back"), term: $(".t-term") };
+  function term(t) {
+    T.lines.forEach((l, i) => { l.style.opacity = String(span(t, .04 + i * .06, .08 + i * .06)); });
+    const ph = seg(t, .36, .46);
+    css(T.ph, { opacity: String(ph), transform: `translate(${mix(70, 0, ph)}px,${mix(20, 0, ph)}px) rotate(${mix(6, 0, ph)}deg)` });
+    const scan = span(t, .46, .6);
+    css(T.sweep, { top: (22 + 56 * ((scan * 2) % 1)) + "%", opacity: String(scan > 0 && scan < 1 ? 1 : 0) });
+    const on = seg(t, .6, .66);
+    css(T.cam, { opacity: String(1 - on) });
+    css(T.shell, { opacity: String(on) });
+    // close the laptop, come back from another city
+    const away = seg(t, .76, .84);
+    css(T.term, { opacity: String(mix(1, .25, away)), filter: `grayscale(${away})` });
+    css(T.back, { opacity: String(span(t, .86, .9)) });
+  }
+
+  // ── 04 session dock ──────────────────────────────────
+  const K = { fing: $(".k-fing"), sheet: $(".k-sheet"), hit: $(".k-hit"), a: $(".k-a"), b: $(".k-b"), ta: $(".k-ta"), tb: $(".k-tb"), tags: $$(".k-tags span") };
+  function dock(t) {
+    // finger lands on ≡, drags up, slides onto aws-eu-1, lets go
+    const [fx, fy] = path(t, [[.08, 99, 396], [.14, 99, 396], [.4, 99, 250], [.56, 99, 312], [.66, 99, 312]]);
+    css(K.fing, { transform: `translate(${fx}px,${fy}px)`, opacity: String(span(t, .06, .1) * (1 - span(t, .66, .7))) });
+    const up = seg(t, .14, .4) * (1 - seg(t, .66, .74));
+    css(K.sheet, { transform: `translateY(${mix(120, 0, up)}%)` });
+    K.hit.classList.toggle("hit", t > .5 && t < .74);
+    const sw = seg(t, .68, .76);
+    css(K.a, { opacity: String(1 - sw) }); css(K.ta, { opacity: String(1 - sw) });
+    css(K.b, { opacity: String(sw) }); css(K.tb, { opacity: String(sw) });
+    K.tags.forEach((s, i) => css(s, { opacity: String(span(t, .78 + i * .05, .82 + i * .05)), transform: `translateX(${mix(10, 0, span(t, .78 + i * .05, .82 + i * .05))}px)` }));
+  }
+
+  // ── 05 fleet ─────────────────────────────────────────
+  const M = { cards: $$(".m-card"), kill: $(".m-kill"), nw: $(".m-new"), own: $$(".m-own"), ag: $$(".m-ag"), owner: $(".m-owner"), agent: $(".m-agent") };
+  M.own.concat(M.ag).forEach(p => { const L = p.getTotalLength(); p.style.strokeDasharray = L; p.dataset.l = L; });
+  const draw = (p, u) => { p.style.strokeDashoffset = String(+p.dataset.l * (1 - u)); p.style.opacity = u > 0 ? "1" : "0"; };
+  function fleet(t) {
+    M.cards.forEach((c, i) => { const u = seg(t, .04 + i * .1, .14 + i * .1); css(c, { opacity: String(u), transform: `translateY(${mix(14, 0, u)}px)` }); });
+    const nw = seg(t, .42, .5);
+    css(M.nw, { maxHeight: (nw * 30) + "px", padding: `${nw * 5}px 0`, opacity: String(nw) });
+    const k = seg(t, .46, .54);
+    css(M.kill, { opacity: String(1 - k * .7), textDecoration: k > .5 ? "line-through" : "none" });
+    const o = seg(t, .58, .72);
+    M.own.forEach(p => draw(p, o)); css(M.owner, { opacity: String(span(t, .56, .6)) });
+    const a = seg(t, .78, .92);
+    M.ag.forEach(p => draw(p, a)); css(M.agent, { opacity: String(span(t, .76, .8)) });
+  }
+
+  // ── 06 agent bus ─────────────────────────────────────
+  const B = { call: $(".b-call"), p1: $(".b-p1"), p2: $(".b-p2"), e1: document.getElementById("be1"), e2: document.getElementById("be2"),
+    b2: $(".b2"), b3: $(".b3"), fail: $(".b-fail"), err: $(".b-err"), typed: $(".b-typed"), type: $(".b-type"), badge: $(".b-badge") };
+  const CALLS = [
+    ["list_sessions", "3 machines · 7 live"],
+    ["search_sessions", "\"FAIL|Traceback\""],
+    ["read_transcript", "agent-7"],
+    ["send_keys", "agent-7"],
+  ];
+  let lastCall = -1;
+  const pulse = (el, p, u) => {
+    if (u <= 0 || u >= 1) { el.style.opacity = "0"; return; }
+    const pt = p.getPointAtLength(p.getTotalLength() * u);
+    css(el, { transform: `translate(${pt.x}px,${pt.y}px)`, opacity: "1" });
+  };
+  function bus(t) {
+    const step = t < .04 ? -1 : Math.min(3, Math.floor((t - .04) / .2));
+    trace.forEach((li, i) => li.classList.toggle("on", i <= step));
+    if (step !== lastCall) {
+      lastCall = step;
+      B.call.innerHTML = step < 0 ? "" : `<b>${CALLS[step][0]}</b><span>${CALLS[step][1]}</span>`;
+    }
+    const local = step < 0 ? 0 : ((t - .04) / .2) - step;
+    // list: out to every machine · search: both · read and type: agent-7 only
+    pulse(B.p1, B.e1, step >= 0 ? local : 0);
+    pulse(B.p2, B.e2, step <= 1 && step >= 0 ? local : 0);
+    B.b2.classList.toggle("hot", step >= 1);
+    css(B.fail, { opacity: String(step >= 1 && local > .6 || step > 1 ? 1 : 0) });
+    css(B.err, { opacity: String(step >= 2 && local > .6 || step > 2 ? 1 : 0) });
+    css(B.typed, { opacity: String(step >= 3 ? 1 : 0) });
+    type(B.type, "the 502 is the proxy in front of you, not your handler", step >= 3 ? span(local, .4, 1) : 0);
+    const hand = seg(t, .88, .94);
+    css(B.badge, { opacity: String(hand), transform: `scale(${mix(.6, 1, hand)})` });
+  }
+
+  const DRAW = [drive, fps, term, dock, fleet, bus];
+  const narrow = () => innerWidth <= 900;
+  let queued = false;
+
+  function frame() {
+    queued = false;
+    const vh = innerHeight;
+    // the line the reader is on: mid-screen beside the scene, or a little
+    // way into the strip of copy left visible under it on a phone
+    const line = narrow() ? box.getBoundingClientRect().bottom + (vh - box.getBoundingClientRect().bottom) * .35 : vh * .55;
+    const ts = chs.map((ch) => {
+      const r = ch.getBoundingClientRect();
+      return clamp((line - r.top) / r.height);
+    });
+    // Chapter i hands over to i+1 across its last stretch, so the two
+    // overlap instead of leaving an empty frame between them. Each chapter's
+    // own animation finishes before its hand-over starts.
+    const out = ts.map((t, i) => i < chs.length - 1 ? span(t, .86, 1) : 0);
+    let c = 0;
+    lys.forEach((ly, i) => {
+      const o = (i === 0 ? 1 : out[i - 1]) * (1 - out[i]);
+      ly.style.opacity = String(o);
+      ly.classList.toggle("on", o > 0);
+      if (o > .5) c = i;
+      if (o > 0) DRAW[i](reduced ? 1 : span(ts[i], .04, .84));
+    });
+    num.textContent = "0" + (c + 1);
+  }
+  function fit() {
+    const r = box.getBoundingClientRect();
+    kEl.style.setProperty("--sxk", String(Math.min((r.width - 32) / 560, (r.height - 56) / 440)));
+    frame();
+  }
+  const onScroll = () => { if (!queued) { queued = true; requestAnimationFrame(frame); } };
+  addEventListener("scroll", onScroll, { passive: true });
+  addEventListener("resize", fit);
+  fit();
 }
 
 // ── [FEATURES.scrollScrub] scroll closes the lid ───────────────────────
