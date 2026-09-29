@@ -8,3 +8,5 @@ package client
 // shellCwdWindows reads a process's working directory out of its PEB — Win32
 // only; the Unix paths live in shellCwd's switch directly.
 func shellCwdWindows(pid int) string { return "" }
+
+func processCwdWindows(int) string { return "" }

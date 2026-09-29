@@ -10,7 +10,7 @@
 fails=0
 ok()   { echo "ok   $*"; }
 fail() { echo "FAIL $*"; fails=$((fails+1)); }
-bxl 'cursor-agent status 2>&1' | grep -q "Logged in" || { echo "skip: no Cursor login in the box"; exit 0; }
+cursor_logged_in || { echo "skip: no Cursor login in the box"; exit 0; }
 new() { newsess $1 $H/cs; }
 A=$(new csA); B=$(new csB)
 send $A "cursor-agent -f"; sleep 10
@@ -24,17 +24,20 @@ screen $A | grep -q "9009" && ok "csA ($A) answered 9009" || fail "csA did not a
 screen $B | grep -q "9101" && ok "csB ($B) answered 9101" || fail "csB did not answer"
 sleep 17
 reboot_box || exit 1; ok "rebooted"
-for i in $(seq 1 90); do l=$(bx 'reminal list 2>/dev/null'); echo "$l" | grep -q "$B" && echo "$l" | grep -q "$A" && break; sleep 2; done
+for i in $(seq 1 90); do l=$(bx 'reminal list 2>/dev/null'); printf '%s\n' "$l" | grep -q "$B" && printf '%s\n' "$l" | grep -q "$A" && break; sleep 2; done
 sleep 25
 if [ "$T" = win ]; then
     n=0; for s in $A $B; do typed $s "cursor-agent -f --resume" && n=$((n+1)); done
 else
     n=$(args_in $H/cs index.js | grep -c "index.js -f --resume")
 fi
-[ "$n" = 2 ] && ok "both came back as: cursor-agent -f --resume (its chat list, -f kept)" || fail "expected 2 × 'index.js -f --resume', found $n"
+[ "$n" = 2 ] && ok "both came back as: cursor-agent -f --resume (its chat list, -f kept)" || {
+    fail "expected 2 × 'index.js -f --resume', found $n"
+    for s in $A $B; do echo "  $s typed: $(since_restore $s | grep -v '^\s*$' | sed -n 2,3p | tr '\n' ' ' | cut -c1-200)"; done
+}
 for s in $A $B; do
     f=$(since_restore $s | tr '\n' ' ' | tr -s ' ')
-    echo "$f" | grep -q "pick this session's" && ok "$s: told to pick" || fail "$s: no pick note"
-    echo "$f" | grep -qE "9009|9101" && fail "$s: a conversation was resumed by guess" || ok "$s: nothing resumed by guess"
+    printf '%s\n' "$f" | grep -q "pick this session's" && ok "$s: told to pick" || fail "$s: no pick note"
+    printf '%s\n' "$f" | grep -qE "9009|9101" && fail "$s: a conversation was resumed by guess" || ok "$s: nothing resumed by guess"
 done
 [ $fails -eq 0 ] && echo "all passed" || { echo "$fails failed"; exit 1; }

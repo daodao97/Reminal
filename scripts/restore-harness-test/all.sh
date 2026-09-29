@@ -17,8 +17,8 @@ rc=0
 part() {
     echo "===== $1"; shift
     out=$("$@" 2>&1)
-    echo "$out" | grep -E "^(ok|FAIL|skip|all|[0-9]+ failed)"
-    echo "$out" | grep -q "^all passed" || rc=1
+    printf '%s\n' "$out" | grep -E "^(ok|FAIL|skip|all|[0-9]+ failed)"
+    printf '%s\n' "$out" | grep -q "^all passed" || rc=1
 }
 fresh() {
     if [ "$T" = docker ]; then "$DIR/run.sh" up >/dev/null; return; fi

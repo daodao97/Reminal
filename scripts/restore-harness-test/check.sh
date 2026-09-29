@@ -17,8 +17,8 @@ setid() { eval "ID_$1=$2"; }
 id()    { eval "echo \$ID_$1"; }
 
 HARNESSES=${HARNESSES:-"claude:claude qwen:qwen gemini:gemini codex:codex opencode:opencode pi:pi cursor:cursor-agent"}
-for s in ${SKIP_AGENTS:-}; do skip "$s: cannot run on this box"; HARNESSES=$(echo "$HARNESSES" | tr ' ' '\n' | grep -v "^$s:" | tr '\n' ' '); done
-CURSOR=0; bxl 'cursor-agent status 2>&1' | grep -q "Logged in" && CURSOR=1
+for s in ${SKIP_AGENTS:-}; do skip "$s: cannot run on this box"; HARNESSES=$(printf '%s\n' "$HARNESSES" | tr ' ' '\n' | grep -v "^$s:" | tr '\n' ' '); done
+CURSOR=0; cursor_logged_in && CURSOR=1
 for h in $HARNESSES; do
     name=${h%%:*} cmd=${h#*:}
     setid $name "$(newsess $name $H/p-$name)"
@@ -51,6 +51,7 @@ for h in $HARNESSES; do
     [ "$fg" = "$want" ] && ok "$n: saved as running $fg" || fail "$n: saved as running '$fg'"
 done
 for n in claude qwen gemini; do
+    echo " $HARNESSES " | grep -q " $n:" || continue
     c=$(record $(id $n) conv); eval "CONV_$n=$c"; [ -n "$c" ] && ok "$n: its hook reported conversation $c" || fail "$n: no conversation id"
 done
 
@@ -78,21 +79,21 @@ done
 sleep 20
 for h in $HARNESSES; do
     n=${h%%:*}; sid=$(id $n)
-    echo "$list" | grep -q "$sid" && ok "$n: back as $sid" || { fail "$n: $sid not back"; continue; }
+    printf '%s\n' "$list" | grep -q "$sid" && ok "$n: back as $sid" || { fail "$n: $sid not back"; continue; }
     want=$(resume_of $n)
     s=$(since_restore $sid)
     if [ $n = cursor ]; then
-        echo "$s" | grep -q "cursor-agent --continue" && ok "$n: typed cursor-agent --continue" || fail "$n: resume not typed"
+        printf '%s\n' "$s" | grep -q "cursor-agent --continue" && ok "$n: typed cursor-agent --continue" || fail "$n: resume not typed"
         [ $CURSOR = 1 ] || continue
-        echo "$s" | grep -q "4242" && ok "$n: shows the conversation from before the reboot" || fail "$n: earlier conversation not shown"
-        echo "$s" | grep -q "2222" && ok "$n: answers in it" || fail "$n: does not answer after restore"
+        printf '%s\n' "$s" | grep -q "4242" && ok "$n: shows the conversation from before the reboot" || fail "$n: earlier conversation not shown"
+        printf '%s\n' "$s" | grep -q "2222" && ok "$n: answers in it" || fail "$n: does not answer after restore"
         continue
     fi
     if [ -n "$want" ]; then
         came_back_as $sid "$want" && ok "$n: started again as: $want" || fail "$n: not started as '$want'"
     fi
-    echo "$s" | grep -q "remember the number 4242" && ok "$n: shows the conversation from before the reboot" || fail "$n: earlier conversation not shown"
-    echo "$s" | grep -q "noted: what number" && ok "$n: answers in it" || fail "$n: does not answer after restore"
+    printf '%s\n' "$s" | grep -q "remember the number 4242" && ok "$n: shows the conversation from before the reboot" || fail "$n: earlier conversation not shown"
+    printf '%s\n' "$s" | grep -q "noted: what number" && ok "$n: answers in it" || fail "$n: does not answer after restore"
 done
 
 [ $fails -eq 0 ] && echo "all passed" || { echo "$fails failed"; exit 1; }

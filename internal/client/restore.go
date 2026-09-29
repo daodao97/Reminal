@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strings"
 	"time"
 
@@ -39,6 +40,17 @@ const (
 	envRestore    = "REMINAL_RESTORE"
 )
 
+// processCwd is one process's own working directory.
+func processCwd(pid int) string {
+	if pid <= 0 {
+		return ""
+	}
+	if runtime.GOOS == "windows" {
+		return processCwdWindows(pid)
+	}
+	return shellCwd(pid)
+}
+
 // restoreBanner marks, in the scrollback, where the old session ends and
 // the restored one begins.
 const restoreBanner = "\r\n\x1b[2m── reminal restored this session after its machine restarted ──\x1b[0m\r\n"
@@ -56,10 +68,17 @@ func (a *Agent) saveRestore() {
 		ID: a.sessionID, PIN: a.pin, PinHash: a.pinHash, Token: a.token,
 		Name: name, Cwd: cwd, Headless: a.headless, SavedAt: time.Now(),
 	}
-	prog, args, atPrompt := restoreForeground(a.term)
+	prog, args, pid, atPrompt := restoreForeground(a.term)
 	if _, ok := resumers[prog]; ok {
 		r.Fg, r.FgArgs = prog, args
 		r.Conv = session.ReadConv(a.sessionID)
+		// Resumed where the agent itself runs: an agent keys its
+		// conversations by folder, and the session's own cwd is a guess —
+		// on Windows, from its youngest helper process (cursor-agent's
+		// worker sits in the home folder).
+		if c := processCwd(pid); c != "" {
+			r.Cwd = c
+		}
 	}
 	// Something else is in the foreground for a moment (a pager the agent
 	// opened, say): keep what was last known. Only the shell's own prompt

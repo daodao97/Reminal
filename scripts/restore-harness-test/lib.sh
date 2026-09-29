@@ -47,7 +47,7 @@ win)
     SLOWENTER=1
     # opencode's Windows ARM64 build cannot start its TUI ("bun:ffi dlopen()
     # is not available in this build") — upstream, nothing reminal can change.
-    SKIP_AGENTS="opencode"
+    SKIP_AGENTS="opencode ${EXTRA_SKIP:-}"
     reboot_box() {
         old=$(bx 'powershell -NoProfile -c "(Get-CimInstance Win32_OperatingSystem).LastBootUpTime.Ticks"' 2>/dev/null)
         prlctl exec "$VM" shutdown /r /t 0 >/dev/null 2>&1
@@ -82,7 +82,7 @@ fi
 # line may have lost the space it broke at, or kept it).
 typed() {
     s=$(since_restore "$1")
-    echo "$s" | tr -d '\n' | grep -qF -- "$2" || echo "$s" | tr '\n' ' ' | tr -s ' ' | grep -qF -- "$2"
+    printf '%s\n' "$s" | tr -d '\n' | grep -qF -- "$2" || printf '%s\n' "$s" | tr '\n' ' ' | tr -s ' ' | grep -qF -- "$2"
 }
 # came_back_as ID COMMAND — the restored session runs COMMAND: by its process
 # where command lines read like one (Linux, macOS); on Windows, where they
@@ -93,4 +93,10 @@ came_back_as() {
 }
 # args_in DIR PATTERN — command lines of processes whose cwd is DIR.
 args_in() { bx "rig-procs.sh '$1' '$2'"; }
+# cursor_logged_in — the box has a Cursor login. Asked through PowerShell on
+# Windows, where Git Bash cannot run cursor's .cmd/.ps1 launcher.
+cursor_logged_in() {
+    if [ "$T" = win ]; then bx 'powershell -NoProfile -c "cursor-agent status 2>&1"'; else bxl 'cursor-agent status 2>&1'; fi |
+        grep -v "Not logged" | grep -q "Logged in"
+}
 killall_sessions() { bx 'for id in $(reminal list 2>/dev/null | grep -oE "[A-Z0-9]{8}"); do reminal kill $id -y >/dev/null; done'; }

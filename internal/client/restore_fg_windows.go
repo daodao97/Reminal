@@ -18,15 +18,15 @@ import (
 // to ask, so the program is found among the shell's own children — the
 // newest one that is a coding agent reminal can resume (claude.exe, or node
 // running codex's or gemini's script). No children at all is the prompt.
-func restoreForeground(term *pty.Session) (prog string, args []string, atPrompt bool) {
+func restoreForeground(term *pty.Session) (prog string, args []string, pid int, atPrompt bool) {
 	kids := childProcesses(uint32(term.Pid()))
 	if len(kids) == 0 {
-		return "", nil, true
+		return "", nil, 0, true
 	}
-	if p, a := agentAmong(kids, 2); p != "" {
-		return p, a, false
+	if p, a, id := agentAmong(kids, 2); p != "" {
+		return p, a, int(id), false
 	}
-	return "", nil, false
+	return "", nil, 0, false
 }
 
 // shimHosts run a CLI's shim (npm's claude.cmd, codex.ps1) and are not the
@@ -35,13 +35,13 @@ var shimHosts = map[string]bool{"cmd": true, "powershell": true, "pwsh": true, "
 
 // agentAmong is the newest resumable agent among procs, looking through shim
 // hosts down to depth levels.
-func agentAmong(procs []childProc, depth int) (string, []string) {
+func agentAmong(procs []childProc, depth int) (string, []string, uint32) {
 	for _, k := range procs {
 		comm := strings.TrimSuffix(strings.ToLower(k.exe), ".exe")
 		if shimHosts[comm] {
 			if depth > 0 {
-				if p, a := agentAmong(childProcesses(k.pid), depth-1); p != "" {
-					return p, a
+				if p, a, id := agentAmong(childProcesses(k.pid), depth-1); p != "" {
+					return p, a, id
 				}
 			}
 			continue
@@ -52,10 +52,10 @@ func agentAmong(procs []childProc, depth int) (string, []string) {
 			p = programFromArgs(a, comm)
 		}
 		if _, ok := resumers[p]; ok {
-			return p, a
+			return p, a, k.pid
 		}
 	}
-	return "", nil
+	return "", nil, 0
 }
 
 type childProc struct {

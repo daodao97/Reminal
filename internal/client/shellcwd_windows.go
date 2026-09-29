@@ -38,6 +38,10 @@ const (
 	paramsCurrentDirOff     = 0x38 // RTL_USER_PROCESS_PARAMETERS.CurrentDirectory.DosPath
 )
 
+// processCwdWindows is one process's own current directory — not the
+// youngest descendant's, which is what a shell's cwd is guessed from.
+func processCwdWindows(pid int) string { return pebCwd(uint32(pid)) }
+
 // consoleHost are the processes Windows attaches to a console program: not
 // the user's, and never where they are working.
 var consoleHost = map[string]bool{"conhost.exe": true, "openconsole.exe": true}

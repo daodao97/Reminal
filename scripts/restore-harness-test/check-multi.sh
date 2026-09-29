@@ -59,10 +59,10 @@ sleep 25
 procs=$(procs)
 # picker_open ID REGEX TEXT — the agent's own list is open: its process by
 # REGEX (Linux, macOS), or on Windows what reminal typed.
-picker_open() { if [ "$T" = win ]; then typed "$1" "$3"; else echo "$procs" | grep -qE "$2"; fi; }
+picker_open() { if [ "$T" = win ]; then typed "$1" "$3"; else printf '%s\n' "$procs" | grep -qE "$2"; fi; }
 agent_running() {
-    if [ "$T" = win ]; then echo "$procs" | grep -vi reminal | grep -qiE "[\\/]$1([.-]|\\|/| |\$)"
-    else echo "$procs" | grep -qE "(^| |/)$1( |\$)"; fi
+    if [ "$T" = win ]; then printf '%s\n' "$procs" | grep -vi reminal | grep -qiE "[\\/]$1([.-]|\\|/| |\$)"
+    else printf '%s\n' "$procs" | grep -qE "(^| |/)$1( |\$)"; fi
 }
 
 check_session() { # name agent id number
@@ -71,20 +71,20 @@ check_session() { # name agent id number
     case $a in
     claude|qwen)
         if [ -z "$n" ]; then    # never spoke: nothing to resume by id
-            echo "$flat" | grep -q "pick this session's" && ok "$s: never reported an id — told to pick" || fail "$s: no pick note"
+            printf '%s\n' "$flat" | grep -q "pick this session's" && ok "$s: never reported an id — told to pick" || fail "$s: no pick note"
             picker_open $id "(^|/)$a --resume\$" "$a --resume" && ok "$s: $a's own list opened ($a --resume)" || fail "$s: picker not opened"
-            echo "$out" | grep -q "noted: my number" && fail "$s: resumed someone's conversation" || ok "$s: no one's conversation resumed by guess"
+            printf '%s\n' "$out" | grep -q "noted: my number" && fail "$s: resumed someone's conversation" || ok "$s: no one's conversation resumed by guess"
             return
         fi
-        got=$(echo "$out" | grep -o "my number is [0-9]*" | sort -u | tr '\n' ' ')
+        got=$(printf '%s\n' "$out" | grep -o "my number is [0-9]*" | sort -u | tr '\n' ' ')
         [ "$got" = "my number is $n " ] && ok "$s: back on its own conversation (#$n) — none of the others" || fail "$s: expected #$n, shows: '$got'" ;;
     codex|cursor)
-        echo "$flat" | grep -q "pick this session's" && ok "$s: told to pick" || fail "$s: no pick note"
+        printf '%s\n' "$flat" | grep -q "pick this session's" && ok "$s: told to pick" || fail "$s: no pick note"
         picker_open $id "codex resume\$" "codex resume" && ok "$s: codex's own list opened (codex resume)" || fail "$s: picker not opened"
-        echo "$out" | grep -q "noted: my number" && fail "$s: resumed a conversation by guess" || ok "$s: nothing resumed by guess" ;;
+        printf '%s\n' "$out" | grep -q "noted: my number" && fail "$s: resumed a conversation by guess" || ok "$s: nothing resumed by guess" ;;
     *)
-        echo "$flat" | grep -q "to find this one's conversation" && ok "$s: not started; the note says how to find it" || fail "$s: no note"
-        echo "$out" | grep -q "noted: my number" && fail "$s: resumed a conversation by guess" || ok "$s: nothing resumed by guess" ;;
+        printf '%s\n' "$flat" | grep -q "to find this one's conversation" && ok "$s: not started; the note says how to find it" || fail "$s: no note"
+        printf '%s\n' "$out" | grep -q "noted: my number" && fail "$s: resumed a conversation by guess" || ok "$s: nothing resumed by guess" ;;
     esac
 }
 for s in $ALL ${NOID:+${NOID}silent}; do
