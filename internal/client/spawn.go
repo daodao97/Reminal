@@ -137,17 +137,11 @@ func PrintSpawned(sp *SpawnedSession, name, version string) {
 	fmt.Printf("  Connect:  reminal connect %s %s\n", sp.ID, sp.PIN)
 	fmt.Printf("  PID:      %d  (detached — survives this terminal closing)\n", sp.PID)
 	fmt.Println()
-	// Reuse the same QR routine the foreground agent uses so phone
-	// scans look identical. Builds the join URL with the PIN in the
-	// fragment so the web client auto-fills.
+	// Half-block rendering, matching the foreground agent and `reminal info`
+	// (issue #85) so a QR looks identical whichever command printed it. Builds
+	// the join URL with the PIN in the fragment so the web client auto-fills.
 	qrURL := sp.OpenURL + "#p=" + sp.PIN
-	qrterminal.GenerateWithConfig(qrURL, qrterminal.Config{
-		Level:     qrterminal.L,
-		Writer:    os.Stdout,
-		BlackChar: qrterminal.BLACK,
-		WhiteChar: qrterminal.WHITE,
-		QuietZone: 1,
-	})
+	qrterminal.GenerateHalfBlock(qrURL, qrterminal.L, os.Stdout)
 	fmt.Println()
 	// Prefer the name in the hints when the user gave one — it's what
 	// they'll remember, and resolveActive accepts it anywhere an ID works.
