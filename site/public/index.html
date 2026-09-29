@@ -174,7 +174,7 @@ header figcaption{max-width:720px}
 section.s .story-grid > *{max-width:none}
 .story-copy{grid-column:1;grid-row:1}
 .story-stage{grid-column:2;grid-row:1;align-self:stretch}
-.story-pin{position:sticky;top:max(76px,calc(50vh - 240px));height:min(calc(100vh - 100px),500px);display:grid;place-items:center}
+.story-pin{position:sticky;top:max(76px,calc(calc(50 * var(--svh)) - 240px));height:min(calc(calc(100 * var(--svh)) - 100px),500px);display:grid;place-items:center}
 .sx{position:relative;width:100%;height:100%;border-radius:16px;background:var(--wall);border:1px solid var(--figline);overflow:hidden}
 :root[data-theme="dark"] .sx{border-color:var(--figline2)}
 @media (prefers-color-scheme:dark){:root:not([data-theme="light"]) .sx{border-color:var(--figline2)}}
@@ -188,11 +188,15 @@ section.s .story-grid > *{max-width:none}
 .ly.on{visibility:visible}
 .ly *{will-change:auto}
 
-.ch{min-height:115vh;padding:18vh 0 10vh}
-/* The copy holds beside the scene while its chapter plays. Not the agent-bus
-   chapter: it is taller than a screen, and a sticky block that tall would
-   hide its own end. */
-.ch:not(#bus) > .ch-in{position:sticky;top:120px}
+.ch{min-height:calc(115 * var(--svh));padding:calc(18 * var(--svh)) 0 calc(10 * var(--svh))}
+/* The copy holds still (beside the scene, or under it on a narrow screen)
+   while its chapter plays — but only a chapter whose copy fits in the space
+   it holds in: a sticky block taller than that would hide its own end. JS
+   decides which fit (.fits) and where they hold (--stick). A chapter that
+   does not fit simply scrolls, and is no taller than its copy, so it never
+   leaves an empty stretch beside the scene. */
+.ch.fits > .ch-in{position:sticky;top:var(--stick,120px)}
+.ch:not(.fits){min-height:0!important}
 .story .beats{list-style:none;margin:28px 0 0;padding:0;counter-reset:beat}
 .story .beat{position:relative;padding:14px 0 14px 40px;border-top:1px solid var(--line);color:var(--mute);font-size:15px;line-height:1.55;transition:color .3s}
 .story .beat:last-child{border-bottom:1px solid var(--line)}
@@ -200,9 +204,9 @@ section.s .story-grid > *{max-width:none}
 .story .beat::before{counter-increment:beat;content:counter(beat,decimal-leading-zero);position:absolute;left:0;top:17px;font:500 12px var(--mono);color:var(--mute)}
 .story .beat.lit{color:var(--dim)}
 .story .beat.lit b,.story .beat.lit::before{color:var(--ink)}
-.ch:first-child{padding-top:10vh}
-.ch#windows{min-height:190vh}
-.ch#bus{min-height:150vh;padding-bottom:4vh}
+.ch:first-child{padding-top:calc(10 * var(--svh))}
+.ch#windows{min-height:calc(190 * var(--svh))}
+.ch#bus{min-height:calc(150 * var(--svh));padding-bottom:calc(4 * var(--svh))}
 .ch h2{font-size:44px}
 .ch .body{font-size:17px}
 .ch .trace li{transition:opacity .3s}
@@ -363,11 +367,15 @@ section.s .story-grid > *{max-width:none}
   .story{padding-top:24px}
   .story-grid{display:block}
   .story-stage{position:sticky;top:52px;z-index:3;margin:0 -16px;padding:10px 16px 12px;background:var(--page);border-bottom:1px solid var(--line)}
-  .story-pin{position:relative;top:0;height:min(42vh,calc((100vw - 32px) * .86));max-height:none}
-  /* Here the copy sets the pace: each chapter is as tall as its own text,
-     so there is never an empty strip under the scene. */
-  .ch,.ch#windows,.ch#bus{min-height:0;padding:40px 0 18vh}
-  .ch:not(#bus) > .ch-in{position:static}
+  /* The panel keeps the drawing's proportions rather than stretching across
+     a wide tablet with the scene marooned in the middle of it. */
+  .story-pin{position:relative;top:0;height:auto;display:block}
+  .sx{--h:min(calc(40 * var(--svh)),calc((100vw - 32px) * .84));height:var(--h);width:min(100%,calc(var(--h) * 1.19));margin:0 auto}
+  .ch,.ch#windows,.ch#bus{min-height:0;padding:32px 0 24px}
+  /* A chapter that holds under the scene needs scroll room to play in —
+     as height, not padding: sticky copy stops at its chapter's padding, so
+     padding would scroll by as an empty band. */
+  .ch.fits{min-height:calc(95 * var(--svh))}
   .story .beat{color:var(--dim)} .story .beat b{color:var(--ink)}
   .ch h2{font-size:32px}
   .ch .body{font-size:16px}
@@ -1993,6 +2001,14 @@ if (FEATURES.story) {
     const at = chs.map((ch, i) => ch.getBoundingClientRect().top + heads[i]);
     const last = chs[chs.length - 1].getBoundingClientRect();
     at.push(last.bottom - (vh - line));
+    // A chapter whose copy has already scrolled out of the reading area (up
+    // under the pinned scene, or under the nav) hands over at once, rather
+    // than holding a scene next to words the reader can no longer see.
+    const readTop = narrow() ? top : 52;
+    for (let i = 0; i < chs.length - 1; i++) {
+      const gone = chs[i].querySelector(".ch-in").getBoundingClientRect().bottom - (readTop + 8);
+      at[i + 1] = Math.min(at[i + 1], line + gone);
+    }
     // t runs 0 → 1 from this chapter's heading crossing the line to the next one's
     const ts = chs.map((ch, i) => clamp((line - at[i]) / (at[i + 1] - at[i])));
     // Chapter i hands over to i+1 in the last 20px before i+1's heading
@@ -2010,7 +2026,28 @@ if (FEATURES.story) {
     });
     num.textContent = "0" + (c + 1);
   }
-  function fit() {
+  // Which chapters' copy can hold still, and where: under the pinned scene
+  // on a narrow screen, below the nav beside it otherwise.
+  const stableHeight = () => {
+    const probe = document.createElement("div");
+    probe.style.cssText = "position:fixed;top:0;height:calc(100 * var(--svh));visibility:hidden;pointer-events:none";
+    document.body.appendChild(probe);
+    const h = probe.offsetHeight; probe.remove();
+    return h || innerHeight;
+  };
+  function hold() {
+    const vh = stableHeight();
+    const stick = narrow() ? 52 + story.querySelector(".story-stage").offsetHeight + 20 : 120;
+    story.style.setProperty("--stick", stick + "px");
+    chs.forEach(ch => ch.classList.toggle("fits", ch.querySelector(".ch-in").offsetHeight <= vh - stick - 24));
+  }
+  // Which chapters hold is a layout decision, so it is made only when the
+  // layout really changes: a new width, or fonts and images arriving. A
+  // phone's address bar sliding in and out changes only the height, and
+  // re-deciding on that flipped chapters between held and not mid-scroll.
+  let laidOutWidth = -1;
+  function fit(e) {
+    if (innerWidth !== laidOutWidth || !e || e.type !== "resize") { laidOutWidth = innerWidth; hold(); }
     measure();
     const r = box.getBoundingClientRect();
     kEl.style.setProperty("--sxk", String(Math.min((r.width - 32) / 560, (r.height - 56) / 440)));
@@ -2019,6 +2056,9 @@ if (FEATURES.story) {
   const onScroll = () => { if (!queued) { queued = true; requestAnimationFrame(frame); } };
   addEventListener("scroll", onScroll, { passive: true });
   addEventListener("resize", fit);
+  // Geist arrives after first paint and changes how tall each chapter is.
+  if (document.fonts) document.fonts.ready.then(() => fit());
+  addEventListener("load", () => fit());
   fit();
 }
 

@@ -27,7 +27,11 @@
   --win:#232323; --winbar:#303030; --winline:#5a5a5a;
   --winink:#f2f2f2; --windim:#c8c8c8; --winmute:#a3a3a3;
   color-scheme:light;
+  /* A viewport-height unit that holds still while a phone's address bar
+     slides in and out (svh where supported), for anything that sizes layout. */
+  --svh:1vh;
 }
+@supports (height:1svh){:root{--svh:1svh}}
 @media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
   --page:#000; --panel:#0a0a0a; --sub:#0a0a0a; --soft:#111;
   --ink:#ededed; --dim:#a1a1a1; --mute:#707070;
