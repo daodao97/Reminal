@@ -1671,6 +1671,27 @@ func runNew(name, cwd string) error {
 // line each (name · id · mode · idle · viewers · cwd/title). An optional
 // substring argument filters by id/name/cwd/title; --idle/--viewers/--headless
 // narrow by state; --verbose adds the join URL + PIN under each row.
+// stateCol is the width of the activity-state column every row is laid out
+// around — the one budget the narrow layout must not exceed.
+const stateCol = 12
+
+// narrowStateWithShells folds a count of still-running shells into the state
+// word, for terminals too narrow to carry it in a column of its own.
+//
+// Only when it still fits: padCol pads but never truncates, so "logged out ·1"
+// or "needs you ·12" would push the row past its budget and wrap on the phone
+// this layout exists for. The count is worth knowing; the row keeping its
+// width is the promise.
+func narrowStateWithShells(state string, shells int) string {
+	if shells <= 0 {
+		return state
+	}
+	if withShells := fmt.Sprintf("%s ·%d", state, shells); visLen(withShells) <= stateCol {
+		return withShells
+	}
+	return state
+}
+
 func runList(args []string) error {
 	verbose := false
 	onlyIdle, onlyViewers, onlyHeadless := false, false, false
@@ -1859,8 +1880,8 @@ func runList(args []string) error {
 		// beside the watcher count; narrow, the number folds into the state word
 		// itself, which the state column already has room for. Either way the row
 		// stays the width it was.
-		if !a.IsPort() && a.Shells > 0 && narrow {
-			state = fmt.Sprintf("%s ·%d", state, a.Shells)
+		if !a.IsPort() && narrow {
+			state = narrowStateWithShells(state, a.Shells)
 		}
 		var parts []string
 		if !narrow && !a.IsPort() && a.Shells > 0 {
@@ -1883,8 +1904,8 @@ func runList(args []string) error {
 		if i := strings.LastIndexAny(proj, `/\`); i >= 0 {
 			proj = proj[i+1:]
 		}
-		// Fixed prefix: marker(2) + name + 2 + id(8) + 2 + state(12) + a margin.
-		reserved := 2 + nameW + 2 + 8 + 2 + 12 + 1
+		// Fixed prefix: marker(2) + name + 2 + id(8) + 2 + state + a margin.
+		reserved := 2 + nameW + 2 + 8 + 2 + stateCol + 1
 		tail := ""
 		if !narrow {
 			if budget := width - reserved - presenceLen; budget >= 6 && proj != "" {
@@ -1893,7 +1914,7 @@ func runList(args []string) error {
 		}
 
 		fmt.Printf("%s%s  %s  %s%s%s\n",
-			attnMarker(a.Attn, light), name, cBold(a.ID), padCol(state, 12, stateColor), presence, tail)
+			attnMarker(a.Attn, light), name, cBold(a.ID), padCol(state, stateCol, stateColor), presence, tail)
 		if verbose {
 			fmt.Printf("  %s  %s\n",
 				strings.Repeat(" ", nameW), cDim(a.OpenURL+"  ·  PIN "+a.PIN))

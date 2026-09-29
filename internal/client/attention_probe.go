@@ -459,14 +459,18 @@ var attnShellPattern = regexp.MustCompile(`·\s*([0-9]+)\s*shells?\b`)
 // attnShellCount reads that count off the bottom of the screen, or 0.
 func attnShellCount(tail string) int {
 	t := strings.ToLower(stripANSI(tail))
-	for _, m := range attnShellPattern.FindAllStringSubmatch(t, -1) {
+	// By match position, not by searching for the matched text: two matches can
+	// render the identical string, and looking the text up again finds the first
+	// one every time. A footer under a decoy of the same shape was read against
+	// the decoy's suffix and thrown away, leaving the session with no count.
+	for _, loc := range attnShellPattern.FindAllStringSubmatchIndex(t, -1) {
 		// "· 2 shell commands" would be a report of finished work, not of work
 		// still running; the footer never says that, but a transcript line ending
 		// in the same shape could.
-		if strings.HasPrefix(strings.TrimSpace(t[strings.Index(t, m[0])+len(m[0]):]), "command") {
+		if strings.HasPrefix(strings.TrimSpace(t[loc[1]:]), "command") {
 			continue
 		}
-		if n, err := strconv.Atoi(m[1]); err == nil && n > 0 {
+		if n, err := strconv.Atoi(t[loc[2]:loc[3]]); err == nil && n > 0 {
 			return n
 		}
 	}

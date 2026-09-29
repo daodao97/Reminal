@@ -411,6 +411,13 @@ func TestShellCountReadsTheFooterAndNotTheTranscript(t *testing.T) {
 		// shape, and still means commands that finished.
 		{"footer-shaped, but a count of finished commands", "· 2 shell commands were run", 0},
 		{"zero is not a count", "⏵⏵ bypass permissions on · 0 shells · esc to interrupt", 0},
+		// Both of these render the identical "· 1 shell", so a guard that looks
+		// the matched text up again instead of using the match's own position
+		// tests the footer against the decoy and reports nothing at all.
+		{"a decoy of the same shape sits above the footer",
+			"⎿ · 1 shell command was run\n⏵⏵ bypass permissions on · 1 shell · ← 2 agents", 1},
+		{"…and below it",
+			"⏵⏵ bypass permissions on · 2 shells · ← 2 agents\n⎿ · 2 shell commands were run", 2},
 	}
 	for _, c := range cases {
 		if got := attnShellCount(c.tail); got != c.want {
