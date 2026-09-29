@@ -111,403 +111,85 @@
 }
 </script>
 
+<link rel="preload" href="/fonts/Geist-Variable.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="/theme.css">
+<script src="/theme.js"></script>
 <style>
-:root{
-  --bg:#0d1117; --surface:#161b22; --surface-2:#1c2129;
-  --line:#30363d; --line-soft:#21262d;
-  --fg:#e6edf3; --muted:#8b949e; --dim:#6e7681;
-  --accent:#58a6ff; --accent-strong:#388bfd; --accent-deep:#1f6feb;
-  --radius:12px;
-  --max:1080px;
-  --ease:cubic-bezier(.2,.7,.2,1);
-}
-*{box-sizing:border-box}
-html{-webkit-text-size-adjust:100%; scroll-behavior:smooth}
-body{
-  margin:0; background:var(--bg); color:var(--fg);
-  font:16px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Helvetica,Arial,sans-serif;
-  -webkit-font-smoothing:antialiased; overflow-x:hidden;
-}
-a{color:var(--accent); text-decoration:none}
-a:hover{text-decoration:underline}
-.wrap{max-width:var(--max); margin:0 auto; padding-left:24px; padding-right:24px; position:relative}
-code,kbd,pre{font-family:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace}
+/* /agents set pieces. Everything shared lives in /theme.css. */
 
-.sky{position:absolute; inset:-200px 0 auto 0; height:900px; z-index:0; pointer-events:none; overflow:hidden}
-.sky i{position:absolute; display:block; border-radius:50%; filter:blur(90px)}
-.sky i:nth-child(1){
-  width:820px; height:820px; top:-300px; left:50%; margin-left:-410px;
-  background:radial-gradient(circle,rgba(31,111,235,.38) 0%,transparent 62%);
-}
-.sky i:nth-child(2){
-  width:560px; height:560px; top:40px; right:4%;
-  background:radial-gradient(circle,rgba(120,90,255,.18) 0%,transparent 62%);
-}
-.mesh{
-  position:absolute; inset:0; z-index:0; pointer-events:none;
-  background-image:
-    linear-gradient(rgba(139,148,158,.07) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(139,148,158,.07) 1px, transparent 1px);
-  background-size:56px 56px;
-  -webkit-mask-image:radial-gradient(ellipse 80% 55% at 50% 12%, #000 20%, transparent 78%);
-  mask-image:radial-gradient(ellipse 80% 55% at 50% 12%, #000 20%, transparent 78%);
-}
+/* ── comparison table: our column is shaded ──────── */
+.cmptable{margin-top:40px}
+.cmptable table{min-width:640px}
+.cmptable th:nth-child(2),.cmptable td:nth-child(2){background:var(--soft)}
+.cmptable th:nth-child(2){color:var(--ink);font-weight:600}
+.cmptable td b{color:var(--ink);font-weight:500}
+.cmptable td i{color:var(--mute);font-style:normal}
 
-nav{
-  position:sticky; top:0; z-index:50;
-  background:rgba(13,17,23,.82); backdrop-filter:blur(14px) saturate(150%);
-  border-bottom:1px solid var(--line-soft);
-}
-nav .wrap{display:flex; align-items:center; justify-content:space-between; height:62px; gap:16px}
-.brand{display:flex; align-items:center; gap:10px; color:var(--fg); font-weight:650; letter-spacing:-.01em}
-.brand:hover{text-decoration:none}
-.brand img{width:26px; height:26px; border-radius:7px; display:block}
-.navlinks{display:flex; align-items:center; gap:22px; font-size:14.5px}
-.navlinks a{color:var(--muted)}
-.navlinks a:hover{color:var(--fg); text-decoration:none}
-@media (max-width:640px){ .navlinks .hide-sm{display:none} }
+/* ── three steps ─────────────────────────────────── */
+.steps{list-style:none;margin:32px 0 0;padding:0;counter-reset:step;max-width:720px}
+.steps li{position:relative;padding:18px 0 18px 42px;border-top:1px solid var(--line);color:var(--dim);font-size:15.5px;line-height:1.6}
+.steps li:last-child{border-bottom:1px solid var(--line)}
+.steps li::before{counter-increment:step;content:counter(step,decimal-leading-zero);position:absolute;left:0;top:21px;font:500 12px var(--mono);color:var(--mute)}
+.steps b{color:var(--ink);font-weight:600}
 
-header{padding:70px 0 10px; text-align:center; position:relative}
-header .wrap{z-index:1}
-h1{
-  margin:0 auto 20px; max-width:22ch;
-  font-size:clamp(32px,5vw,54px); line-height:1.08;
-  letter-spacing:-.035em; font-weight:700;
-}
-h1 .em{
-  background:linear-gradient(110deg,#79b8ff 0%,#58a6ff 35%,#a371f7 100%);
-  -webkit-background-clip:text; background-clip:text; color:transparent;
-}
-.lede{
-  margin:0 auto; max-width:62ch; font-size:clamp(16.5px,2.1vw,19px);
-  color:var(--muted); line-height:1.65;
-}
-.lede strong{color:var(--fg); font-weight:600}
-
-.cta{margin:32px auto 0; max-width:660px}
-.cmd{
-  display:flex; align-items:center; gap:12px; text-align:left;
-  background:linear-gradient(180deg,rgba(28,33,41,.9),rgba(22,27,34,.9));
-  border:1px solid var(--line); border-radius:var(--radius);
-  padding:14px 14px 14px 18px; backdrop-filter:blur(8px);
-  box-shadow:0 8px 30px -12px rgba(0,0,0,.8), inset 0 1px 0 rgba(255,255,255,.04);
-}
-.cmd pre{margin:0; flex:1; overflow-x:auto; font-size:13.5px; color:var(--fg); scrollbar-width:none}
-.cmd pre::-webkit-scrollbar{display:none}
-.cmd .sigil{color:var(--accent); user-select:none; font-weight:600}
-.copy{
-  flex:none; background:var(--surface-2); border:1px solid var(--line); color:var(--muted);
-  font:inherit; font-size:13px; padding:7px 13px; border-radius:8px; cursor:pointer;
-  transition:color .15s, border-color .15s, background .15s;
-}
-.copy:hover{color:var(--fg); border-color:var(--dim); background:#252b34}
-.copy.done{color:#3fb950; border-color:#238636}
-.sub-cta{margin-top:14px; font-size:14.5px; color:var(--dim)}
-.sub-cta a{color:var(--muted)}
-.sub-cta a:hover{color:var(--accent)}
-
-.chips{display:flex; flex-wrap:wrap; gap:8px; justify-content:center; margin:26px auto 0; max-width:860px}
-.chip{
-  font-size:12.5px; color:var(--muted); background:rgba(22,27,34,.7);
-  border:1px solid var(--line-soft); border-radius:99px; padding:5px 12px; white-space:nowrap;
-}
-.chip b{color:var(--fg); font-weight:600}
-
-figure{margin:0}
-.frame{
-  margin:0 auto; border:1px solid var(--line); border-radius:14px; overflow:hidden;
-  background:var(--surface); line-height:0;
-  box-shadow:0 30px 80px -40px rgba(0,0,0,.95), 0 0 0 1px rgba(255,255,255,.02) inset;
-}
-.bar{
-  display:flex; align-items:center; gap:10px; padding:9px 13px; line-height:1;
-  background:linear-gradient(180deg,#1c2129,#171c23); border-bottom:1px solid var(--line-soft);
-}
-.dots{display:flex; gap:6px; flex:none}
-.dots i{width:10px; height:10px; border-radius:50%; display:block}
-.dots i:nth-child(1){background:#ff5f57} .dots i:nth-child(2){background:#febc2e} .dots i:nth-child(3){background:#28c840}
-.bar .url{
-  flex:1; text-align:center; font-family:ui-monospace,Menlo,monospace;
-  font-size:11.5px; color:var(--dim); background:#0f141a;
-  border:1px solid var(--line-soft); border-radius:6px; padding:4px 10px;
-  overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:320px; margin:0 auto;
-}
-.bar .live{
-  flex:none; font-size:11px; color:#3fb950; display:inline-flex; align-items:center; gap:5px;
-  font-weight:600; letter-spacing:.02em;
-}
-.bar .live::before{
-  content:""; width:6px; height:6px; border-radius:50%; background:#3fb950;
-  box-shadow:0 0 0 0 rgba(63,185,80,.7); animation:pulse 2s infinite;
-}
-@keyframes pulse{
-  70%{box-shadow:0 0 0 7px rgba(63,185,80,0)}
-  100%{box-shadow:0 0 0 0 rgba(63,185,80,0)}
-}
-.frame video, .frame img{width:100%; height:auto; display:block}
-figcaption{margin-top:14px; font-size:13px; color:var(--dim); text-align:center; line-height:1.55}
-
-section{padding:88px 0; border-top:1px solid var(--line-soft); position:relative}
-section:first-of-type{border-top:none}
-.eyebrow{
-  display:inline-flex; align-items:center; gap:9px;
-  font-size:12px; letter-spacing:.09em; text-transform:uppercase;
-  color:var(--accent); font-weight:650; margin:0 0 14px;
-}
-.eyebrow::before{content:""; width:22px; height:1px; background:linear-gradient(90deg,transparent,var(--accent))}
-.center .eyebrow::before{display:none}
-h2{
-  margin:0 0 16px; font-size:clamp(25px,3.6vw,36px);
-  letter-spacing:-.025em; line-height:1.16; font-weight:680; max-width:24ch;
-}
-.body{color:var(--muted); max-width:62ch; margin:0; font-size:16.5px}
-.body + .frame{margin-top:36px}
-.body strong{color:var(--fg); font-weight:600}
-.center{text-align:center}
-.center h2, .center .body{margin-left:auto; margin-right:auto}
-
-.grid{display:grid; grid-template-columns:repeat(6,1fr); gap:12px; margin-top:40px; text-align:left}
-.card{
-  background:linear-gradient(180deg,rgba(28,33,41,.7),rgba(22,27,34,.7));
-  border:1px solid var(--line-soft); border-radius:var(--radius); padding:20px 22px;
-  grid-column:span 3; position:relative; overflow:hidden;
-  transition:border-color .3s, transform .3s var(--ease);
-}
-.card:hover{border-color:#3d444d; transform:translateY(-2px)}
-.card h3{margin:0 0 7px; font-size:15px; font-weight:640; letter-spacing:-.01em}
-.card h3 code{font-size:13px; background:rgba(110,118,129,.18); padding:.12em .4em; border-radius:5px}
-.card p{margin:0; font-size:13.5px; color:var(--muted); line-height:1.6}
-@media (max-width:820px){ .grid{grid-template-columns:1fr} .card{grid-column:span 1} }
-
-.cmptable{margin-top:40px; overflow-x:auto; border:1px solid var(--line-soft); border-radius:var(--radius)}
-.cmptable table{border-collapse:collapse; width:100%; min-width:640px; font-size:14px; text-align:left}
-.cmptable th, .cmptable td{padding:12px 16px; border-top:1px solid var(--line-soft); color:var(--muted); vertical-align:top}
-.cmptable thead th{border-top:none; color:var(--fg); font-weight:640; background:rgba(28,33,41,.7); font-size:13.5px}
-.cmptable td:first-child, .cmptable th:first-child{color:var(--fg); font-weight:600; font-size:13.5px}
-.cmptable td b{color:#3fb950; font-weight:600}
-.cmptable td i{color:var(--dim); font-style:normal}
-
-.steps{list-style:none; margin:36px 0 0; padding:0; counter-reset:step; display:grid; gap:14px; max-width:680px}
-.steps li{
-  position:relative; padding:16px 18px 16px 58px;
-  background:linear-gradient(180deg,rgba(28,33,41,.7),rgba(22,27,34,.7));
-  border:1px solid var(--line-soft); border-radius:var(--radius);
-  color:var(--muted); font-size:15px; line-height:1.6;
-}
-.steps li::before{
-  counter-increment:step; content:counter(step);
-  position:absolute; left:18px; top:17px; width:26px; height:26px; border-radius:50%;
-  display:grid; place-items:center; font-size:12px; font-weight:650;
-  color:#fff; background:var(--accent-deep); border:1px solid var(--accent);
-}
-.steps b{color:var(--fg); font-weight:620}
-.steps code{background:rgba(110,118,129,.2); padding:.15em .4em; border-radius:5px; font-size:13px}
-
-.faq{max-width:760px; margin:36px auto 0; text-align:left}
-.faq details{
-  border:1px solid var(--line-soft); border-radius:var(--radius);
-  background:linear-gradient(180deg,rgba(28,33,41,.55),rgba(22,27,34,.55));
-  margin-bottom:10px; padding:0 20px;
-}
-.faq summary{
-  cursor:pointer; padding:16px 0; font-weight:620; font-size:15.5px; color:var(--fg);
-  list-style:none; display:flex; justify-content:space-between; align-items:center; gap:12px;
-}
-.faq summary::-webkit-details-marker{display:none}
-.faq summary::after{content:"+"; color:var(--dim); font-size:19px; flex:none; transition:transform .2s}
-.faq details[open] summary::after{transform:rotate(45deg)}
-.faq details p{margin:0 0 16px; color:var(--muted); font-size:14.5px; line-height:1.65}
-
-
-/* ── the tool trace: an agent's own calls, rendered as a log ──────────── */
-.trace{
-  margin-top:38px; border:1px solid var(--line); border-radius:14px; overflow:hidden;
-  background:linear-gradient(180deg,rgba(26,31,39,.92),rgba(17,21,27,.92));
-  box-shadow:0 30px 80px -46px rgba(0,0,0,.95);
-}
-.trace ol{list-style:none; margin:0; padding:4px 0}
-.trace li{padding:13px 18px}
-.trace li + li{border-top:1px solid var(--line-soft)}
-.trace .call{
-  margin:0; font-family:ui-monospace,Menlo,monospace; font-size:13px;
-  color:var(--accent); word-break:break-word;
-}
-.trace .call b{color:#79c0ff; font-weight:650}
-.trace .call .arg{color:#a5d6ff; font-weight:400}
-.trace .ret{
-  margin:5px 0 0 0; padding-left:18px; position:relative;
-  font-size:13px; color:var(--muted); line-height:1.55;
-}
-.trace .ret::before{content:"↳"; position:absolute; left:0; color:var(--dim)}
-.trace .ret b{color:var(--fg); font-weight:600}
-.trace .ret code{font-size:12.5px; color:#a5d6ff}
-
-/* ── window notes: a badge on the window, drawn in CSS ────────────────── */
-.notemock{display:grid; grid-template-columns:1.1fr .9fr; gap:26px; align-items:start; margin-top:44px}
-.nm-win{position:relative; border:1px solid var(--line); border-radius:14px; background:var(--surface);
-  box-shadow:0 30px 80px -44px rgba(0,0,0,.95); margin-top:12px}
-.nm-win .bar{border-radius:13px 13px 0 0}
+/* ── window notes: a badge on the window, drawn in CSS (a figure) ── */
+.notemock{display:grid;grid-template-columns:1.1fr .9fr;gap:26px;align-items:start;margin-top:44px}
+section.s .notemock{max-width:none}
+.nm-win{position:relative;border:1px solid var(--figline2);border-radius:12px;background:var(--fig);margin-top:12px}
+.nm-win .bar{border-radius:11px 11px 0 0}
 .nm-canvas{
-  min-height:212px; border-radius:0 0 13px 13px;
+  min-height:212px;border-radius:0 0 11px 11px;
   background:
-    radial-gradient(ellipse 70% 60% at 30% 0%, rgba(88,166,255,.10), transparent 70%),
-    linear-gradient(rgba(139,148,158,.055) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(139,148,158,.055) 1px, transparent 1px),
-    #10151b;
-  background-size:auto, 34px 34px, 34px 34px, auto;
+    linear-gradient(rgba(255,255,255,.035) 1px,transparent 1px),
+    linear-gradient(90deg,rgba(255,255,255,.035) 1px,transparent 1px),
+    var(--fig);
+  background-size:34px 34px,34px 34px,auto;
 }
-.nm-badge{
-  position:absolute; top:-13px; right:20px; display:inline-flex; align-items:center; gap:6px;
-  padding:6px 11px; border-radius:999px; background:rgba(9,10,13,.95);
-  border:1px solid rgba(255,255,255,.16); box-shadow:0 10px 26px rgba(0,0,0,.55);
-}
-.nm-badge b{font-size:10.5px; color:rgba(255,255,255,.7); font-weight:650; letter-spacing:.02em}
-.nm-dot{width:8px; height:8px; border-radius:50%; display:block; flex:none}
-.nm-dot.attention{background:#ff453a; animation:notespulse 1.9s ease-in-out infinite}
-.nm-dot.working{background:#ffbd21}
-.nm-dot.info{background:#2a8cff}
-.nm-dot.done{background:#33d158}
-@keyframes notespulse{0%,100%{box-shadow:0 0 0 0 rgba(255,69,58,.55)} 50%{box-shadow:0 0 0 5px rgba(255,69,58,0)}}
-.nm-page{padding:22px 24px 26px; display:grid; gap:10px; max-width:330px}
-.nm-sk{height:9px; border-radius:5px; background:rgba(255,255,255,.14)}
-.nm-field{
-  font-family:ui-monospace,Menlo,monospace; font-size:12px; color:rgba(255,255,255,.62);
-  background:rgba(255,255,255,.045); border:1px solid rgba(255,255,255,.10);
-  border-radius:8px; padding:9px 11px;
-}
-.nm-fieldrow{display:grid; grid-template-columns:1fr 1fr; gap:10px}
-.nm-err{margin:2px 0 0; font-size:12px; color:#ff6b60}
-.nm-cta{
-  margin-top:4px; justify-self:start; font-size:12.5px; font-weight:600; color:rgba(255,255,255,.45);
-  background:rgba(255,255,255,.09); border:1px solid rgba(255,255,255,.14);
-  border-radius:8px; padding:9px 16px;
-}
-.nm-pop{
-  border:1px solid rgba(255,255,255,.13); border-radius:12px; background:rgba(28,28,34,.97);
-  padding:6px; box-shadow:0 22px 50px -18px rgba(0,0,0,.75);
-}
-.nm-head{
-  display:flex; align-items:center; justify-content:space-between; gap:10px;
-  padding:7px 10px 9px; border-bottom:1px solid rgba(255,255,255,.08);
-  font-size:11px; color:rgba(255,255,255,.5);
-}
-.nm-row{display:flex; gap:9px; padding:10px; align-items:flex-start}
+.nm-badge{position:absolute;top:-13px;right:20px;display:inline-flex;align-items:center;gap:6px;padding:6px 11px;border-radius:999px;
+  background:rgba(9,10,13,.95);border:1px solid rgba(255,255,255,.16);box-shadow:0 10px 26px rgba(0,0,0,.35)}
+.nm-badge b{font:500 10.5px var(--mono);color:rgba(255,255,255,.75);letter-spacing:.02em}
+.nm-page{padding:22px 24px 26px;display:grid;gap:10px;max-width:330px}
+.nm-sk{height:9px;border-radius:5px;background:rgba(255,255,255,.12)}
+.nm-field{font:400 12px var(--mono);color:rgba(255,255,255,.62);background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.10);border-radius:6px;padding:9px 11px}
+.nm-fieldrow{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.nm-err{margin:2px 0 0;font-size:12px;color:#ff6b60}
+.nm-cta{margin-top:4px;justify-self:start;font-size:12.5px;font-weight:500;color:rgba(255,255,255,.45);background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.14);border-radius:6px;padding:9px 16px}
+.nm-pop{border:1px solid var(--figline2);border-radius:12px;background:#111;padding:6px;box-shadow:0 22px 50px -18px rgba(0,0,0,.4)}
+.nm-head{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:7px 10px 9px;border-bottom:1px solid rgba(255,255,255,.08);font-size:11px;color:rgba(255,255,255,.5)}
+.nm-row{display:flex;gap:9px;padding:10px;align-items:flex-start}
 .nm-row + .nm-row{border-top:1px solid rgba(255,255,255,.08)}
 .nm-row .nm-dot{margin-top:5px}
-.nm-t{font-size:12.5px; font-weight:600; color:#fff}
-.nm-b{font-size:12px; color:rgba(255,255,255,.62); margin:3px 0 0; line-height:1.5}
-.nm-m{font-size:10.5px; color:rgba(255,255,255,.42); margin-top:5px}
-.nm-btns{display:flex; gap:6px; margin-top:10px}
-.nm-btn{
-  font:inherit; font-size:11.5px; font-weight:600; padding:5px 11px; border-radius:999px;
-  background:rgba(255,255,255,.07); border:1px solid rgba(255,255,255,.18);
-  color:rgba(255,255,255,.8); cursor:default;
-}
-.nm-btn.primary{background:rgba(255,255,255,.92); border-color:transparent; color:#14141a}
-.legend{display:flex; flex-wrap:wrap; gap:8px; margin-top:28px}
-.legend span{
-  display:inline-flex; align-items:center; gap:8px; font-size:12.5px; color:var(--muted);
-  background:rgba(22,27,34,.7); border:1px solid var(--line-soft); border-radius:99px; padding:6px 13px;
-}
-.legend b{color:var(--fg); font-weight:600}
-@media (max-width:820px){ .notemock{grid-template-columns:1fr; gap:20px} }
+.nm-t{font-size:12.5px;font-weight:600;color:#fff}
+.nm-b{font-size:12px;color:rgba(255,255,255,.62);margin:3px 0 0;line-height:1.5}
+.nm-m{font-size:10.5px;color:rgba(255,255,255,.42);margin-top:5px}
+.nm-btns{display:flex;gap:6px;margin-top:10px}
+.nm-btn{font:inherit;font-size:11.5px;font-weight:500;padding:5px 11px;border-radius:6px;background:rgba(255,255,255,.07);border:1px solid rgba(255,255,255,.18);color:rgba(255,255,255,.8);cursor:default}
+.nm-btn.primary{background:#ededed;border-color:transparent;color:#0a0a0a}
+@media (max-width:820px){.notemock{grid-template-columns:1fr;gap:20px}}
 /* Narrow: the badge sits over the title bar's right end, so let the title
    truncate rather than run under it. */
-@media (max-width:560px){ .nm-win .bar .url{max-width:150px} }
-
-/* ── footer ────────────────────────────────────────── */
-/* Four named columns rather than one row of links: a reader diligencing this
-   thing looks for a Trust column, and a flat row gave Privacy and For AI
-   agents identical weight. .wrap is reset to block here because the old
-   single-row footer set it to flex. */
-footer .wrap{display:block}
-footer{
-  border-top:1px solid var(--line-soft); padding:60px 0 32px;
-  color:var(--dim); font-size:14px;
-  background:linear-gradient(180deg, rgba(22,27,34,.34), rgba(13,17,23,0));
-}
-.f-grid{display:grid; grid-template-columns:1.7fr 1fr 1fr 1fr; gap:40px 34px}
-.f-logo{display:flex; align-items:center; gap:10px; color:var(--fg); font-weight:650;
-  font-size:16.5px; letter-spacing:-.012em}
-.f-logo img{width:26px; height:26px; border-radius:7px; display:block}
-.f-brand p{margin:14px 0 0; color:var(--dim); font-size:13.5px; line-height:1.65; max-width:36ch}
-.f-badges{display:flex; flex-wrap:wrap; gap:6px; margin-top:18px}
-.f-badges span{
-  font-size:11.5px; color:var(--muted); background:rgba(22,27,34,.8);
-  border:1px solid var(--line-soft); border-radius:99px; padding:4px 11px; white-space:nowrap;
-}
-.f-col h4{
-  margin:0 0 14px; font-size:10.5px; letter-spacing:.11em; text-transform:uppercase;
-  color:var(--dim); font-weight:680;
-}
-.f-col ul{list-style:none; margin:0; padding:0; display:grid; gap:10px}
-.f-col a{color:var(--muted); font-size:13.5px}
-.f-col a:hover{color:var(--fg); text-decoration:none}
-.f-bottom{
-  display:flex; flex-wrap:wrap; gap:12px 26px; align-items:center; justify-content:space-between;
-  margin-top:48px; padding-top:24px; border-top:1px solid var(--line-soft);
-  font-size:13px; color:var(--dim);
-}
-.f-legal{display:flex; flex-wrap:wrap; gap:6px 16px; align-items:center}
-.f-legal .sep{color:#30363d}
-.f-social{display:flex; gap:16px; align-items:center}
-.f-social a{color:var(--dim); display:inline-flex}
-.f-social a:hover{color:var(--fg)}
-@media (max-width:820px){
-  .f-grid{grid-template-columns:1fr 1fr; gap:34px 24px}
-  .f-brand{grid-column:1 / -1}
-}
-@media (max-width:480px){
-  /* Two columns all the way down: one column made this 2100px tall, which is
-     a scroll of its own after the page has already ended. */
-  footer{padding:44px 0 28px}
-  .f-grid{grid-template-columns:1fr 1fr; gap:30px 18px}
-  .f-col a{font-size:13px}
-  .f-bottom{margin-top:34px; gap:14px}
-  .f-legal{gap:4px 0; flex-direction:column; align-items:flex-start}
-  .f-legal .sep{display:none}
-}
-@media (max-width:359px){ .f-grid{grid-template-columns:1fr} }
-
-@media (max-width:640px){
-  .wrap{padding-left:20px; padding-right:20px}
-  header{padding:38px 0 4px}
-  section{padding:56px 0}
-  h1{margin-bottom:16px}
-  h2{max-width:none}
-  .lede{font-size:16.5px}
-  .cta{margin-top:26px}
-  .body{font-size:16px}
-  .body + .frame{margin-top:24px}
-  figcaption{margin-top:11px}
-}
-@media (prefers-reduced-motion:reduce){
-  html{scroll-behavior:auto}
-  *{animation:none !important; transition:none !important}
-}
+@media (max-width:560px){.nm-win .bar .url{max-width:150px}}
 </style>
 </head>
 <body>
 
-<nav>
-  <div class="wrap">
+<nav class="nav">
+  <div class="navin">
     <a class="brand" href="/">
-      <img src="/assets/icon.png" alt="" width="26" height="26">
+      <img src="/assets/icon.png" alt="" width="22" height="22">
       <span>reminal</span>
     </a>
-    <div class="navlinks">
-      <a href="/#security" class="hide-sm">Security</a>
-      <a href="https://github.com/harshalgajjar/Reminal">GitHub</a>
-    </div>
+    <span class="sp"></span>
+    <a href="/#security" class="l hide-sm">Security</a>
+    <a href="https://github.com/harshalgajjar/Reminal" class="l">GitHub</a>
+    <button id="th" type="button">Dark</button>
   </div>
 </nav>
 
-<header>
-  <div class="sky" aria-hidden="true"><i></i><i></i></div>
-  <div class="mesh" aria-hidden="true"></div>
+<header class="hero">
 
   <div class="wrap">
-    <p class="eyebrow" style="justify-content:center; display:flex">For AI coding agents</p>
+    <p class="eyebrow">For AI coding agents</p>
     <h1>Your agents can run for hours. <span class="em">Give them a home.</span></h1>
     <p class="lede">
       Claude Code can chew on a refactor for an hour. Codex can work a queue overnight. Run them
@@ -539,7 +221,7 @@ footer{
 
 <main>
 
-<section class="wrap" id="lid">
+<section class="wrap s" id="lid">
   <p class="eyebrow">The part no remote solves</p>
   <h2>Your agent dies when the lid closes.</h2>
   <p class="body">
@@ -562,7 +244,7 @@ footer{
   <figcaption>The lid shuts with nothing plugged in — and the windows keep streaming, live and controllable.</figcaption>
 </section>
 
-<section class="wrap" id="any-agent">
+<section class="wrap s" id="any-agent">
   <p class="eyebrow">Agent-agnostic</p>
   <h2>One view of every agent you run.</h2>
   <p class="body">
@@ -602,7 +284,7 @@ footer{
   </p>
 </section>
 
-<section class="wrap" id="bus">
+<section class="wrap s" id="bus">
   <p class="eyebrow">Agent bus</p>
   <h2>Your agents can see each other.</h2>
   <p class="body">
@@ -683,7 +365,7 @@ footer{
   </p>
 </section>
 
-<section class="wrap" id="notes">
+<section class="wrap s" id="notes">
   <p class="eyebrow">Window notes</p>
   <h2>And an agent can raise a hand.</h2>
   <p class="body">
@@ -777,7 +459,7 @@ footer{
   </p>
 </section>
 
-<section class="wrap center" id="compare">
+<section class="wrap s" id="compare">
   <p class="eyebrow">Side by side</p>
   <h2>What each remote actually covers.</h2>
   <p class="body">
@@ -802,7 +484,7 @@ footer{
   <figcaption style="margin-top:14px">They compose: many people run <code>/remote-control</code> for the conversation and reminal for the machine.</figcaption>
 </section>
 
-<section class="wrap" id="start">
+<section class="wrap s" id="start">
   <p class="eyebrow">Ninety seconds</p>
   <h2>Start a session, close the lid, walk away.</h2>
   <ol class="steps">
@@ -818,7 +500,7 @@ footer{
   <figcaption>Ephemeral credentials: the ID and PIN exist only while reminal runs. Ctrl+C and they're gone.</figcaption>
 </section>
 
-<section class="wrap center" id="faq">
+<section class="wrap s" id="faq">
   <p class="eyebrow">Questions</p>
   <h2>The ones that come up.</h2>
   <div class="faq">
