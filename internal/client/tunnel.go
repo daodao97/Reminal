@@ -1983,13 +1983,10 @@ func PrintSpawnedTunnel(sp *SpawnedSession, port int, public bool, version strin
 	if !public {
 		qrURL = sp.OpenURL + "#p=" + sp.PIN
 	}
-	qrterminal.GenerateWithConfig(qrURL, qrterminal.Config{
-		Level:     qrterminal.L,
-		Writer:    os.Stdout,
-		BlackChar: qrterminal.BLACK,
-		WhiteChar: qrterminal.WHITE,
-		QuietZone: 1,
-	})
+	// Half-block rendering to match `reminal info` / `reminal qr` (issue #85):
+	// same compact style everywhere so a QR looks identical whichever command
+	// printed it, and it's easier to scan / copy-paste.
+	qrterminal.GenerateHalfBlock(qrURL, qrterminal.L, os.Stdout)
 	fmt.Println()
 	if public {
 		fmt.Println("  This URL is open to anyone who finds it.")
