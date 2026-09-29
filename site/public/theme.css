@@ -295,9 +295,10 @@ body.doc .note{border:1px solid var(--line);border-radius:12px;background:var(--
 body.doc .tablewrap{margin:0 0 16px}
 body.doc .tablewrap table{min-width:640px}
 body.doc td:first-child{white-space:nowrap}
-/* legal tables: plain grid, no status dots */
-body.doc > .wrap > table{border:1px solid var(--line);margin:0 0 16px}
-body.doc > .wrap > table th,body.doc > .wrap > table td{border:1px solid var(--line)}
+/* A table written straight into the article: it scrolls inside its own box
+   on a phone rather than pushing the page sideways. */
+body.doc > .wrap > table{display:block;overflow-x:auto;-webkit-overflow-scrolling:touch;border:1px solid var(--line);border-radius:12px;background:var(--panel);margin:0 0 16px}
+body.doc > .wrap > table th,body.doc > .wrap > table td{min-width:120px}
 body.doc figure.shot{margin:28px 0 32px}
 body.doc figure.shot video{width:100%;height:auto;display:block;border:1px solid var(--figline);border-radius:12px;background:var(--fig)}
 body.doc figure.shot figcaption{margin-top:10px}
