@@ -34,26 +34,28 @@ has qwen && start qwen     'qwen --approval-mode yolo -m fake-model -i "hello fi
 has opencode && start opencode 'opencode -m fake/fake-model --agent build'
 has pi && start pi       'pi --provider fake --model fake-1'
 [ $CURSOR = 1 ] && start cursor 'cursor-agent -f "What is 1100 plus 11? Reply with only the number."'
-sleep 20
+for n in $AGENTS; do ready $(eval echo \$ID_$n) $n; done
+[ $CURSOR = 1 ] && ready $ID_cursor cursor-agent
 has opencode && send $ID_opencode "hello first"; has pi && send $ID_pi "hello first"
-[ $CURSOR = 1 ] && screen $ID_cursor | grep -q "Workspace Trust" && send $ID_cursor "a"
-sleep 25
+[ $CURSOR = 1 ] && shows $ID_cursor "Workspace Trust" && send $ID_cursor "a"
 for n in $AGENTS; do
     id=$(eval echo \$ID_$n)
-    screen $id | grep -q "noted: hello first" && ok "$n ($id) started with its flags, answered its first prompt" || fail "$n: did not answer its first prompt"
+    eventually 90 shows $id "noted: hello first" && ok "$n ($id) started with its flags, answered its first prompt" || fail "$n: did not answer its first prompt"
 done
-[ $CURSOR = 1 ] && { screen $ID_cursor | grep -q "1111" && ok "cursor ($ID_cursor) started with -f, answered 1111" || fail "cursor: did not answer"; } || skip "cursor: no Cursor login in the box"
-sleep 17
+[ $CURSOR = 1 ] && { eventually 90 shows $ID_cursor "1111" && ok "cursor ($ID_cursor) started with -f, answered 1111" || fail "cursor: did not answer"; } || skip "cursor: no Cursor login in the box"
+for n in $AGENTS; do eventually 40 saved $(eval echo \$ID_$n) $n; done
+[ $CURSOR = 1 ] && eventually 40 saved $ID_cursor cursor-agent
+for n in claude qwen; do has $n && eventually 40 has_conv $(eval echo \$ID_$n); done
 before=$(prompts)
 has claude && C_claude=$(conv $ID_claude); has qwen && C_qwen=$(conv $ID_qwen)
 
 reboot_box || exit 1
 ok "rebooted"
 want=$(echo $AGENTS | wc -w | tr -d ' '); [ $CURSOR = 1 ] && want=$((want+1))
-for i in $(seq 1 60); do
-    [ "$(nsessions)" -ge $want ] && break; sleep 2
-done
-sleep 30
+eventually 240 enough_sessions $want
+for n in $AGENTS; do eventually 120 shows_after $(eval echo \$ID_$n) "hello first"; done
+[ $CURSOR = 1 ] && eventually 90 shows_after $ID_cursor "1111"
+sleep 3
 expect() { # name expected-command-line
     came_back_as "$(eval echo \$ID_$1)" "$2" && ok "$1 came back as: $2" || fail "$1: expected '$2'"
 }
@@ -77,7 +79,8 @@ after=$(prompts)
 [ "$after" = "$before" ] && ok "no first prompt was sent again ($before before, $after after)" || fail "a first prompt was sent again ($before → $after)"
 for n in $AGENTS; do send $(eval echo \$ID_$n) "after the reboot"; done
 [ $CURSOR = 1 ] && send $ID_cursor "What is 2200 plus 22? Reply with only the number."
-sleep 25
+for n in $AGENTS; do eventually 90 shows_after $(eval echo \$ID_$n) "noted: after the reboot"; done
+[ $CURSOR = 1 ] && eventually 90 shows_after $ID_cursor "2222"
 for n in $AGENTS; do
     since_restore $(eval echo \$ID_$n) | grep -q "noted: after the reboot" && ok "$n answers after the restore" || fail "$n: no answer after the restore"
 done

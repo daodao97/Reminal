@@ -120,6 +120,7 @@ type Agent struct {
 	restoring   bool
 	restoreRun  string
 	restoreNote string
+	restorePlan func() (run, note string)
 	restoreSeq  uint64
 	stopSignal  atomic.Bool
 
@@ -484,6 +485,9 @@ type AgentOptions struct {
 	// RestoreNote is shown under the restore banner: why the agent was not
 	// simply resumed (see resumePlan).
 	RestoreNote string
+	// RestorePlan, when set, works RestoreRun and RestoreNote out once the
+	// session is up — see LoadRestoreState.
+	RestorePlan func() (run, note string)
 	// Name is an optional human-friendly label for the session, surfaced by
 	// `reminal list` and usable in place of the ID. Set from
 	// `reminal new --name` / `reminal --name`. Empty leaves the session
@@ -567,6 +571,7 @@ func NewAgentWith(version string, opts AgentOptions) (*Agent, error) {
 			restoring:      r.PTY == nil,
 			restoreRun:     opts.RestoreRun,
 			restoreNote:    opts.RestoreNote,
+			restorePlan:    opts.RestorePlan,
 			resumeDump:     r.Dump,
 			headless:       opts.Headless || r.Headless,
 			handshakeFD:    opts.HandshakeFD,

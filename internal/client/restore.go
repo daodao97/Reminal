@@ -449,32 +449,42 @@ func shellJoin(argv []string) string {
 
 // LoadRestoreState turns a restore record into what a headless agent starts
 // from: the session's identity and scrollback, no PTY (a new shell is
-// started), and the command that resumes its agent.
-func LoadRestoreState(id string) (*ResumeState, string, string, error) {
+// started), and how to work out the command that resumes its agent.
+//
+// That last is a func, run once the session is up (restoreStart), not here:
+// it reads the agent's --help, which under the load of a login restoring
+// many sessions at once took longer than the daemon waits for a restored
+// session to report that it started — and the daemon gave up on it.
+func LoadRestoreState(id string) (*ResumeState, func() (run, note string), error) {
 	r, err := session.ReadRestore(id)
 	if err != nil {
-		return nil, "", "", fmt.Errorf("no restore record for %s: %w", id, err)
+		return nil, nil, fmt.Errorf("no restore record for %s: %w", id, err)
 	}
 	if r.PIN == "" {
-		return nil, "", "", errors.New("restore record has no PIN")
+		return nil, nil, errors.New("restore record has no PIN")
 	}
 	st := &ResumeState{SessionID: r.ID, PIN: r.PIN, PinHash: r.PinHash, Token: r.Token,
 		StartedAt: time.Now(), Name: r.Name, Headless: true}
 	if p, err := session.RestoreScrollbackPath(r.ID); err == nil {
 		st.Dump = readScrollbackDump(p)
 	}
-	peers, _ := session.ReadRestores()
-	argv, note := resumePlan(*r, peers)
-	run := ""
-	if argv != nil {
-		run = shellCommand(argv, config.Shell())
+	plan := func() (string, string) {
+		peers, _ := session.ReadRestores()
+		argv, note := resumePlan(*r, peers)
+		if argv == nil {
+			return "", note
+		}
+		return shellCommand(argv, config.Shell()), note
 	}
-	return st, run, note, nil
+	return st, plan, nil
 }
 
 // restoreStart runs once the new shell is up: the banner, then — when an
 // agent was running — the command that resumes it, typed at the prompt.
 func (a *Agent) restoreStart() {
+	if a.restorePlan != nil {
+		a.restoreRun, a.restoreNote = a.restorePlan()
+	}
 	a.record([]byte(restoreBanner))
 	if a.restoreNote != "" {
 		a.record([]byte("\x1b[2m" + a.restoreNote + "\x1b[0m\r\n"))

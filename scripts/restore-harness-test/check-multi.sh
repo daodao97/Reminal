@@ -36,26 +36,26 @@ if [ -n "$NOID" ]; then
     eval "S_${NOID}silent=$id A_${NOID}silent=$NOID"
     send $id "$(cmd_of $NOID)"
 fi
-sleep 15
+for s in $ALL ${NOID:+${NOID}silent}; do ready $(eval echo \$S_$s) $(cmd_of $(eval echo \$A_$s) | cut -d' ' -f1); done
 num=100
 for s in $ALL; do
     num=$((num+1)); eval "N_$s=$num"
     send $(eval echo \$S_$s) "my number is $num"
-    sleep 3
+    # one after another, so "latest" is well defined
+    eventually 60 shows $(eval echo \$S_$s) "noted: my number is $num"
 done
-sleep 12
 for s in $ALL; do
     id=$(eval echo \$S_$s) n=$(eval echo \$N_$s)
-    screen $id | grep -q "noted: my number is $n" && ok "$s ($id) holds conversation #$n" || fail "$s: no answer before the reboot"
+    shows $id "noted: my number is $n" && ok "$s ($id) holds conversation #$n" || fail "$s: no answer before the reboot"
 done
-sleep 16
+for s in $ALL ${NOID:+${NOID}silent}; do eventually 40 saved $(eval echo \$S_$s) $(cmd_of $(eval echo \$A_$s) | cut -d' ' -f1); done
 reboot_box || exit 1
 ok "rebooted"
 want=$(echo $ALL ${NOID:+x} | wc -w | tr -d ' ')
-for i in $(seq 1 60); do
-    [ "$(nsessions)" -ge "$want" ] && break; sleep 2
-done
-sleep 25
+eventually 240 enough_sessions $want
+# Settled: each session has been restored and has typed what it will type.
+for s in $ALL ${NOID:+${NOID}silent}; do eventually 90 shows_after $(eval echo \$S_$s) "restored this session"; done
+sleep 15
 procs=$(procs)
 # picker_open ID REGEX TEXT — the agent's own list is open: its process by
 # REGEX (Linux, macOS), or on Windows what reminal typed.

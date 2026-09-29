@@ -13,19 +13,19 @@ fail() { echo "FAIL $*"; fails=$((fails+1)); }
 cursor_logged_in || { echo "skip: no Cursor login in the box"; exit 0; }
 new() { newsess $1 $H/cs; }
 A=$(new csA); B=$(new csB)
-send $A "cursor-agent -f"; sleep 10
-screen $A | grep -q "Workspace Trust" && { send $A "a"; sleep 3; }
-send $B "cursor-agent -f"; sleep 10
-screen $B | grep -q "Workspace Trust" && { send $B "a"; sleep 3; }
+send $A "cursor-agent -f"; ready $A cursor-agent
+shows $A "Workspace Trust" && { send $A "a"; sleep 3; }
+send $B "cursor-agent -f"; ready $B cursor-agent
+shows $B "Workspace Trust" && { send $B "a"; sleep 3; }
 send $A "What is 9000 plus 9? Reply with only the number."
 send $B "What is 9100 plus 1? Reply with only the number."
-sleep 25
-screen $A | grep -q "9009" && ok "csA ($A) answered 9009" || fail "csA did not answer"
-screen $B | grep -q "9101" && ok "csB ($B) answered 9101" || fail "csB did not answer"
-sleep 17
+eventually 90 shows $A "9009" && ok "csA ($A) answered 9009" || fail "csA did not answer"
+eventually 90 shows $B "9101" && ok "csB ($B) answered 9101" || fail "csB did not answer"
+eventually 40 saved $A cursor-agent; eventually 40 saved $B cursor-agent
 reboot_box || exit 1; ok "rebooted"
-for i in $(seq 1 90); do l=$(bx 'reminal list 2>/dev/null'); printf '%s\n' "$l" | grep -q "$B" && printf '%s\n' "$l" | grep -q "$A" && break; sleep 2; done
-sleep 25
+eventually 240 enough_sessions 2
+for s in $A $B; do eventually 90 shows_after $s "cursor-agent -f --resume"; done
+sleep 5
 if [ "$T" = win ]; then
     n=0; for s in $A $B; do typed $s "cursor-agent -f --resume" && n=$((n+1)); done
 else

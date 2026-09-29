@@ -25,42 +25,46 @@ for h in $HARNESSES; do
     [ $name = codex ] && cmd="codex ${CODEX_EXTRA:-}"
     send $(id $name) "$cmd"
 done
-sleep 15
-[ $CURSOR = 1 ] && screen $(id cursor) | grep -q "Workspace Trust" && { send $(id cursor) "a"; sleep 3; }
+for h in $HARNESSES; do ready $(id ${h%%:*}) ${h#*:}; done
+[ $CURSOR = 1 ] && shows $(id cursor) "Workspace Trust" && { send $(id cursor) "a"; sleep 3; }
 for h in $HARNESSES; do
     n=${h%%:*}
     if [ $n = cursor ] && [ $CURSOR = 1 ]; then send $(id $n) "What is 4200 plus 42? Reply with only the number."
     else send $(id $n) "remember the number 4242"; fi
 done
-sleep 20
 for h in $HARNESSES; do
     n=${h%%:*}; sid=$(id $n)
     if [ $n = cursor ]; then
         if [ $CURSOR = 1 ]; then
-            screen $sid | grep -q "4242" && ok "cursor ($sid) is in a conversation" || fail "cursor: no answer before the reboot"
+            eventually 90 shows $sid "4242" && ok "cursor ($sid) is in a conversation" || fail "cursor: no answer before the reboot"
         else
-            screen $sid | grep -q "log in" && skip "cursor: needs a Cursor login — conversation not testable here" || fail "cursor: unexpected screen"
+            eventually 30 shows $sid "log in" && skip "cursor: needs a Cursor login — conversation not testable here" || fail "cursor: unexpected screen"
         fi
         continue
     fi
-    screen $sid | grep -q "noted: remember the number 4242" && ok "$n ($sid) is in a conversation" || fail "$n: no answer before the reboot"
+    eventually 90 shows $sid "noted: remember the number 4242" && ok "$n ($sid) is in a conversation" || fail "$n: no answer before the reboot"
 done
-sleep 17   # one restore save
 for h in $HARNESSES; do
-    n=${h%%:*}; fg=$(record $(id $n) fg); want=${h#*:}
-    [ "$fg" = "$want" ] && ok "$n: saved as running $fg" || fail "$n: saved as running '$fg'"
+    n=${h%%:*}; want=${h#*:}
+    eventually 40 saved $(id $n) $want && ok "$n: saved as running $want" || fail "$n: saved as running '$(record $(id $n) fg)'"
 done
 for n in claude qwen gemini; do
     echo " $HARNESSES " | grep -q " $n:" || continue
-    c=$(record $(id $n) conv); eval "CONV_$n=$c"; [ -n "$c" ] && ok "$n: its hook reported conversation $c" || fail "$n: no conversation id"
+    eventually 40 has_conv $(id $n); c=$(record $(id $n) conv); eval "CONV_$n=$c"; [ -n "$c" ] && ok "$n: its hook reported conversation $c" || fail "$n: no conversation id"
 done
 
 reboot_box || exit 1
 ok "box rebooted with all of them mid-conversation"
 want=$(echo $HARNESSES | wc -w | tr -d ' ')
-for i in $(seq 1 90); do [ "$(nsessions)" -ge $want ] && break; sleep 2; done
-sleep 25
+eventually 240 enough_sessions $want
 list=$(bx 'reminal list 2>/dev/null')
+# Back on its conversation: the resumed agent has drawn what was said before.
+for h in $HARNESSES; do
+    n=${h%%:*}
+    if [ $n = cursor ]; then eventually 60 shows_after $(id $n) "cursor-agent --continue"; [ $CURSOR = 1 ] && eventually 90 shows_after $(id $n) "4242"
+    else eventually 120 shows_after $(id $n) "remember the number 4242"; fi
+    sleep 1
+done
 resume_of() {
     case $1 in
         claude) echo "claude --resume $CONV_claude" ;;
@@ -76,7 +80,11 @@ for h in $HARNESSES; do
     if [ $n = cursor ] && [ $CURSOR = 1 ]; then send $(id $n) "What is 2200 plus 22? Reply with only the number."
     else send $(id $n) "what number"; fi
 done
-sleep 20
+for h in $HARNESSES; do
+    n=${h%%:*}
+    if [ $n = cursor ]; then [ $CURSOR = 1 ] && eventually 90 shows_after $(id $n) "2222"
+    else eventually 90 shows_after $(id $n) "noted: what number"; fi
+done
 for h in $HARNESSES; do
     n=${h%%:*}; sid=$(id $n)
     printf '%s\n' "$list" | grep -q "$sid" && ok "$n: back as $sid" || { fail "$n: $sid not back"; continue; }
