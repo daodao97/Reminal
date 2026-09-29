@@ -21,6 +21,11 @@
   /* figures: the same in both themes */
   --fig:#0a0a0a; --figbar:#111; --figline:#1f1f1f; --figline2:#2e2e2e;
   --figink:#ededed; --figdim:#a1a1a1; --figmute:#707070; --figyes:#62c073;
+  /* windows inside a figure: lighter than the figure, on a real wallpaper,
+     so each one reads at a glance */
+  --wall:linear-gradient(150deg,#cfcfcf 0%,#9a9a9a 45%,#666 100%);
+  --win:#232323; --winbar:#303030; --winline:#5a5a5a;
+  --winink:#f2f2f2; --windim:#c8c8c8; --winmute:#a3a3a3;
   color-scheme:light;
 }
 @media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
