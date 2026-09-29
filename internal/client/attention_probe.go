@@ -242,6 +242,17 @@ func isAgentProgram(name string) bool { return agentPrograms[name] }
 // screen into read_transcript.
 var ambiguousPrograms = map[string]bool{"pi": true}
 
+// npmPackagePrograms are the npm packages agents ship in, by the folder their
+// scripts live under, and the program each is. Unambiguous as a path
+// component: no other program lives in node_modules/@qwen-code/qwen-code.
+var npmPackagePrograms = map[string]string{
+	"claude-code":     "claude",
+	"qwen-code":       "qwen",
+	"gemini-cli":      "gemini",
+	"pi-coding-agent": "pi",
+	"opencode-ai":     "opencode",
+}
+
 // foregroundProgram names the program behind a command name. The kernel's
 // name is often not it: Node renames its main thread, so cursor-agent shows up
 // as "MainThread", and other agents run as plain "node" or "python3". The
@@ -267,8 +278,16 @@ func programFromArgs(args []string, comm string) string {
 		if strings.HasPrefix(arg, "-") {
 			continue
 		}
-		for _, seg := range strings.Split(filepath.ToSlash(arg), "/") {
+		// Either separator, whatever the OS the record is read on.
+		segs := strings.FieldsFunc(arg, func(r rune) bool { return r == '/' || r == '\\' })
+		for _, seg := range segs {
 			seg = strings.TrimSuffix(seg, filepath.Ext(seg))
+			// On Windows npm's shim runs the package's own script —
+			// …\@qwen-code\qwen-code\cli-entry.js — so the package folder
+			// is where the program's name is; Unix's shim path ends in it.
+			if p, ok := npmPackagePrograms[seg]; ok {
+				return p
+			}
 			if !isAgentProgram(seg) {
 				continue
 			}
@@ -284,7 +303,9 @@ func programFromArgs(args []string, comm string) string {
 	return ""
 }
 
-// processArgs is a process's command line: /proc on Linux, ps elsewhere.
+// processArgs is a process's command line, each argument whole: /proc on
+// Linux, the kernel's own copy on macOS and Windows (see processargs_*.go),
+// ps elsewhere — where an argument with a space in it comes apart.
 func processArgs(pid int) []string {
 	if runtime.GOOS == "linux" {
 		b, err := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/cmdline")
@@ -292,6 +313,9 @@ func processArgs(pid int) []string {
 			return nil
 		}
 		return strings.FieldsFunc(string(b), func(r rune) bool { return r == 0 })
+	}
+	if args, ok := processArgsNative(pid); ok {
+		return args
 	}
 	out, err := exec.Command("ps", "-o", "args=", "-p", strconv.Itoa(pid)).Output()
 	if err != nil {

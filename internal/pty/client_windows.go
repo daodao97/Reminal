@@ -22,6 +22,8 @@ import (
 	"sync"
 	"syscall"
 	"time"
+
+	"golang.org/x/sys/windows"
 )
 
 // detachedProcessFlag is CreateProcess's DETACHED_PROCESS: the holder gets no
@@ -300,4 +302,21 @@ func (s *Session) CopyFrom(r io.Reader, done chan<- struct{}) {
 func (s *Session) CopyTo(w io.Writer, done chan<- struct{}) {
 	defer close(done)
 	_, _ = io.Copy(w, s)
+}
+
+// EndedBySignal on Windows: there are no signals, but Windows says when the
+// session is shutting down (SM_SHUTTINGDOWN) — a shell that ended then was
+// ended by the shutdown, not by its user.
+func (s *Session) EndedBySignal() bool { return systemShuttingDown() }
+
+var procGetSystemMetrics = windows.NewLazySystemDLL("user32.dll").NewProc("GetSystemMetrics")
+
+const smShuttingDown = 0x2000
+
+func systemShuttingDown() bool {
+	if procGetSystemMetrics.Find() != nil {
+		return false
+	}
+	r, _, _ := procGetSystemMetrics.Call(smShuttingDown)
+	return r != 0
 }

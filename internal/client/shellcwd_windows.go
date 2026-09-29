@@ -38,6 +38,14 @@ const (
 	paramsCurrentDirOff     = 0x38 // RTL_USER_PROCESS_PARAMETERS.CurrentDirectory.DosPath
 )
 
+// processCwdWindows is one process's own current directory — not the
+// youngest descendant's, which is what a shell's cwd is guessed from.
+func processCwdWindows(pid int) string { return pebCwd(uint32(pid)) }
+
+// consoleHost are the processes Windows attaches to a console program: not
+// the user's, and never where they are working.
+var consoleHost = map[string]bool{"conhost.exe": true, "openconsole.exe": true}
+
 func shellCwdWindows(pid int) string {
 	// Prefer the youngest descendant (the "foreground-ish" process); fall
 	// back to the shell itself. Any candidate that yields no path falls
@@ -64,6 +72,13 @@ func cwdCandidates(shellPid int) []uint32 {
 	var pe windows.ProcessEntry32
 	pe.Size = uint32(unsafe.Sizeof(pe))
 	for err := windows.Process32First(snap, &pe); err == nil; err = windows.Process32Next(snap, &pe) {
+		// A console program's conhost.exe is always younger than it, and it
+		// runs in C:\Windows: taken for the "foreground-ish" process, it put
+		// every session running claude in C:\Windows — and a restore there,
+		// where claude has no such conversation.
+		if consoleHost[strings.ToLower(windows.UTF16ToString(pe.ExeFile[:]))] {
+			continue
+		}
 		children[pe.ParentProcessID] = append(children[pe.ParentProcessID], pe.ProcessID)
 	}
 

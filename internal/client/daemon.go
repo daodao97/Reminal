@@ -73,6 +73,9 @@ func RunDaemon(version string) error {
 	// Phone alerts (CPU, battery, charger) for every owner phone that asked.
 	// Idle — no sampling at all — until one has.
 	go runPushWatcher(stop)
+	// Sessions a restart ended come back as they were — the daemon starts at
+	// login, so this is the moment after a reboot. See restore.go.
+	go restoreAtStart()
 	runDirectoryHost(stop, true, version)
 	return nil
 }

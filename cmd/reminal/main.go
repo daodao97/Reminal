@@ -679,6 +679,12 @@ func main() {
 			fmt.Fprintln(os.Stderr, "usage: reminal add owner <id> [--label <name>] [-y]")
 			os.Exit(1)
 			return
+		case "restore":
+			if err := runRestore(os.Args[2:]); err != nil {
+				fmt.Fprintf(os.Stderr, "error: %v\n", err)
+				os.Exit(1)
+			}
+			return
 		case "issues":
 			if err := runIssues(os.Args[2:]); err != nil {
 				fmt.Fprintf(os.Stderr, "error: %v\n", err)
@@ -763,6 +769,15 @@ func main() {
 			hlName = os.Getenv("REMINAL_NEW_NAME")
 		}
 		opts := client.AgentOptions{Headless: true, HandshakeFD: *handshakeFD, HandshakeAddr: *handshakeAddr, Name: hlName}
+		// Started by `reminal restore`: the session comes back as itself.
+		if id := client.RestoreEnvID(); id != "" {
+			st, plan, err := client.LoadRestoreState(id)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "error: %v\n", err)
+				os.Exit(1)
+			}
+			opts.Resume, opts.RestorePlan = st, plan
+		}
 		agent, err := client.NewAgentWith(version, opts)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
@@ -862,6 +877,7 @@ func printHelp() {
 		{"reminal machines [rename <id> <name>]", "List every machine you own and its live sessions"},
 		{"reminal stop [id|name|port] [-y]", "Stop the reminal layer — your shell/server keeps running"},
 		{"reminal kill [id|name] [--machine <id|name>] [-y]", "Fully terminate a shell session — here or on a machine you own (irreversible)"},
+		{"reminal restore [id|name|--all]", "Bring back sessions a restart ended: same id and PIN, scrollback, agent resumed"},
 		{"reminal send <file>", "Push a file to every connected viewer (web auto-downloads)"},
 		{"reminal copy [--ttl <dur>] [-f] <file>", "Offer a file for pickup elsewhere; prints a one-time code"},
 		{"reminal paste <code> [dest]", "Fetch a file offered by 'reminal copy' (default dest: .)"},
@@ -2285,6 +2301,8 @@ func terminateAgent(a session.Active) error {
 	// Always drop the record, however termination goes — the agent may already
 	// be dead and unable to clean up after itself.
 	defer func() { _ = session.ClearActive(a.ID) }()
+	// Killed on purpose: never to be restored.
+	defer func() { _ = session.ClearRestore(a.ID) }()
 
 	pid := a.PID
 	// Ask first. A foreground agent owns the terminal it was started in — raw

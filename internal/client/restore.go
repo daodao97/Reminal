@@ -1,0 +1,603 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 Harshal Gajjar
+
+package client
+
+import (
+	"encoding/json"
+	"errors"
+	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"regexp"
+	"runtime"
+	"strings"
+	"time"
+
+	"reminal/internal/config"
+	"reminal/internal/session"
+)
+
+// Logical restore: a session that was running when its machine went down
+// comes back as itself — the same id and PIN, so every link and every
+// viewer's recents still work — with its scrollback, a new shell where the
+// old one was, and the coding agent it was running started again on the
+// same conversation. The processes are new; what a person was doing is not
+// lost. Works on every OS: it needs nothing from the kernel.
+//
+// While a session runs, its agent keeps a session.Restore record and a copy
+// of its scrollback up to date (restoreSaveEvery). The record survives the
+// process — a shutdown, a crash, a reboot — and goes only when the session
+// is ended on purpose. `reminal restore` (or the daemon, at login) starts a
+// headless agent with REMINAL_RESTORE=<id>, which takes the record over.
+
+const (
+	restoreSaveEvery = 15 * time.Second
+	// restoreSettle is how long a restored session's record keeps saying
+	// which agent it had, while the sessions around it are restored.
+	restoreSettle = 2 * time.Minute
+	envRestore    = "REMINAL_RESTORE"
+)
+
+// processCwd is one process's own working directory.
+func processCwd(pid int) string {
+	if pid <= 0 {
+		return ""
+	}
+	if runtime.GOOS == "windows" {
+		return processCwdWindows(pid)
+	}
+	return shellCwd(pid)
+}
+
+// restoreBanner marks, in the scrollback, where the old session ends and
+// the restored one begins.
+const restoreBanner = "\r\n\x1b[2m── reminal restored this session after its machine restarted ──\x1b[0m\r\n"
+
+// saveRestore writes this session's restore record, and its scrollback when
+// there is new output. Called on a timer; a failure costs only freshness.
+func (a *Agent) saveRestore() {
+	if a == nil || a.term == nil || a.paused.Load() || a.sessionID == "" {
+		return
+	}
+	a.metaMu.Lock()
+	name, cwd := a.name, a.cwd
+	a.metaMu.Unlock()
+	r := session.Restore{
+		ID: a.sessionID, PIN: a.pin, PinHash: a.pinHash, Token: a.token,
+		Name: name, Cwd: cwd, Headless: a.headless, SavedAt: time.Now(),
+	}
+	prog, args, pid, atPrompt := restoreForeground(a.term)
+	if _, ok := resumers[prog]; ok {
+		r.Fg, r.FgArgs = prog, args
+		r.Conv = session.ReadConv(a.sessionID)
+		// Resumed where the agent itself runs: an agent keys its
+		// conversations by folder, and the session's own cwd is a guess —
+		// on Windows, from its youngest helper process (cursor-agent's
+		// worker sits in the home folder).
+		if c := processCwd(pid); c != "" {
+			r.Cwd = c
+		}
+	}
+	// Something else is in the foreground for a moment (a pager the agent
+	// opened, say): keep what was last known. Only the shell's own prompt
+	// says the agent has ended — except just after a restore, when the
+	// prompt is there because the agent has not been started again yet.
+	// Sessions restored after this one decide from this record whether
+	// they shared a folder with it (see resumePlan), so until the restore
+	// settles it keeps saying what was running.
+	restoringNow := a.restoring && time.Since(a.startedAt) < restoreSettle
+	if r.Fg == "" && (restoringNow || !atPrompt) {
+		if prev, err := session.ReadRestore(a.sessionID); err == nil {
+			r.Fg, r.FgArgs, r.Conv = prev.Fg, prev.FgArgs, prev.Conv
+		}
+	}
+	_ = session.WriteRestore(r)
+	if seq := a.buf.LatestSeq(); seq != a.restoreSeq {
+		if p, err := session.RestoreScrollbackPath(a.sessionID); err == nil {
+			if err := a.writeScrollbackDumpTo(p); err == nil {
+				a.restoreSeq = seq
+			}
+		}
+	}
+}
+
+func (a *Agent) restoreLoop(stop <-chan struct{}) {
+	t := time.NewTicker(restoreSaveEvery)
+	defer t.Stop()
+	a.saveRestore()
+	for {
+		select {
+		case <-stop:
+			return
+		case <-t.C:
+			a.saveRestore()
+		}
+	}
+}
+
+// settleRestore decides, as the session ends, whether it may come back. A
+// session ended on purpose — its shell exited by itself — is forgotten; one
+// ended by a signal (the machine shutting down, a crash) is kept. `reminal
+// kill` and `reminal stop` forget it themselves.
+func (a *Agent) settleRestore() {
+	if a.stopSignal.Load() {
+		return
+	}
+	if a.term != nil && a.term.EndedBySignal() {
+		return
+	}
+	_ = session.ClearRestore(a.sessionID)
+}
+
+// ---- the command that picks the agent up again ------------------------------
+
+type resumer struct {
+	byID   func(bin string, flags []string, conv string) []string
+	latest func(bin string, flags []string) []string
+	// pick opens the agent's own list of conversations to choose from —
+	// what is typed when "latest" could be another session's.
+	pick func(bin string, flags []string) []string
+	// how says, to a person, how to find a conversation again by hand, for
+	// an agent with no list to open.
+	how string
+}
+
+func plainFlags(bin string, flags []string, tail ...string) []string {
+	return append(append([]string{bin}, flags...), tail...)
+}
+
+// resumers: how each coding agent is told to pick a conversation up again —
+// by the id its hook reported when there is one, else its latest in this
+// directory. The flags it was started with (a model, a permission mode)
+// are kept; a prompt given on the command line is not, or it would be sent
+// again.
+var resumers = map[string]resumer{
+	"claude": {
+		byID:   func(b string, f []string, c string) []string { return plainFlags(b, f, "--resume", c) },
+		latest: func(b string, f []string) []string { return plainFlags(b, f, "--continue") },
+		pick:   func(b string, f []string) []string { return plainFlags(b, f, "--resume") },
+	},
+	"codex": {
+		byID:   func(b string, f []string, c string) []string { return append(append([]string{b, "resume"}, f...), c) },
+		latest: func(b string, f []string) []string { return append(append([]string{b, "resume"}, f...), "--last") },
+		pick:   func(b string, f []string) []string { return append([]string{b, "resume"}, f...) },
+	},
+	"cursor-agent": {
+		byID:   func(b string, f []string, c string) []string { return plainFlags(b, f, "--resume", c) },
+		latest: func(b string, f []string) []string { return plainFlags(b, f, "--continue") },
+		pick:   func(b string, f []string) []string { return plainFlags(b, f, "--resume") },
+	},
+	"gemini": {
+		latest: func(b string, f []string) []string { return plainFlags(b, f, "--resume", "latest") },
+		how:    "gemini --list-sessions, then gemini --resume <number>",
+	},
+	"qwen": {
+		byID:   func(b string, f []string, c string) []string { return plainFlags(b, f, "--resume", c) },
+		latest: func(b string, f []string) []string { return plainFlags(b, f, "--continue") },
+		pick:   func(b string, f []string) []string { return plainFlags(b, f, "--resume") },
+	},
+	"opencode": {
+		latest: func(b string, f []string) []string { return plainFlags(b, f, "--continue") },
+		how:    "opencode session list, then opencode --session <id>",
+	},
+	"pi": {
+		latest: func(b string, f []string) []string { return plainFlags(b, f, "--continue") },
+		how:    "start pi and pick the conversation from its session list",
+	},
+	"agy": {
+		latest: func(b string, f []string) []string { return plainFlags(b, f, "--continue") },
+		how:    "start agy and pick the conversation from its session list",
+	},
+	"amp": {
+		latest: func(b string, _ []string) []string { return []string{b, "threads", "continue"} },
+		how:    "amp threads list, then amp threads continue <id>",
+	},
+}
+
+// valueFlags take the next argument as their value — used only when an
+// agent's --help could not be read (see restoreflags.go).
+var valueFlags = map[string]bool{
+	"--model": true, "-m": true, "--permission-mode": true, "--add-dir": true, "--agent": true,
+	"--settings": true, "--mcp-config": true, "--allowedTools": true, "--allowed-tools": true,
+	"--disallowedTools": true, "--disallowed-tools": true, "--append-system-prompt": true,
+	"--fallback-model": true, "--sandbox": true, "--profile": true,
+	"--provider": true, "-e": true, "--extension": true, "--thinking": true, "--approval-mode": true,
+}
+
+// argRules are what each agent's arguments mean that its --help cannot say:
+// which make a run one-shot (nothing to resume), which pick or start a
+// conversation (replaced by the resume), and which carry a prompt (never
+// sent twice). They differ by agent — -p is claude's print mode and codex's
+// profile; -c is claude's continue and codex's config.
+type argRules struct {
+	oneShot    []string // flags that make a run non-interactive
+	oneShotSub []string // subcommands that are not a conversation
+	drop       []string // flags a resume replaces, or a prompt rides on
+}
+
+var agentRules = map[string]argRules{
+	"claude": {oneShot: []string{"-p", "--print"},
+		oneShotSub: []string{"mcp", "config", "update", "doctor", "install", "setup-token", "plugin", "migrate-installer"},
+		drop:       []string{"--resume", "-r", "--continue", "-c", "--session-id", "--fork-session", "--from-pr"}},
+	"codex": {oneShotSub: []string{"exec", "e", "review", "login", "logout", "mcp", "mcp-server", "app-server", "completion", "sandbox", "debug", "apply", "a", "cloud", "features"},
+		drop: []string{"--last", "--all"}},
+	"cursor-agent": {oneShot: []string{"-p", "--print"},
+		oneShotSub: []string{"login", "logout", "status", "whoami", "mcp", "update", "upgrade", "ls", "create-chat", "install-shell-integration", "uninstall-shell-integration"},
+		drop:       []string{"--resume", "--continue"}},
+	"gemini": {oneShot: []string{"-p", "--prompt", "--list-sessions", "--delete-session", "--list-extensions"},
+		oneShotSub: []string{"mcp", "extensions"},
+		drop:       []string{"--resume", "-r", "--session-id", "--session-file", "-i", "--prompt-interactive"}},
+	"qwen": {oneShot: []string{"-p", "--prompt"},
+		oneShotSub: []string{"mcp", "extensions"},
+		drop:       []string{"--resume", "-r", "--continue", "-c", "--session-id", "--fork-session", "-i", "--prompt-interactive"}},
+	"opencode": {oneShotSub: []string{"run", "serve", "web", "acp", "mcp", "models", "session", "export", "import", "github", "stats", "auth", "upgrade", "agent", "plugin", "uninstall", "debug"},
+		drop: []string{"--continue", "-c", "--session", "-s", "--fork", "--prompt"}},
+	"pi": {oneShot: []string{"-p", "--print"},
+		drop: []string{"--continue", "-c", "--resume", "-r", "--session"}},
+}
+
+func inList(l []string, s string) bool {
+	for _, x := range l {
+		if x == s {
+			return true
+		}
+	}
+	return false
+}
+
+// flagSpecFor is the flag spec an agent's --help gives, asked once per agent
+// in a process. Replaced in tests.
+var flagSpecFor = func() func(string) flagSpec {
+	cache := map[string]flagSpec{}
+	return func(bin string) flagSpec {
+		if s, ok := cache[bin]; ok {
+			return s
+		}
+		s := helpSpec(bin)
+		cache[bin] = s
+		return s
+	}
+}()
+
+// resumeArgv is the command that resumes r's agent, or nil — assuming it is
+// the only one of its kind in its folder (see resumePlan).
+func resumeArgv(r session.Restore) []string {
+	rs, ok := resumers[r.Fg]
+	if !ok {
+		return nil
+	}
+	flags, ok := resumeFlags(r)
+	if !ok {
+		return nil
+	}
+	if r.Conv != "" && rs.byID != nil {
+		return rs.byID(r.Fg, flags, r.Conv)
+	}
+	if rs.latest != nil {
+		return rs.latest(r.Fg, flags)
+	}
+	return nil
+}
+
+// resumePlan is what to type into r's restored shell, and a line to show
+// above it, given every other session that is being (or was) restored.
+//
+// Resuming by id is exact. "Latest" is exact only when r was the one
+// session running its agent in its folder: when two claudes shared a
+// folder and a reboot ended both, "the latest conversation here" is one
+// of theirs for both of them. Then the agent's own list is opened so a
+// person picks — or, for an agent with none, it is not started and the
+// line says how to find the conversation.
+func resumePlan(r session.Restore, peers []session.Restore) (argv []string, note string) {
+	argv = resumeArgv(r)
+	rs := resumers[r.Fg]
+	if argv == nil || (r.Conv != "" && rs.byID != nil) || !sharesFolder(r, peers) {
+		return argv, ""
+	}
+	flags, _ := resumeFlags(r)
+	if rs.pick != nil {
+		return rs.pick(r.Fg, flags), "several " + r.Fg + " conversations were running in this folder — pick this session's"
+	}
+	how := rs.how
+	if how == "" {
+		how = "start " + r.Fg + " and pick the conversation"
+	}
+	return nil, r.Fg + " was running here, as it was in another session in this folder; to find this one's conversation: " + how
+}
+
+// sharesFolder says another session ran the same agent in r's folder.
+func sharesFolder(r session.Restore, peers []session.Restore) bool {
+	for _, p := range peers {
+		if p.ID != r.ID && p.Fg == r.Fg && p.Cwd != "" && filepath.Clean(p.Cwd) == filepath.Clean(r.Cwd) {
+			return true
+		}
+	}
+	return false
+}
+
+// resumeFlags are the flags r's agent was started with that its resume
+// takes, each with its value; false for a run that was never interactive.
+//
+// With its --help to go by, a flag is carried only if the resume command
+// lists it, and a value only where the help says the flag takes one — so
+// neither a flag the resume would refuse nor a prompt ever gets through.
+// Without it, only the flags known here are.
+func resumeFlags(r session.Restore) ([]string, bool) {
+	// Where the program's own arguments start: past its interpreter and the
+	// interpreter's own options, to the LAST argument naming its file.
+	// cursor-agent runs as `cursor-agent --use-system-ca
+	// …/cursor-agent/versions/…/index.js <its args>` — the first mention is a
+	// launcher, and --use-system-ca is node's, not cursor's to be given.
+	args := r.FgArgs
+	start := 0
+	for i, a := range args {
+		if strings.HasPrefix(a, "-") || !strings.Contains(a, r.Fg) {
+			continue
+		}
+		if i == 0 || isRegularFile(a) {
+			start = i + 1
+		}
+	}
+	if start == 0 && len(args) > 0 {
+		start = 1
+	}
+	rules := agentRules[r.Fg]
+	spec := flagSpecFor(r.Fg)
+	known := func(name string) (takes, ok bool) {
+		if spec == nil {
+			return valueFlags[name], strings.HasPrefix(name, "-")
+		}
+		if v, ok := spec[name]; ok {
+			return v, true
+		}
+		// yargs takes --no-<flag> for any boolean it lists.
+		if strings.HasPrefix(name, "--no-") {
+			if v, ok := spec["--"+strings.TrimPrefix(name, "--no-")]; ok && !v {
+				return false, true
+			}
+		}
+		return false, false
+	}
+	var flags []string
+	sawPositional := false
+	for i := start; i < len(args); i++ {
+		a := args[i]
+		if a == "--" {
+			break // what follows is a prompt
+		}
+		if !strings.HasPrefix(a, "-") || a == "-" {
+			if !sawPositional && inList(rules.oneShotSub, a) {
+				return nil, false
+			}
+			sawPositional = true
+			continue // a prompt, or a subcommand: not carried over
+		}
+		name, _, hasValue := strings.Cut(a, "=")
+		if inList(rules.oneShot, name) {
+			return nil, false
+		}
+		takes, ok := known(name)
+		if inList(rules.drop, name) {
+			// Its value goes with it: taken when the help says so, or — for
+			// an optional one ([id]) — whatever does not look like a flag.
+			if !hasValue && i+1 < len(args) && !strings.HasPrefix(args[i+1], "-") && (takes || spec == nil) {
+				i++
+			}
+			continue
+		}
+		if !ok {
+			// Not a flag this resume takes. Its value, if it has one, is
+			// not a flag either, and is dropped as a positional would be.
+			continue
+		}
+		flags = append(flags, a)
+		if takes && !hasValue && i+1 < len(args) {
+			flags = append(flags, args[i+1])
+			i++
+		}
+	}
+	return flags, true
+}
+
+var shellSafe = regexp.MustCompile(`^[A-Za-z0-9_@%+=:,./-]+$`)
+
+// shellCommand is argv as a line for the session's shell to run: POSIX
+// quoting, or PowerShell's or cmd's on Windows.
+func shellCommand(argv []string, shell string) string {
+	base := strings.ToLower(shell[strings.LastIndexAny(shell, `/\`)+1:])
+	switch {
+	case strings.HasPrefix(base, "pwsh"), strings.HasPrefix(base, "powershell"):
+		q := make([]string, len(argv))
+		for i, a := range argv {
+			if shellSafe.MatchString(a) && !strings.ContainsAny(a, "@") {
+				q[i] = a
+			} else {
+				q[i] = "'" + strings.ReplaceAll(a, "'", "''") + "'"
+			}
+		}
+		return strings.Join(q, " ")
+	case strings.HasPrefix(base, "cmd"):
+		q := make([]string, len(argv))
+		for i, a := range argv {
+			if shellSafe.MatchString(a) && !strings.ContainsAny(a, "%") {
+				q[i] = a
+			} else {
+				q[i] = `"` + strings.ReplaceAll(a, `"`, `""`) + `"`
+			}
+		}
+		return strings.Join(q, " ")
+	}
+	return shellJoin(argv)
+}
+
+// shellJoin quotes an argv for a POSIX shell.
+func shellJoin(argv []string) string {
+	q := make([]string, len(argv))
+	for i, a := range argv {
+		if shellSafe.MatchString(a) {
+			q[i] = a
+		} else {
+			q[i] = "'" + strings.ReplaceAll(a, "'", `'\''`) + "'"
+		}
+	}
+	return strings.Join(q, " ")
+}
+
+// ---- coming back --------------------------------------------------------------
+
+// LoadRestoreState turns a restore record into what a headless agent starts
+// from: the session's identity and scrollback, no PTY (a new shell is
+// started), and how to work out the command that resumes its agent.
+//
+// That last is a func, run once the session is up (restoreStart), not here:
+// it reads the agent's --help, which under the load of a login restoring
+// many sessions at once took longer than the daemon waits for a restored
+// session to report that it started — and the daemon gave up on it.
+func LoadRestoreState(id string) (*ResumeState, func() (run, note string), error) {
+	r, err := session.ReadRestore(id)
+	if err != nil {
+		return nil, nil, fmt.Errorf("no restore record for %s: %w", id, err)
+	}
+	if r.PIN == "" {
+		return nil, nil, errors.New("restore record has no PIN")
+	}
+	st := &ResumeState{SessionID: r.ID, PIN: r.PIN, PinHash: r.PinHash, Token: r.Token,
+		StartedAt: time.Now(), Name: r.Name, Headless: true}
+	if p, err := session.RestoreScrollbackPath(r.ID); err == nil {
+		st.Dump = readScrollbackDump(p)
+	}
+	plan := func() (string, string) {
+		peers, _ := session.ReadRestores()
+		argv, note := resumePlan(*r, peers)
+		if argv == nil {
+			return "", note
+		}
+		return shellCommand(argv, config.Shell()), note
+	}
+	return st, plan, nil
+}
+
+// restoreStart runs once the new shell is up: the banner, then — when an
+// agent was running — the command that resumes it, typed at the prompt.
+func (a *Agent) restoreStart() {
+	if a.restorePlan != nil {
+		a.restoreRun, a.restoreNote = a.restorePlan()
+	}
+	a.record([]byte(restoreBanner))
+	if a.restoreNote != "" {
+		a.record([]byte("\x1b[2m" + a.restoreNote + "\x1b[0m\r\n"))
+	}
+	run := a.restoreRun
+	if run == "" {
+		return
+	}
+	// The prompt is drawn when the shell has printed and gone quiet.
+	start := a.buf.LatestSeq()
+	last, quietSince := start, time.Now()
+	for deadline := time.Now().Add(10 * time.Second); time.Now().Before(deadline); time.Sleep(100 * time.Millisecond) {
+		if s := a.buf.LatestSeq(); s != last {
+			last, quietSince = s, time.Now()
+		}
+		if last != start && time.Since(quietSince) > 700*time.Millisecond {
+			break
+		}
+	}
+	body, tail, err := PrepareInjectKeysSplit(run, true)
+	if err != nil || a.injectKeys(body) != nil {
+		return
+	}
+	if tail != nil {
+		time.Sleep(EnterSettle)
+		_ = a.injectKeys(tail)
+	}
+}
+
+// Restorable is a session that can be brought back: a record whose session
+// is not running.
+func Restorable() ([]session.Restore, error) {
+	all, err := session.ReadRestores()
+	if err != nil {
+		return nil, err
+	}
+	live := map[string]bool{}
+	if act, err := session.ReadAllActive(); err == nil {
+		for _, x := range act {
+			live[x.ID] = true
+		}
+	}
+	var out []session.Restore
+	for _, r := range all {
+		if !live[r.ID] {
+			out = append(out, r)
+		}
+	}
+	return out, nil
+}
+
+// RestoreSession starts a headless agent that takes r over. Its shell starts
+// where the old one was, or at home when that directory is gone.
+func RestoreSession(r session.Restore) (*SpawnedSession, error) {
+	exe, err := os.Executable()
+	if err != nil {
+		return nil, err
+	}
+	devnull, err := os.OpenFile(os.DevNull, os.O_RDWR, 0)
+	if err != nil {
+		return nil, err
+	}
+	defer devnull.Close()
+	cmd := exec.Command(exe, "--headless")
+	cmd.Env = append(os.Environ(), envRestore+"="+r.ID)
+	cmd.Stdin, cmd.Stdout, cmd.Stderr = devnull, devnull, devnull
+	if dir, err := resolveSpawnDir(r.Cwd); err == nil && dir != "" {
+		cmd.Dir = dir
+	} else if home, err := os.UserHomeDir(); err == nil {
+		cmd.Dir = home
+	}
+	recv, afterStart, err := prepareHandshake(cmd)
+	if err != nil {
+		return nil, err
+	}
+	if err := cmd.Start(); err != nil {
+		afterStart()
+		return nil, err
+	}
+	afterStart()
+	reapDetached(cmd)
+	line, err := recv(spawnHandshakeTimeout)
+	if err != nil {
+		return nil, err
+	}
+	sp := &SpawnedSession{}
+	if err := json.Unmarshal([]byte(line), sp); err != nil {
+		return nil, fmt.Errorf("parse handshake: %w", err)
+	}
+	return sp, nil
+}
+
+// RestoreEnvID is the session a headless agent was started to restore, or "".
+func RestoreEnvID() string { return strings.ToUpper(strings.TrimSpace(os.Getenv(envRestore))) }
+
+// restoreAtStart brings back every session a restart ended. REMINAL_NO_RESTORE=1
+// turns it off (they can still be restored by hand).
+func restoreAtStart() {
+	if os.Getenv("REMINAL_NO_RESTORE") == "1" {
+		return
+	}
+	gone, err := Restorable()
+	if err != nil {
+		return
+	}
+	for _, r := range gone {
+		if _, err := RestoreSession(r); err != nil {
+			agentNotify("  reminal: could not restore session %s: %v\n", r.ID, err)
+		}
+	}
+}
+
+func isRegularFile(p string) bool {
+	fi, err := os.Stat(p)
+	return err == nil && fi.Mode().IsRegular()
+}

@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"regexp"
 	"strings"
 	"time"
 
@@ -53,9 +54,12 @@ func runHook(args []string) error {
 	var state string
 	switch arg {
 	case "working", "input", "done":
-		// Fixed state — we don't need the payload, but drain it so the harness
-		// doesn't block on a full pipe / see a broken one.
-		go func() { _, _ = io.Copy(io.Discard, os.Stdin) }()
+		// The state is fixed; what the payload adds is which conversation the
+		// agent is in, kept so a restart can resume that one and not "the
+		// latest" (see session.Restore).
+		if conv := convFromPayload(readCappedStdin()); conv != "" && id != "" {
+			_ = session.WriteConv(id, conv)
+		}
 		state = arg
 	case "notify":
 		// Ambiguous notification — decide "needs you" vs "done" from the payload
@@ -139,4 +143,23 @@ func notifyMessage(payload []byte) string {
 		return v.Message
 	}
 	return string(payload)
+}
+
+// convIDRe is what a conversation id may look like. It is typed into a shell
+// on restore, so nothing else gets through.
+var convIDRe = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]{7,127}$`)
+
+// convFromPayload is the conversation id in a harness's hook payload, under
+// whichever name that harness gives it, or "".
+func convFromPayload(b []byte) string {
+	var m map[string]any
+	if json.Unmarshal(b, &m) != nil {
+		return ""
+	}
+	for _, k := range []string{"session_id", "conversation_id", "thread_id", "thread-id", "chat_id"} {
+		if v, ok := m[k].(string); ok && convIDRe.MatchString(v) {
+			return v
+		}
+	}
+	return ""
 }

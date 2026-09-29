@@ -12,6 +12,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"syscall"
+	"time"
 
 	"github.com/creack/pty"
 	"golang.org/x/sys/unix"
@@ -148,4 +149,22 @@ func HandleSignals() {
 			// SIGWINCH is handled by the relay resize messages from the viewer.
 		}
 	}()
+}
+
+// EndedBySignal waits (briefly) for the shell and reports whether a signal
+// ended it — a machine shutting down, or someone killing it — rather than
+// the shell exiting on its own. False for an adopted PTY, whose shell this
+// process never started and cannot wait for.
+func (s *Session) EndedBySignal() bool {
+	if s.cmd == nil || s.cmd.Process == nil {
+		return false
+	}
+	done := make(chan struct{})
+	go func() { _ = s.cmd.Wait(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		return false
+	}
+	return s.cmd.ProcessState != nil && s.cmd.ProcessState.ExitCode() == -1
 }
