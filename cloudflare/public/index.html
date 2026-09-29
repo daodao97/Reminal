@@ -2286,6 +2286,8 @@
       if (!id) return; // pin may be '' — owner-handshake sessions dial PIN-free
       sessionInput.value = id;
       pinInput.value = pin;
+      pinForSession = pin ? String(id).toUpperCase() : '';
+      pinTyped = false;
       const rec = document.getElementById('recents'); if (rec) rec.open = false;
       const h = document.getElementById('host'); if (h) h.open = false;
       if (sessionId && sessionId !== id) userDisconnect();
@@ -4107,6 +4109,8 @@
           // Fill inputs and start a connection to this remembered session.
           sessionInput.value = e.id;
           pinInput.value = e.pin;
+          pinForSession = e.pin ? String(e.id).toUpperCase() : '';
+          pinTyped = false;
           document.getElementById('recents').open = false;
           if (sessionId && sessionId !== e.id) {
             // Switching to a different session — close the live one first
@@ -4981,6 +4985,19 @@
     }
 
     let kexTimer = 0;
+    // The session id the PIN box's contents were entered for. A PIN is not a
+    // property of this tab, it is a property of one session: switching while
+    // it sat in the box sent the previous session's PIN to the new one, which
+    // fails the handshake — and, because a non-empty PIN takes the PIN path,
+    // it also skipped the PIN-free owner connect that would have worked.
+    let pinForSession = '';
+    // The socket a handshake has been started for. Compared by identity, so a
+    // new socket is automatically unclaimed and nothing needs resetting.
+    let handshakeSock = null;
+    // Did a person type what is in the PIN box? A typed PIN is meant for
+    // whatever they are connecting to, so it is never stale; only one put
+    // there on their behalf can belong to a session they have left.
+    let pinTyped = false;
     async function sendKexInit() {
       if (!ws || ws.readyState !== WebSocket.OPEN) return;
       if (cryptoKey || kexInFlight) return;
@@ -5271,6 +5288,12 @@
     // else the PIN path.
     async function startHandshake() {
       if (cryptoKey) return;
+      // Claim this socket BEFORE the first await. auth_ok and connected arrive
+      // in the same tick, and the attempt only lands in kexAttempts after a
+      // keypair has been generated — so a check for "is one already running"
+      // that looks at kexAttempts is still empty when the second caller runs,
+      // and both send.
+      handshakeSock = ws;
       ownerSilentTries = 0;
       ownerBusyTries = 0;
       const tried = await sendOwnerInit();
@@ -6619,6 +6642,8 @@
     function connectOwned(id) {
       sessionInput.value = id;
       pinInput.value = '';
+      pinForSession = '';
+      pinTyped = false;
       const rec = document.getElementById('recents'); if (rec) rec.open = false;
       if (sessionId && sessionId !== id.toUpperCase()) userDisconnect();
       startConnect();
@@ -7551,7 +7576,15 @@
 
     async function startConnect() {
       const s = sessionInput.value.trim().toUpperCase();
-      const p = pinInput.value.trim();
+      let p = pinInput.value.trim();
+      // A PIN left over from the session we are leaving is not a credential
+      // for this one. Drop it and take the no-PIN path, which is PIN-free for
+      // an owner and says "PIN required" for everyone else — both of which
+      // beat failing the handshake with a PIN that was never meant for it.
+      if (p && !pinTyped && pinForSession && pinForSession !== s) {
+        p = '';
+        pinInput.value = '';
+      }
       if (!s) { setStatus('Session required', 'error'); return; }
       if (!p) {
         // PIN-free is only possible if this browser has an owner key to try;
@@ -7570,9 +7603,17 @@
         lastSeq = 0;
         sessionId = s;
         term.reset();
+        // host_info describes the session we are LEAVING. Share falls back to
+        // it for the PIN (see sharePin), so keeping it here handed out an
+        // invite pairing the new session's id with the old session's PIN —
+        // which cannot connect, and looks to whoever pastes it like the
+        // machine hanging rather than a wrong credential.
+        lastHostInfo = null;
       }
       if (lastSeq === 0) awaitingSnapshotUntil = Date.now() + 15000;
       pinValue = p;
+      pinForSession = p ? sessionId : '';
+      pinTyped = false;
       // cryptoKey is established asynchronously by the EKE handshake
       // (see sendKexInit / completeKex) inside openSocket → ws.onmessage.
       cryptoKey = null;
@@ -7786,6 +7827,8 @@
           try {
             await completeOwner(msg);
           } catch (e) {
+            if (kexTimer) { clearTimeout(kexTimer); kexTimer = 0; }
+            if (ownerTimer) { clearTimeout(ownerTimer); ownerTimer = 0; }
             setStatus('Owner connect failed: ' + e.message, 'error');
             fatal = true;
             try { ws.close(); } catch (_) {}
@@ -7802,6 +7845,12 @@
             // wrong session) or an active relay MITM that guessed
             // the PIN wrong. Either way, fatal — reconnecting would
             // just re-run the same broken handshake.
+            // Disarm the watchdog first. It fires KEX_TIMEOUT_MS later, sees
+            // no session key, and replaces this with "Handshake timed out" —
+            // so the one message that says what is actually wrong survived
+            // about nine seconds and then became a message about the network.
+            if (kexTimer) { clearTimeout(kexTimer); kexTimer = 0; }
+            if (ownerTimer) { clearTimeout(ownerTimer); ownerTimer = 0; }
             setStatus('Handshake failed: PIN mismatch', 'error');
             fatal = true;
             try { ws.close(); } catch (_) {}
@@ -7841,7 +7890,18 @@
               // handshake — the whole point of the multi-attempt fix.
               cryptoKey = null;
               retryWebRTC('agent reattach', 0); // renegotiate P2P with the (possibly new) agent
-              try { await startHandshake(); } catch (_) {}
+              // Only when the kex_init auth_ok already sent cannot serve.
+              // "connected" is the relay stating the agent was there as we
+              // authed, so that kex_init reached it and a second is waste —
+              // and waste here is expensive: each one spends a token from the
+              // agent's PIN allowance (8, one back per 10s), so at two per
+              // connect four reconnections in a row leave a legitimate viewer
+              // with silence and a blank screen. "agent_online" is a
+              // transition: the agent was away, the relay dropped what we
+              // sent, and only a new one can complete the handshake.
+              if (msg.type === 'agent_online' || handshakeSock !== ws) {
+                try { await startHandshake(); } catch (_) {}
+              }
             } else if (!cryptoKey && kexAttempts.size === 0) {
               // First-ever connect on this WS — initiate the EKE.
               try { await startHandshake(); } catch (_) {}
@@ -10133,6 +10193,7 @@
       }
     });
     sessionInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') startConnect(); });
+    pinInput.addEventListener('input', () => { pinTyped = true; });
     pinInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') startConnect(); });
 
     // Populate the Recent dropdown on load so the user sees their saved
