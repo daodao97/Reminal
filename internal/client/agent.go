@@ -324,6 +324,8 @@ type Agent struct {
 	// See viewersize.go. viewerCount (how many sockets are attached) is
 	// separate — the relay only gives us a count, not which id left.
 	sizeBook viewerSizeBook
+	// sight is which viewers have their terminal out of sight (viewersight.go).
+	sight viewerSight
 
 	viewerSizeMu sync.Mutex
 	viewerCount  int
@@ -1261,6 +1263,7 @@ func (a *Agent) activeRecord(viewers int) session.Active {
 		PidStartedAt: session.SelfStartTime(),
 		Headless:     a.headless,
 		Viewers:      viewers,
+		Away:         a.sight.awayOf(viewers),
 		Name:         name,
 		Cwd:          cwd,
 		Title:        title,
@@ -2967,6 +2970,9 @@ func (a *Agent) runReader(conn *websocket.Conn, cursorCh chan uint64) error {
 			// still grow the PTY back. Reset happens when the last
 			// viewer leaves (TypeClosed below).
 			a.coalesceViewerResize(rs.Viewer, rs.Cols, rs.Rows)
+			if a.sight.note(rs.Viewer, rs.Away) {
+				a.updateActiveViewers(int(a.curViewers.Load()))
+			}
 			// Do not rebroadcast the PTY just because this wrap differs
 			// from it. Web viewers already paint min(wrap, last PTY);
 			// rebroadcasting on every mismatch re-enters adoptPty and
@@ -3150,6 +3156,11 @@ func (a *Agent) runReader(conn *websocket.Conn, cursorCh chan uint64) error {
 			// phone's keyboard-open height cannot keep pinning the PTY.
 			rebroadcast := msg.Count > 0 && msg.Count < prevCount
 			a.viewerSizeMu.Unlock()
+			if rebroadcast || msg.Count == 0 {
+				// Who is away is forgotten with the sizes, and reported
+				// again with them.
+				a.sight.clear()
+			}
 			if rebroadcast {
 				sizeLog("viewer left, forget wraps  %s", a.sizeBook.dump())
 				a.sizeBook.forgetWraps()

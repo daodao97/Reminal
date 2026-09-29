@@ -62,6 +62,9 @@ type Active struct {
 	// the agent on every connect/disconnect event from the relay). Read
 	// by `reminal info` and the "attach to existing?" prompt.
 	Viewers int `json:"viewers,omitempty"`
+	// Away is how many of those viewers have their terminal out of sight — a
+	// hidden tab, or another view over it. Viewers - Away are looking.
+	Away int `json:"away,omitempty"`
 	// Name is an optional human-friendly label set via `reminal new --name`
 	// (or the positional `reminal new <name>`, and `reminal --name` for a
 	// foreground session). Surfaced by `reminal list` and usable anywhere a
