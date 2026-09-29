@@ -1965,31 +1965,51 @@ if (FEATURES.story) {
   const narrow = () => innerWidth <= 900;
   let queued = false;
 
+  // Where each chapter's heading sits when nothing is stuck: the chapter's
+  // top plus the heading's offset inside it. Chapters hand over on these,
+  // not on their boxes — a box starts a screenful above its heading, so
+  // switching on boxes ran the scene a chapter ahead of the copy.
+  let heads = [];
+  // Measured with the copy unstuck for a moment, from the chapter's own box
+  // (offsetTop would count from whichever ancestor happens to be positioned).
+  const measure = () => {
+    heads = chs.map(ch => {
+      const inn = ch.querySelector(".ch-in");
+      inn.style.position = "static";
+      const d = ch.querySelector("h2").getBoundingClientRect().top - ch.getBoundingClientRect().top;
+      inn.style.position = "";
+      return d;
+    });
+  };
   function frame() {
     queued = false;
     const vh = innerHeight;
-    // the line the reader is on: mid-screen beside the scene, or a little
-    // way into the strip of copy left visible under it on a phone
-    const line = narrow() ? box.getBoundingClientRect().bottom + (vh - box.getBoundingClientRect().bottom) * .35 : vh * .55;
-    const ts = chs.map((ch) => {
-      const r = ch.getBoundingClientRect();
-      return clamp((line - r.top) / r.height);
-    });
-    // Chapter i hands over to i+1 across its last stretch, so the two
-    // overlap instead of leaving an empty frame between them. Each chapter's
-    // own animation finishes before its hand-over starts.
-    const out = ts.map((t, i) => i < chs.length - 1 ? span(t, .86, 1) : 0);
+    // The reading line: a third of the way down what the reader can see —
+    // the whole window beside the scene, or the strip under it on a phone.
+    const top = narrow() ? box.getBoundingClientRect().bottom : 0;
+    const line = top + (vh - top) / 3;
+    const at = chs.map((ch, i) => ch.getBoundingClientRect().top + heads[i]);
+    const last = chs[chs.length - 1].getBoundingClientRect();
+    at.push(last.bottom - (vh - line));
+    // t runs 0 → 1 from this chapter's heading crossing the line to the next one's
+    const ts = chs.map((ch, i) => clamp((line - at[i]) / (at[i + 1] - at[i])));
+    // Chapter i hands over to i+1 in the last 20px before i+1's heading
+    // reaches the line, so the two overlap briefly instead of leaving an
+    // empty frame. Each chapter's own animation is finished before that.
+    const FADE = 20;
+    const out = ts.map((t, i) => i < chs.length - 1 ? clamp((line - at[i + 1] + FADE) / FADE) : 0);
     let c = 0;
     lys.forEach((ly, i) => {
       const o = (i === 0 ? 1 : out[i - 1]) * (1 - out[i]);
       ly.style.opacity = String(o);
       ly.classList.toggle("on", o > 0);
       if (o > .5) c = i;
-      if (o > 0) DRAW[i](reduced ? 1 : span(ts[i], .04, .84));
+      if (o > 0) DRAW[i](reduced ? 1 : span(ts[i], .02, .92));
     });
     num.textContent = "0" + (c + 1);
   }
   function fit() {
+    measure();
     const r = box.getBoundingClientRect();
     kEl.style.setProperty("--sxk", String(Math.min((r.width - 32) / 560, (r.height - 56) / 440)));
     frame();
