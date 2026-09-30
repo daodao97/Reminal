@@ -82,6 +82,26 @@ function Storyline(story, chapters) {
     const each = steps.map(s => fits(s.firstElementChild));
     chs.forEach((ch, i) => ch.classList.toggle("whole", whole[i]));
     steps.forEach((s, i) => s.classList.toggle("fits", each[i] && !s.closest(".whole")));
+    tail();
+  }
+
+  // On a narrow screen the scene is pinned above the copy. By default it lets
+  // go only when the whole story has scrolled past, well after the last held
+  // copy has, so that copy slid up underneath it before the scene left. The
+  // scene lets go with the last held copy instead: its release point moves up
+  // by --tail (margin under the pinned scene, taken back above the copy so
+  // nothing in the flow moves). The last copy is held at the bottom of its
+  // chapter when it lets go, HOLD_GAP under the scene.
+  function tail() {
+    let t = 0;
+    const last = chs[chs.length - 1];
+    const held = last.classList.contains("whole") ? last.querySelector(".ch-in")
+      : last.querySelector(".step:last-child.fits > .step-in");
+    if (narrow() && held) {
+      const grid = stage.parentElement.getBoundingClientRect(), ch = last.getBoundingClientRect();
+      t = grid.bottom - ch.bottom + parseFloat(getComputedStyle(last).paddingBottom) + held.offsetHeight + HOLD_GAP;
+    }
+    story.style.setProperty("--tail", t + "px");
   }
 
   // Each heading's offset inside its chapter, measured with nothing held.
