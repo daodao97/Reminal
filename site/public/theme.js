@@ -23,8 +23,10 @@
   // Scroll-spy: a nav link to a section on this page is underlined while
   // that section is on screen.
   function spy() {
-    var links = [].slice.call(document.querySelectorAll('.nav a.l[href^="#"]'));
-    var secs = links.map(function (a) { return document.getElementById(a.getAttribute("href").slice(1)); });
+    var links = [].slice.call(document.querySelectorAll(".nav a.l")).filter(function (a) {
+      return a.hash && a.pathname === location.pathname;
+    });
+    var secs = links.map(function (a) { return document.getElementById(a.hash.slice(1)); });
     if (!links.length) return;
     var update = function () {
       var y = scrollY + 120, cur = -1;
@@ -35,6 +37,20 @@
     addEventListener("scroll", update, { passive: true });
     update();
   }
-  function init() { wire(); spy(); }
+  // Reading progress: the hairline under the nav fills as you read the page.
+  function progress() {
+    var bar = document.getElementById("progress");
+    if (!bar) return;
+    var queued = false;
+    var update = function () {
+      queued = false;
+      var max = document.documentElement.scrollHeight - innerHeight;
+      bar.style.transform = "scaleX(" + (max > 0 ? Math.min(1, Math.max(0, scrollY / max)) : 0) + ")";
+    };
+    addEventListener("scroll", function () { if (!queued) { queued = true; requestAnimationFrame(update); } }, { passive: true });
+    addEventListener("resize", update);
+    update();
+  }
+  function init() { wire(); spy(); progress(); }
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", init); else init();
 })();

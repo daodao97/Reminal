@@ -21,12 +21,21 @@
 <script src="/theme.js"></script>
 </head>
 <body class="doc">
-<nav class="nav">
+<nav id="nav" class="nav">
   <div class="navin">
-    <a class="brand" href="/"><img src="/assets/icon.png" alt="" width="22" height="22"><span>reminal</span></a>
+    <a class="brand" href="/">
+      <img src="/assets/icon.png" alt="" width="22" height="22">
+      <span>reminal</span>
+    </a>
+    <a href="/agents/" class="l hide-sm">For AI agents</a>
+    <a href="/#bus" class="l hide-sm">Agent bus</a>
+    <a href="/#security" class="l hide-sm">Security</a>
+    <a href="/#pro" class="l hide-sm">What's coming</a>
     <span class="sp"></span>
+    <a href="https://github.com/harshalgajjar/Reminal" class="l ghlink"><svg class="gh" viewBox="0 0 16 16" width="16" height="16" aria-hidden="true" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.012 8.012 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg><span>GitHub</span></a>
     <button id="th" type="button">Dark</button>
   </div>
+  <div class="progress" id="progress" aria-hidden="true"></div>
 </nav>
 <div class="wrap">
 
@@ -109,65 +118,65 @@ proceedings locally.</p>
 
 </div>
 <footer>
-<div class="f-wrap">
-  <div class="f-grid">
-    <div class="f-brand">
-      <span class="f-logo"><img src="/assets/icon.png" alt="" width="26" height="26"><span>reminal</span></span>
-      <p>Every window, desktop and terminal on your machines, live in any browser.
-      No open ports, no keys on disk, nothing to install on the device you&rsquo;re holding.</p>
-      <div class="f-badges">
-        <span>macOS &middot; Linux &middot; Windows</span>
-        <span>AGPL-3.0</span>
-        <span>End-to-end encrypted</span>
+  <div class="wrap">
+    <div class="f-grid">
+      <div class="f-brand">
+        <span class="f-logo"><img src="/assets/icon.png" alt="" width="26" height="26"><span>reminal</span></span>
+        <p>Every window, desktop and terminal on your machines, live in any browser.
+        No open ports, no keys on disk, nothing to install on the device you&rsquo;re holding.</p>
+        <div class="f-badges">
+          <span>macOS &middot; Linux &middot; Windows</span>
+          <span>AGPL-3.0</span>
+          <span>End-to-end encrypted</span>
+        </div>
+      </div>
+
+      <div class="f-col">
+        <h4>Product</h4>
+        <ul>
+          <li><a href="/#install">Install</a></li>
+          <li><a href="/#bus">Agent bus</a></li>
+          <li><a href="/agents/">For AI agents</a></li>
+          <li><a href="/guides/macbook-lid-closed/">Closed-lid guide</a></li>
+          <li><a href="/#pro">What&rsquo;s coming</a></li>
+        </ul>
+      </div>
+
+      <div class="f-col">
+        <h4>Developers</h4>
+        <ul>
+          <li><a href="https://github.com/harshalgajjar/Reminal">Source</a></li>
+          <li><a href="https://github.com/harshalgajjar/Reminal/releases">Releases</a></li>
+          <li><a href="https://github.com/harshalgajjar/Reminal/blob/main/docs/security/architecture.md">Architecture</a></li>
+          <li><a href="https://github.com/harshalgajjar/Reminal/blob/main/docs/security/threat-model.md">Threat model</a></li>
+          <li><a href="https://github.com/harshalgajjar/Reminal#run-your-own-relay-free-one-time">Run your own relay</a></li>
+        </ul>
+      </div>
+
+      <div class="f-col">
+        <h4>Trust &amp; legal</h4>
+        <ul>
+          <li><a href="https://github.com/harshalgajjar/Reminal/blob/main/SECURITY.md">Report a vulnerability</a></li>
+          <li><a href="https://github.com/harshalgajjar/Reminal/blob/main/LICENSING.md">Licensing</a></li>
+          <li><a href="/privacy">Privacy</a></li>
+          <li><a href="/terms">Terms</a></li>
+          <li><a href="mailto:mail@harshalgajjar.com">Contact</a></li>
+        </ul>
       </div>
     </div>
 
-    <div class="f-col">
-      <h4>Product</h4>
-      <ul>
-        <li><a href="/#install">Install</a></li>
-        <li><a href="/#bus">Agent bus</a></li>
-        <li><a href="/agents/">For AI agents</a></li>
-        <li><a href="/guides/macbook-lid-closed/">Closed-lid guide</a></li>
-        <li><a href="/#pro">What&rsquo;s coming</a></li>
-      </ul>
-    </div>
-
-    <div class="f-col">
-      <h4>Developers</h4>
-      <ul>
-        <li><a href="https://github.com/harshalgajjar/Reminal">Source</a></li>
-        <li><a href="https://github.com/harshalgajjar/Reminal/releases">Releases</a></li>
-        <li><a href="https://github.com/harshalgajjar/Reminal/blob/main/docs/security/architecture.md">Architecture</a></li>
-        <li><a href="https://github.com/harshalgajjar/Reminal/blob/main/docs/security/threat-model.md">Threat model</a></li>
-        <li><a href="https://github.com/harshalgajjar/Reminal#run-your-own-relay-free-one-time">Run your own relay</a></li>
-      </ul>
-    </div>
-
-    <div class="f-col">
-      <h4>Trust &amp; legal</h4>
-      <ul>
-        <li><a href="https://github.com/harshalgajjar/Reminal/blob/main/SECURITY.md">Report a vulnerability</a></li>
-        <li><a href="https://github.com/harshalgajjar/Reminal/blob/main/LICENSING.md">Licensing</a></li>
-        <li><a href="/privacy">Privacy</a></li>
-        <li><a href="/terms">Terms</a></li>
-        <li><a href="mailto:mail@harshalgajjar.com">Contact</a></li>
-      </ul>
+    <div class="f-bottom">
+      <span class="f-legal">
+        <span>&copy; <span id="year">2026</span> Harshal Gajjar</span>
+        <span class="sep">&middot;</span>
+        <span>Licensed under AGPL-3.0, the relay included</span>
+      </span>
+      <span class="f-social">
+        <a href="https://github.com/harshalgajjar/Reminal" aria-label="reminal on GitHub"><svg viewBox="0 0 16 16" width="17" height="17" aria-hidden="true" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.012 8.012 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg></a>
+        <a href="https://x.com/harshalgajjar" aria-label="Harshal Gajjar on X"><svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" fill="currentColor"><path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z"/></svg></a>
+      </span>
     </div>
   </div>
-
-  <div class="f-bottom">
-    <span class="f-legal">
-      <span>&copy; <span id="year">2026</span> Harshal Gajjar</span>
-      <span class="sep">&middot;</span>
-      <span>Licensed under AGPL-3.0, the relay included</span>
-    </span>
-    <span class="f-social">
-      <a href="https://github.com/harshalgajjar/Reminal" aria-label="reminal on GitHub"><svg viewBox="0 0 16 16" width="17" height="17" aria-hidden="true" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.012 8.012 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg></a>
-      <a href="https://x.com/harshalgajjar" aria-label="Harshal Gajjar on X"><svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" fill="currentColor"><path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z"/></svg></a>
-    </span>
-  </div>
-</div>
 </footer>
 <script>document.getElementById("year").textContent=new Date().getFullYear()</script>
 </body>

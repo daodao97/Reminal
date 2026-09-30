@@ -260,7 +260,7 @@ td.y{color:var(--ink);font-weight:500} td.p{color:var(--dim)} td.n{color:var(--m
 
 /* ── footer ───────────────────────────────────────── */
 footer{margin-top:128px;border-top:1px solid var(--line);padding:56px 0 40px;color:var(--mute);font-size:14px}
-footer .wrap,.f-wrap{display:block;max-width:1080px;margin:0 auto;padding:0 24px}
+footer .wrap{display:block;max-width:1080px;margin:0 auto;padding:0 24px}
 footer a{color:var(--dim);text-decoration:none}
 footer a:hover{color:var(--ink)}
 .f-grid{display:grid;grid-template-columns:1.7fr 1fr 1fr 1fr;gap:40px 34px}
@@ -284,7 +284,7 @@ footer a:hover{color:var(--ink)}
 @media (max-width:820px){.f-grid{grid-template-columns:1fr 1fr;gap:34px 24px}.f-brand{grid-column:1/-1}}
 @media (max-width:480px){
   footer{margin-top:96px;padding:44px 0 28px}
-  footer .wrap,.f-wrap{padding:0 16px}
+  footer .wrap{padding:0 16px}
   .f-grid{gap:30px 18px}.f-col a{font-size:13px}
   .f-bottom{margin-top:34px;gap:14px}
   .f-legal{flex-direction:column;align-items:flex-start;gap:4px 0}.f-legal .sep{display:none}
@@ -292,7 +292,7 @@ footer a:hover{color:var(--ink)}
 @media (max-width:359px){.f-grid{grid-template-columns:1fr}}
 
 /* ── articles: guides, privacy, terms ─────────────── */
-body.doc .wrap{max-width:768px;padding-top:88px;padding-bottom:0}
+body.doc > .wrap{max-width:768px;padding-top:88px;padding-bottom:0}
 body.doc h1{font-size:48px;line-height:1.08;letter-spacing:-.045em;margin:0 0 16px}
 body.doc .meta,body.doc .updated{font:400 12.5px var(--mono);color:var(--mute);margin:0 0 40px}
 body.doc h2{font-size:24px;margin:56px 0 12px}
@@ -318,7 +318,7 @@ body.doc .cta{max-width:none;margin:56px 0 0;padding:28px;border:1px solid var(-
 body.doc .cta p{margin:0 0 14px;color:var(--dim)}
 body.doc .cta pre{margin:0}
 @media (max-width:760px){
-  body.doc .wrap{padding-top:56px}
+  body.doc > .wrap{padding-top:56px}
   body.doc h1{font-size:34px}
   body.doc h2{margin-top:44px}
   body.doc p,body.doc ul,body.doc ol{font-size:16px}
