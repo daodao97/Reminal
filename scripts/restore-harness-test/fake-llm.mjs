@@ -44,21 +44,46 @@ const reply = (body) => {
   return said ? `noted: ${said}` : "noted.";
 };
 
+// A long turn on demand: a prompt that says "take your time" is answered
+// only after SLOW_MS, the stream held open with keepalive comments (which
+// every SSE reader ignores) — so a check can see what a harness does with
+// keys typed while it is working, or with an interrupt. The log says when
+// the hold began, ended, or was cut short by the client hanging up.
+const SLOW_MS = Number(process.env.FAKE_LLM_SLOW_MS ?? 40000);
+const slowTurn = (body) => /take your time/i.test(lastUserText(body));
+async function hold(req, res, body, streaming) {
+  if (!slowTurn(body)) return true;
+  log("slow: holding", SLOW_MS, "ms");
+  // The socket, not the request: a request's own "close" fires once its
+  // body has been read, long before anyone hangs up.
+  const sock = req.socket;
+  const end = Date.now() + SLOW_MS;
+  while (Date.now() < end) {
+    await new Promise(r => setTimeout(r, Math.min(5000, end - Date.now())));
+    if (sock.destroyed) { log("slow: client hung up after", SLOW_MS - (end - Date.now()), "ms"); return false; }
+    if (streaming) res.write(": keepalive\n\n");
+  }
+  log("slow: released");
+  return true;
+}
+
 function sseHead(res) {
   res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache", connection: "keep-alive" });
 }
 const ev = (res, event, data) => res.write((event ? `event: ${event}\n` : "") + `data: ${JSON.stringify(data)}\n\n`);
 
-function anthropic(req, res, body) {
+async function anthropic(req, res, body) {
   const text = reply(body);
   const id = "msg_" + Date.now();
   const usage = { input_tokens: 10, output_tokens: 5, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 };
   if (!body.stream) {
+    if (!await hold(req, res, body, false)) return;
     res.writeHead(200, { "content-type": "application/json" });
     return res.end(JSON.stringify({ id, type: "message", role: "assistant", model: body.model, content: [{ type: "text", text }], stop_reason: "end_turn", stop_sequence: null, usage }));
   }
   sseHead(res);
   ev(res, "message_start", { type: "message_start", message: { id, type: "message", role: "assistant", model: body.model, content: [], stop_reason: null, stop_sequence: null, usage } });
+  if (!await hold(req, res, body, true)) return;
   ev(res, "content_block_start", { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } });
   ev(res, "content_block_delta", { type: "content_block_delta", index: 0, delta: { type: "text_delta", text } });
   ev(res, "content_block_stop", { type: "content_block_stop", index: 0 });
@@ -67,17 +92,19 @@ function anthropic(req, res, body) {
   res.end();
 }
 
-function chat(req, res, body) {
+async function chat(req, res, body) {
   const text = reply(body);
   const id = "chatcmpl-" + Date.now(), created = Math.floor(Date.now() / 1000), model = body.model || "fake";
   const usage = { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 };
   if (!body.stream) {
+    if (!await hold(req, res, body, false)) return;
     res.writeHead(200, { "content-type": "application/json" });
     return res.end(JSON.stringify({ id, object: "chat.completion", created, model, choices: [{ index: 0, message: { role: "assistant", content: text }, finish_reason: "stop" }], usage }));
   }
   sseHead(res);
   const chunk = (delta, finish) => ev(res, null, { id, object: "chat.completion.chunk", created, model, choices: [{ index: 0, delta, finish_reason: finish }] });
   chunk({ role: "assistant", content: "" }, null);
+  if (!await hold(req, res, body, true)) return;
   chunk({ content: text }, null);
   chunk({}, "stop");
   ev(res, null, { id, object: "chat.completion.chunk", created, model, choices: [], usage });
@@ -85,13 +112,14 @@ function chat(req, res, body) {
   res.end();
 }
 
-function responses(req, res, body) {
+async function responses(req, res, body) {
   const text = reply(body);
   const id = "resp_" + Date.now(), mid = "msg_" + Date.now();
   const item = { id: mid, type: "message", role: "assistant", status: "completed", content: [{ type: "output_text", text, annotations: [] }] };
   const usage = { input_tokens: 10, input_tokens_details: { cached_tokens: 0 }, output_tokens: 5, output_tokens_details: { reasoning_tokens: 0 }, total_tokens: 15 };
   const resp = (status, output) => ({ id, object: "response", created_at: Math.floor(Date.now() / 1000), status, model: body.model, output, usage });
   if (!body.stream) {
+    if (!await hold(req, res, body, false)) return;
     res.writeHead(200, { "content-type": "application/json" });
     return res.end(JSON.stringify(resp("completed", [item])));
   }
@@ -99,6 +127,7 @@ function responses(req, res, body) {
   let seq = 0;
   const e = (type, extra) => ev(res, type, { type, sequence_number: seq++, ...extra });
   e("response.created", { response: resp("in_progress", []) });
+  if (!await hold(req, res, body, true)) return;
   e("response.output_item.added", { output_index: 0, item: { ...item, status: "in_progress", content: [] } });
   e("response.content_part.added", { item_id: mid, output_index: 0, content_index: 0, part: { type: "output_text", text: "", annotations: [] } });
   e("response.output_text.delta", { item_id: mid, output_index: 0, content_index: 0, delta: text });
@@ -109,7 +138,7 @@ function responses(req, res, body) {
   res.end();
 }
 
-function gemini(req, res, body, url) {
+async function gemini(req, res, body, url) {
   if (url.includes(":countTokens")) {
     res.writeHead(200, { "content-type": "application/json" });
     return res.end(JSON.stringify({ totalTokens: 10 }));
@@ -119,9 +148,11 @@ function gemini(req, res, body, url) {
     usageMetadata: { promptTokenCount: 10, candidatesTokenCount: 5, totalTokenCount: 15 }, modelVersion: "fake" };
   if (url.includes(":streamGenerateContent")) {
     sseHead(res);
+    if (!await hold(req, res, body, true)) return;
     ev(res, null, out);
     return res.end();
   }
+  if (!await hold(req, res, body, false)) return;
   res.writeHead(200, { "content-type": "application/json" });
   res.end(JSON.stringify(out));
 }
@@ -135,11 +166,12 @@ http.createServer((req, res) => {
     const url = req.url || "";
     log(new Date().toISOString(), req.method, url, JSON.stringify(lastUserText(body)).slice(0, 80));
     try {
+      const done = (p) => p && p.catch && p.catch(e => log("error", e.stack));
       if (url.includes("/messages/count_tokens")) { res.writeHead(200, { "content-type": "application/json" }); return res.end('{"input_tokens":10}'); }
-      if (url.includes("/messages")) return anthropic(req, res, body);
-      if (url.includes("/chat/completions")) return chat(req, res, body);
-      if (url.includes("/responses")) return responses(req, res, body);
-      if (/generatecontent|:counttokens/i.test(url)) return gemini(req, res, body, url);
+      if (url.includes("/messages")) return done(anthropic(req, res, body));
+      if (url.includes("/chat/completions")) return done(chat(req, res, body));
+      if (url.includes("/responses")) return done(responses(req, res, body));
+      if (/generatecontent|:counttokens/i.test(url)) return done(gemini(req, res, body, url));
       if (url.includes("/models")) { res.writeHead(200, { "content-type": "application/json" }); return res.end(JSON.stringify({ object: "list", data: [{ id: "fake-model", object: "model", owned_by: "fake" }], models: [{ name: "models/fake-model" }] })); }
     } catch (e) { log("error", e.stack); }
     res.writeHead(404, { "content-type": "application/json" });
