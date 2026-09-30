@@ -473,8 +473,11 @@ header figcaption{max-width:720px}
 .stage-cap code{
   font-size:12px;
 }
+/* The caption keeps the page's side margins, and JS sets its top to just
+   under whatever is lowest on screen (the set, or a card beside it), so it
+   reads as the scene's caption rather than floating at the window's edge. */
 .stage-cap{
-  position:absolute; left:0; right:0; bottom:6%; text-align:center; z-index:5;
+  position:absolute; left:0; right:0; top:auto; bottom:6%; padding:0 24px; text-align:center; z-index:5;
   font-size:15px; color:var(--dim); will-change:opacity,transform;
 }
 .stage-cap b{color:var(--ink); font-weight:600}
@@ -501,7 +504,7 @@ header figcaption{max-width:720px}
   }
   .flybadge b{display:none}
   .flybadge{gap:0; padding:4px 6px 5px}
-  .stage-cap{font-size:13px; bottom:2.5%}
+  .stage-cap{font-size:13px; padding:0 16px}
   .stage-hint{top:1.5%}
 }
 
@@ -1315,12 +1318,16 @@ if (FEATURES.scrollFX && !reduced) {
     const y  = scrollY;
 
 
-    // Hero: the copy drifts up and dims as you leave.
+    // Hero: the copy drifts up, and each piece stays solid while at least
+    // half of it is still in view below the nav, fading only over its last
+    // half. Tying the fade to scroll distance instead dimmed text that was
+    // still mostly on screen on a short phone.
     if (y < vh * 1.6) {
-      const fade = String(clamp(1 - y / (vh * 0.95), 0, 1));
       for (const el of heroIn) {
         el.style.transform = `translate3d(0, ${y * 0.06}px, 0)`;
-        el.style.opacity = fade;
+        const r = el.getBoundingClientRect();
+        const inView = (r.bottom - NAV) / Math.max(1, r.height);   // 1 = all of it
+        el.style.opacity = String(clamp(inView * 2));
       }
     }
 
@@ -1527,6 +1534,13 @@ if (FEATURES.lidStage) {
         }
         cap.style.opacity = String(show);
         cap.style.transform = `translateY(${mix(14, 0, show)}px)`;
+        if (show > 0) {
+          // just under the lowest thing showing: the set, or a card beside it
+          let low = scene.getBoundingClientRect().bottom;
+          for (const card of [noteCard, seekCard]) if (card && +card.style.opacity > .05) low = Math.max(low, card.getBoundingClientRect().bottom);
+          cap.style.top = (low - cap.offsetParent.getBoundingClientRect().top + 18) + "px";
+          cap.style.bottom = "auto";
+        }
         // Between two lines everything is 0; hold the last one rather than
         // snapping the text back to the first while it is invisible.
         if (phase >= 0 && cap.dataset.phase !== String(phase)) {
