@@ -159,6 +159,13 @@ func (a *Agent) runAttention(logPath string) {
 			}
 		}
 
+		// A console with no foreground process group to ask (Windows): the
+		// program is found among the shell's children instead, now and then.
+		if fgPgrpSeen == 0 && fg == "" {
+			if prog := a.consoleForeground(now); prog != "" {
+				fg, agentActive = prog, true
+			}
+		}
 		a.noteForeground(progCache.resolve(fgPgrpSeen, fg))
 
 		// Prefer the agent's own hook-reported state when it's fresh (an
