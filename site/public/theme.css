@@ -230,6 +230,34 @@ body.doc .cta pre{margin:0}
   body.doc .cta{padding:20px}
 }
 
+/* ── signup form (see /signup.js) ──────────────────── */
+.who{display:inline-flex;margin:28px 0 0}
+.whobtn{background:var(--panel);border:1px solid var(--line);color:var(--mute);cursor:pointer;font:500 13.5px var(--sans);height:32px;padding:0 14px;
+  transition:color .15s,background .15s}
+.whobtn:first-child{border-radius:6px 0 0 6px}
+.whobtn:last-child{border-radius:0 6px 6px 0;border-left:0}
+.whobtn:hover{color:var(--ink)}
+.whobtn[aria-checked="true"]{color:var(--ink);background:var(--soft)}
+.sizerow{display:flex;align-items:center;gap:10px;margin:14px 0 0;font-size:14px;color:var(--dim)}
+.sizerow[hidden]{display:none}
+.sizerow select{background:var(--panel);color:var(--ink);border:1px solid var(--line);border-radius:6px;height:36px;padding:0 10px;font:inherit;font-size:14px;cursor:pointer}
+.sizerow select:focus{outline:none;border-color:var(--ink)}
+form.signup{display:flex;gap:8px;margin:16px 0 0;max-width:460px}
+form.signup input{flex:1;min-width:0;background:var(--panel);color:var(--ink);border:1px solid var(--line);border-radius:6px;height:40px;padding:0 12px;
+  font:inherit;font-size:15px;transition:border-color .15s}
+form.signup input::placeholder{color:var(--mute)}
+form.signup input:focus{outline:none;border-color:var(--ink)}
+form.signup button{flex:none;background:var(--ink);color:var(--page);border:1px solid var(--ink);border-radius:6px;height:40px;padding:0 16px;
+  font:500 14px var(--sans);cursor:pointer;transition:opacity .15s}
+form.signup button:hover{opacity:.85}
+form.signup button:disabled{opacity:.5;cursor:default}
+.formnote{margin:16px 0 0;font-size:13.5px;color:var(--mute);max-width:56ch}
+.formnote a{color:var(--dim)}
+.formmsg{margin:14px 0 0;font-size:14px;min-height:1.4em}
+.formmsg.ok{color:var(--yes)}
+.formmsg.err{color:#d93036}
+@media (max-width:520px){form.signup{flex-direction:column}form.signup input,form.signup button{flex:none}}
+
 /* a text caret's blink (hero terminal, storyline scenes) */
 @keyframes blink{50%{opacity:0}}
 

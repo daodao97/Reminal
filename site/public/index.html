@@ -519,34 +519,6 @@ header figcaption{max-width:720px}
 /* ── the two framed sections ───────────────────────── */
 #security .sub-cta{margin-top:28px}
 
-/* ── waitlist ──────────────────────────────────────── */
-.who{display:inline-flex;margin:28px 0 0}
-.whobtn{background:var(--panel);border:1px solid var(--line);color:var(--mute);cursor:pointer;font:500 13.5px var(--sans);height:32px;padding:0 14px;
-  transition:color .15s,background .15s}
-.whobtn:first-child{border-radius:6px 0 0 6px}
-.whobtn:last-child{border-radius:0 6px 6px 0;border-left:0}
-.whobtn:hover{color:var(--ink)}
-.whobtn[aria-checked="true"]{color:var(--ink);background:var(--soft)}
-.sizerow{display:flex;align-items:center;gap:10px;margin:14px 0 0;font-size:14px;color:var(--dim)}
-.sizerow[hidden]{display:none}
-.sizerow select{background:var(--panel);color:var(--ink);border:1px solid var(--line);border-radius:6px;height:36px;padding:0 10px;font:inherit;font-size:14px;cursor:pointer}
-.sizerow select:focus{outline:none;border-color:var(--ink)}
-form.signup{display:flex;gap:8px;margin:16px 0 0;max-width:460px}
-form.signup input{flex:1;min-width:0;background:var(--panel);color:var(--ink);border:1px solid var(--line);border-radius:6px;height:40px;padding:0 12px;
-  font:inherit;font-size:15px;transition:border-color .15s}
-form.signup input::placeholder{color:var(--mute)}
-form.signup input:focus{outline:none;border-color:var(--ink)}
-form.signup button{flex:none;background:var(--ink);color:var(--page);border:1px solid var(--ink);border-radius:6px;height:40px;padding:0 16px;
-  font:500 14px var(--sans);cursor:pointer;transition:opacity .15s}
-form.signup button:hover{opacity:.85}
-form.signup button:disabled{opacity:.5;cursor:default}
-.formnote{margin:16px 0 0;font-size:13.5px;color:var(--mute);max-width:56ch}
-.formnote a{color:var(--dim)}
-.formmsg{margin:14px 0 0;font-size:14px;min-height:1.4em}
-.formmsg.ok{color:var(--yes)}
-.formmsg.err{color:#d93036}
-@media (max-width:520px){form.signup{flex-direction:column}form.signup input,form.signup button{flex:none}}
-
 /* ── scroll reveal ─────────────────────────────────── */
 .reveal{opacity:0;transform:translateY(16px);transition:opacity .75s var(--ease),transform .75s var(--ease)}
 .reveal.in{opacity:1;transform:none}
@@ -1118,7 +1090,8 @@ form.signup button:disabled{opacity:.5;cursor:default}
       <button type="button" class="whobtn" data-who="individual" role="radio" aria-checked="true">Just me</button>
       <button type="button" class="whobtn" data-who="team" role="radio" aria-checked="false">My team</button>
     </div>
-    <form class="signup reveal" id="signup" novalidate>
+    <form class="signup reveal" id="signup" novalidate data-group="waitlist"
+          data-done="You're on the list. I'll email you once, when it's ready.">
       <input type="email" id="email" name="email" placeholder="you@example.com"
              autocomplete="email" required aria-label="Email address">
       <button type="submit" id="submit">Join the waitlist</button>
@@ -1205,14 +1178,8 @@ form.signup button:disabled{opacity:.5;cursor:default}
 </footer>
 
 <script src="/story.js"></script>
+<script src="/signup.js"></script>
 <script>
-// ── Loops form endpoint ────────────────────────────────────────────────
-// Create the form in Loops (Forms → Create → "Use my own form") and paste
-// its endpoint here. Public by design: it only accepts subscribes, so
-// there is no secret to leak. Until it's set, the form says so out loud
-// rather than silently swallowing addresses.
-const LOOPS_ENDPOINT = "https://app.loops.so/api/newsletter-form/cmswt702j18uc0j0uaj8c1b84";
-
 const INSTALL = {
   unix: "curl -fsSL https://reminal.app/install.sh | sh",
   win:  "irm https://reminal.app/install.ps1 | iex",
@@ -1972,74 +1939,6 @@ if (FEATURES.liveTerminal) {
     io.observe(term);
   }
 }
-
-// ── waitlist ───────────────────────────────────────────────────────────
-const form = document.getElementById("signup");
-const emailEl = document.getElementById("email");
-
-// Who it's for. The headcount only exists once someone says "my team", so an
-// individual signing up still answers exactly one question.
-let audience = "individual";
-const sizeRow = document.getElementById("sizerow");
-const sizeEl = document.getElementById("teamsize");
-document.querySelectorAll(".whobtn").forEach(btn => {
-  btn.addEventListener("click", () => {
-    audience = btn.dataset.who;
-    document.querySelectorAll(".whobtn").forEach(b =>
-      b.setAttribute("aria-checked", String(b === btn)));
-    if (sizeRow) sizeRow.hidden = audience !== "team";
-  });
-});
-const submitEl = document.getElementById("submit");
-const msgEl = document.getElementById("msg");
-
-function say(text, kind) {
-  msgEl.textContent = text;
-  msgEl.className = "formmsg" + (kind ? " " + kind : "");
-}
-
-form.addEventListener("submit", async event => {
-  event.preventDefault();
-  const email = emailEl.value.trim();
-
-  if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) {
-    say("That doesn't look like an email address.", "err");
-    emailEl.focus();
-    return;
-  }
-
-  if (LOOPS_ENDPOINT.includes("REPLACE_WITH_FORM_ID")) {
-    say("The waitlist isn't wired up yet. Set LOOPS_ENDPOINT in index.html.", "err");
-    return;
-  }
-
-  submitEl.disabled = true;
-  say("Adding you…");
-
-  try {
-    // Loops' form endpoint wants form-encoded, and answers opaquely on
-    // some plans, so a network-level success is treated as a success.
-    const res = await fetch(LOOPS_ENDPOINT, {
-      method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body: new URLSearchParams({
-        email,
-        userGroup: "waitlist",
-        source: "reminal.app",
-        audience,
-        teamSize: audience === "team" && sizeEl ? sizeEl.value : "",
-      }),
-    });
-
-    if (!res.ok) throw new Error("HTTP " + res.status);
-
-    form.hidden = true;
-    say("You're on the list. I'll email you once, when it's ready.", "ok");
-  } catch (err) {
-    submitEl.disabled = false;
-    say("That didn't go through. Email mail@harshalgajjar.com and I'll add you by hand.", "err");
-  }
-});
 
 document.getElementById("year").textContent = new Date().getFullYear();
 </script>
