@@ -7,6 +7,7 @@ package client
 
 import (
 	"strings"
+	"time"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
@@ -27,6 +28,31 @@ func restoreForeground(term *pty.Session) (prog string, args []string, pid int, 
 		return p, a, int(id), false
 	}
 	return "", nil, 0, false
+}
+
+// consoleForegroundEvery is how often the shell's children are enumerated
+// for the attention probe: a process snapshot is not free, and an agent
+// does not come and go between two ticks.
+const consoleForegroundEvery = 2 * time.Second
+
+// consoleForeground is the attention probe's foreground on Windows: the
+// coding agent among the shell's children, if one is running, found the way
+// restore finds it, and remembered for consoleForegroundEvery.
+func (a *Agent) consoleForeground(now time.Time) string {
+	a.metaMu.Lock()
+	at, prog := a.fgFallbackAt, a.fgFallback
+	a.metaMu.Unlock()
+	if !at.IsZero() && now.Sub(at) < consoleForegroundEvery {
+		return prog
+	}
+	prog = ""
+	if a.term != nil {
+		prog, _, _, _ = restoreForeground(a.term)
+	}
+	a.metaMu.Lock()
+	a.fgFallbackAt, a.fgFallback = now, prog
+	a.metaMu.Unlock()
+	return prog
 }
 
 // shimHosts run a CLI's shim (npm's claude.cmd, codex.ps1) and are not the

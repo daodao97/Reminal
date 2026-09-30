@@ -5,7 +5,15 @@
 
 package client
 
-import "reminal/internal/pty"
+import (
+	"time"
+
+	"reminal/internal/pty"
+)
+
+// consoleForeground: the terminal names its foreground process group here,
+// so there is nothing to look up (see the Windows one).
+func (a *Agent) consoleForeground(time.Time) string { return "" }
 
 // restoreForeground is the program in the foreground of term's shell and its
 // command line, and whether the shell's own prompt is — nothing running in

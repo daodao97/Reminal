@@ -240,6 +240,10 @@ type Agent struct {
 	// attnFGAt is when attnFG last changed: a harness that has only just
 	// started is drawing itself, and keys typed into it then are lost.
 	attnFGAt time.Time
+	// fgFallback is the foreground found among the shell's children, where
+	// the console cannot say (Windows), as of fgFallbackAt.
+	fgFallback   string
+	fgFallbackAt time.Time
 	// attnShells is how many shells the foreground harness says it still has
 	// running. Reported beside the state, not folded into it: a turn that ended
 	// having left work going is still "done", and the count is what says whether
