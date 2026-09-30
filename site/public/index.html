@@ -122,7 +122,7 @@
    /theme.css; only what exists on this page alone lives here. */
 
 /* ── hero terminal  [FEATURES.liveTerminal] ────────── */
-.term-wrap{position:relative;max-width:720px;margin:56px 0 0}
+.term-wrap{max-width:720px;margin:56px 0 0}
 .hero-shot{margin:0;max-width:none}
 .term{
   margin:0; padding:16px 18px 18px; background:var(--fig); color:#c9c9c9; border:0; border-radius:0;
@@ -148,22 +148,6 @@
 header figcaption{max-width:720px}
 @media (max-width:700px){.term{font-size:10px;min-height:330px;padding:12px 12px 14px}}
 @media (max-width:400px){.term{font-size:8.6px;min-height:290px}}
-
-/* ── draggable pop-out  [FEATURES.dragWindow] ──────── */
-.popout{
-  position:absolute; z-index:4; width:206px; top:56px; right:-238px;
-  border:1px solid var(--figline2); border-radius:10px; overflow:hidden; background:var(--fig);
-  box-shadow:0 22px 50px -22px rgba(0,0,0,.5);
-  cursor:grab; touch-action:none; user-select:none; will-change:transform;
-}
-.popout.dragging{cursor:grabbing;box-shadow:0 32px 70px -20px rgba(0,0,0,.6)}
-.popout .bar{padding:7px 9px}
-.popout .bar .url{font-size:9.5px;padding:2px 6px;max-width:none}
-.popout img{width:100%;display:block}
-.popout .hint{position:absolute;left:0;right:0;bottom:9px;text-align:center;font:500 10.5px var(--mono);color:#fff;pointer-events:none;
-  text-shadow:0 1px 6px rgba(0,0,0,.95);transition:opacity .4s}
-/* No room to throw it around below this, and it would overlap the copy. */
-@media (max-width:1200px){.popout{display:none !important}}
 
 /* ── the storyline  [FEATURES.story] ───────────────── */
 /* One pinned scene and six chapters of copy. The copy is the page's real
@@ -267,8 +251,12 @@ section.s .story-grid > *{max-width:none}
 .d-menu p{margin:0 0 4px;padding:2px 6px;font:500 7px var(--mono);color:var(--winmute);text-transform:uppercase}
 .d-menu span{display:block;padding:4px 6px;border-radius:4px;font:500 9.5px var(--sans);color:#ededed}
 .d-menu span.hit{background:#ededed;color:#0a0a0a}
-.d-ph{left:410px;top:100px;width:130px;height:260px;opacity:0;z-index:6}
-.d-pad{position:absolute;left:0;right:0;top:40%;text-align:center;font:500 8px var(--mono);color:var(--winmute);letter-spacing:.1em;text-transform:uppercase}
+/* The phone shows the same window, half size, on the Mac's wallpaper; the
+   finger works the lower half like a trackpad and both cursors follow it. */
+.d-ph{left:396px;top:74px;width:156px;height:300px;opacity:0;z-index:6}
+.d-mirror{background:var(--wall)}
+.d-mwin{left:8px;top:36px;width:250px;height:170px;transform:scale(.52);transform-origin:0 0;overflow:visible}
+.d-mcur{width:12px;height:12px}
 .d-fing{position:absolute;left:0;top:0;width:22px;height:22px;margin:-11px 0 0 -11px;border-radius:50%;background:rgba(255,255,255,.28);border:1px solid rgba(255,255,255,.5)}
 
 /* 02 fps */
@@ -388,7 +376,9 @@ section.s .story-grid > *{max-width:none}
    browser. Scroll drives one progress value; every transform below is a pure
    function of it, so scrubbing backwards is exact. */
 .stagewrap{height:560vh; position:relative; }
-.stage-pin{position:sticky; top:0; height:100vh; display:grid; place-items:center; overflow:hidden}
+/* Pinned under the nav, not behind it, so the whole set (and the hint at
+   its top) sits in the part of the window you can see. */
+.stage-pin{position:sticky; top:var(--nav); height:calc(100vh - var(--nav)); display:grid; place-items:center; overflow:hidden}
 .scene{
   position:relative; width:min(940px,92vw); height:min(560px,64vh);
   perspective:1600px; perspective-origin:50% 42%;
@@ -711,12 +701,6 @@ form.signup button:disabled{opacity:.5;cursor:default}
         <div class="bar"><span class="dots"><i></i><i></i><i></i></span><span class="url">zsh &mdash; studio-mac</span><span class="live">HOST</span></div>
         <pre class="term" id="term" aria-label="A recorded reminal session: running reminal prints a session ID, a PIN and a scannable QR code"></pre>
       </figure>
-
-      <div class="popout" id="popout" hidden>
-        <div class="bar"><span class="dots"><i></i><i></i><i></i></span><span class="url">mini-01</span></div>
-        <img src="/assets/own.jpg" alt="A window from another machine, popped out onto this desktop">
-        <span class="hint" id="pophint">drag me</span>
-      </div>
     </div>
     <figcaption>
       Real output from <code>reminal</code> &mdash; and that QR is live.
@@ -858,7 +842,7 @@ form.signup button:disabled{opacity:.5;cursor:default}
           <p class="sx-count" aria-hidden="true"><b id="sxn">01</b> / 06</p>
 
           <!-- 01 drive the apps -->
-          <div class="ly" data-ly="0" role="img" aria-label="A browser showing a Mac's TextEdit window: a cursor types into it, launches Figma from the Apps menu and opens the whole desktop, a phone steers it as a trackpad, and the Figma window pops out of the tab into its own window">
+          <div class="ly" data-ly="0" role="img" aria-label="A browser showing a Mac's TextEdit window: a cursor types into it, launches Figma from the Apps menu and opens the whole desktop, a phone showing the same window drives it by touch, and the Figma window pops out of the tab into its own window">
             <div class="sx-br d-br">
               <div class="sx-bar"><span class="dots"><i></i><i></i><i></i></span><span class="sx-url">live.reminal.app/?s=7f3a2c9e</span><span class="sx-chip d-apps">Apps</span><span class="sx-chip d-host">Host</span></div>
             </div>
@@ -876,7 +860,14 @@ form.signup button:disabled{opacity:.5;cursor:default}
               <span class="d-own">own window</span>
             </div>
             <div class="d-menu"><p>Launch on studio-mac</p><span>Safari</span><span>Xcode</span><span class="f">Figma</span><span>Notes</span></div>
-            <div class="sx-phone d-ph"><div class="sx-screen"><p class="d-pad">trackpad</p><i class="d-fing"></i></div></div>
+            <div class="sx-phone d-ph"><div class="sx-screen d-mirror">
+              <div class="sx-win d-mwin">
+                <div class="sx-bar"><span class="dots"><i></i><i></i><i></i></span><span class="sx-url">Figma &mdash; studio-mac</span></div>
+                <div class="d-canvas"><i class="a"></i><i class="b"></i><i class="c"></i><span class="d-sel"></span></div>
+              </div>
+              <svg class="sx-cur d-mcur" viewBox="0 0 20 20" width="20" height="20"><path d="M3 2l13 7.5-6 1.4L7 17z" fill="#fff" stroke="#000" stroke-width="1.2" stroke-linejoin="round"/></svg>
+              <i class="d-fing"></i>
+            </div></div>
             <svg class="sx-cur d-cur" viewBox="0 0 20 20" width="20" height="20"><path d="M3 2l13 7.5-6 1.4L7 17z" fill="#fff" stroke="#000" stroke-width="1.2" stroke-linejoin="round"/></svg>
             <i class="sx-ring d-ring"></i>
           </div>
@@ -1317,7 +1308,6 @@ const FEATURES = {
   liveTerminal: true,   // hero: types `reminal`, prints the banner + a real QR
   edgeLatency:  true,   // stat band: the visitor's own round-trip to the edge
   osDetect:     true,   // install box: preselect the visitor's actual OS
-  dragWindow:   true,   // hero: a pop-out window card you can throw around
   scrollFX:     true,   // parallax, reading progress, counters — one rAF loop
   story:        true,   // six features, one pinned scene the copy scrolls past
   lidStage:     true,   // 3D set piece: the lid shuts, the windows fly to a browser
@@ -1333,6 +1323,8 @@ const mix = (a, b, t) => a + (b - a) * t;
 const span = (t, a, b) => clamp((t - a) / (b - a));           // t's progress through [a, b]
 const ease = t => t < .5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
 const easeOut = t => 1 - Math.pow(1 - t, 3);                 // for count-ups
+// The nav's height (--nav in theme.css): pinned things sit under it.
+const NAV = parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--nav")) || 52;
 
 // ── scroll reveal ──────────────────────────────────────────────────────
 // Staggered within a section so a block arrives as one gesture rather than
@@ -1492,9 +1484,10 @@ if (FEATURES.lidStage) {
     // Narrow: it is one column with the cards below, so the widest thing that
     // has to fit is the 660px browser — which buys a much larger set than the
     // wide formula would give at the same width.
+    const h = innerHeight - NAV;   // the pinned stage's height
     const k = narrow()
-      ? Math.min(innerWidth / 720, innerHeight / 1180)
-      : Math.min(1, innerWidth / 1020, innerHeight / 760);
+      ? Math.min(innerWidth / 720, h / 1180)
+      : Math.min(1, innerWidth / 1020, h / 760);
     stageK = Math.max(0.32, Math.min(1, k));
     scene.style.setProperty("--stage-k", String(stageK));
   };
@@ -1531,9 +1524,11 @@ if (FEATURES.lidStage) {
     let fly0Scale = 1;
     function draw() {
       ticking = false;
+      // p runs 0 → 1 while the stage is pinned: from the section's top
+      // reaching the nav to its bottom reaching the bottom of the window.
       const r  = sec.getBoundingClientRect();
       const vh = innerHeight;
-      const p  = clamp(-r.top / Math.max(1, r.height - vh));
+      const p  = clamp((NAV - r.top) / Math.max(1, r.height - vh + NAV));
 
       // The first four beats keep the scroll distance they always had; the
       // section simply got longer (420vh → 560vh) to make room for the two
@@ -1801,7 +1796,7 @@ if (FEATURES.story) {
   const D = {
     cur: $(".d-cur"), ring: $(".d-ring"), type: $(".d-type"), w1: $(".d-w1"), w2: $(".d-w2"),
     menu: $(".d-menu"), items: $$(".d-menu span"), apps: $(".d-apps"), host: $(".d-host"),
-    desk: $(".d-desk"), ph: $(".d-ph"), fing: $(".d-fing"), sel: $(".d-sel"), own: $(".d-own"),
+    desk: $(".d-desk"), ph: $(".d-ph"), fing: $(".d-fing"), sels: $$(".d-sel"), own: $(".d-own"), mcur: $(".d-mcur"),
   };
   function drive(t) {
     beats.forEach((b, i) => b.classList.toggle("lit", i === Math.min(4, Math.floor(t * 5))));
@@ -1840,11 +1835,16 @@ if (FEATURES.story) {
       boxShadow: `0 ${mix(18, 40, pop)}px ${mix(40, 70, pop)}px -18px rgba(0,0,0,${mix(.9, 1, pop)})`,
     });
     css(D.own, { opacity: String(span(t, .9, .95)) });
-    css(D.sel, { opacity: String(t > .7 && t < .8 ? 1 : 0) });
-    // beat 4: phone as a trackpad
+    D.sels.forEach(s => css(s, { opacity: String(t > .7 && t < .8 ? 1 : 0) }));
+    // beat 4: the phone shows the window; its lower half is the trackpad
     const ph = seg(t, .6, .66) * (1 - seg(t, .8, .86));
     css(D.ph, { opacity: String(ph), transform: `translate(${mix(60, 0, ph)}px,0)` });
-    if (t > .6) { const a = pad * Math.PI * 3; css(D.fing, { transform: `translate(${59 + Math.cos(a) * 30 * pad}px,${124 + Math.sin(a) * 22 * pad}px)`, opacity: String(pad > 0 ? 1 : 0) }); }
+    if (t > .6) {
+      const a = pad * Math.PI * 3, dx = Math.cos(a) * pad, dy = Math.sin(a) * pad;
+      css(D.fing, { transform: `translate(${72 + dx * 30}px,${214 + dy * 20}px)`, opacity: String(pad > 0 ? 1 : 0) });
+      // the phone's cursor is the browser's, at the mirror's scale
+      css(D.mcur, { transform: `translate(${8 + (cx - 220) * .52}px,${36 + (cy - 130) * .52}px)`, opacity: String(pad > 0 ? 1 : 0) });
+    }
   }
 
   // ── 02 sixty frames ──────────────────────────────────
@@ -1947,8 +1947,8 @@ if (FEATURES.story) {
 
   const DRAW = [drive, fps, term, dock, fleet, bus];
   const stage = story.querySelector(".story-stage");
-  const NAV = parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--nav")) || 52;
-  const HOLD_GAP = { narrow: 20, wide: 68 };  // reading area's top → held copy
+  const pin = story.querySelector(".story-pin");
+  const HOLD_GAP = 20;                         // under the pinned scene → held copy (narrow)
   const FADE = 20;                             // px over which one scene hands to the next
   const narrow = () => innerWidth <= 900;
   // The reading area's top: under the nav beside the scene; under the pinned
@@ -1965,10 +1965,12 @@ if (FEATURES.story) {
 
   // Layout: where copy holds (--stick) and what holds there — the whole
   // chapter if it fits the reading area, otherwise each step that does.
+  // Copy holds level with the top of the scene beside it, or just under the
+  // scene pinned above it on a narrow screen.
   // Heights are read with nothing holding, then every class is set at once.
   function hold() {
     const vh = stableHeight();
-    const stick = readTop(true) + HOLD_GAP[narrow() ? "narrow" : "wide"];
+    const stick = narrow() ? readTop(true) + HOLD_GAP : parseFloat(getComputedStyle(pin).top);
     const fits = el => el.offsetHeight <= vh - stick - 24;
     story.style.setProperty("--stick", stick + "px");
     const steps = [...story.querySelectorAll(".step")];
@@ -2036,40 +2038,6 @@ if (FEATURES.story) {
   fit();
 }
 
-// ── [FEATURES.dragWindow] throw a remote window around ─────────────────
-if (FEATURES.dragWindow && !reduced && matchMedia("(min-width:1200px)").matches) {
-  const card = document.getElementById("popout");
-  const hint = document.getElementById("pophint");
-  if (card) {
-    card.hidden = false;
-    let x = 0, y = 0, ox = 0, oy = 0, moved = false;
-
-    card.addEventListener("pointerdown", e => {
-      if (e.button) return;
-      card.setPointerCapture(e.pointerId);
-      card.classList.add("dragging");
-      ox = e.clientX - x; oy = e.clientY - y;
-    });
-
-    card.addEventListener("pointermove", e => {
-      if (!card.classList.contains("dragging")) return;
-      x = e.clientX - ox; y = e.clientY - oy;
-      card.style.transform = `translate(${x}px, ${y}px)`;
-      if (!moved && Math.hypot(x, y) > 24) {
-        moved = true;
-        if (hint) hint.style.opacity = "0";
-      }
-    });
-
-    const release = e => {
-      card.classList.remove("dragging");
-      if (card.hasPointerCapture?.(e.pointerId)) card.releasePointerCapture(e.pointerId);
-    };
-    card.addEventListener("pointerup", release);
-    card.addEventListener("pointercancel", release);
-  }
-}
-
 // ── [FEATURES.liveTerminal] the hero session ───────────────────────────
 // The real banner from internal/client/agent.go, typed out. The QR is
 // generated at build time by genqr.py and encodes https://reminal.app/ —
@@ -2116,10 +2084,36 @@ if (FEATURES.liveTerminal) {
     return qrArt;
   };
 
+  const lineOf = step => typeof step.line === "function" ? step.line() : step.line;
+  const qrBlock = art => art
+    ? `\n  <span class="qr">${art}</span>\n`
+    : `\n  <span class="d">[QR] ${HOST}/?s=${SESSION}</span>\n`;
+  const CARET = '\n<span class="caret"></span>';
+
+  // The box is held at the height of the finished output, measured by drawing
+  // it once out of sight, so it never grows while the session types itself
+  // out. Remeasured when the width changes (the output reflows) and when the
+  // fonts land.
+  const finished = art => SCRIPT.map(s =>
+    s.type !== undefined ? s.type : s.line !== undefined ? "\n" + lineOf(s) : s.qr ? qrBlock(art) : s.caret ? CARET : "").join("");
+  let measuredWidth = -1;
+  async function fixHeight(force) {
+    if (!force && innerWidth === measuredWidth) return;
+    measuredWidth = innerWidth;
+    const art = await loadQR(), shown = term.innerHTML;
+    term.style.minHeight = "";
+    term.innerHTML = finished(art);
+    term.style.minHeight = term.offsetHeight + "px";
+    term.innerHTML = shown;
+  }
+  addEventListener("resize", () => fixHeight());
+  if (document.fonts) document.fonts.ready.then(() => fixHeight(true));
+
   let runToken = 0;
   const sleep = ms => new Promise(r => setTimeout(r, ms));
 
   async function run() {
+    await fixHeight();
     const token = ++runToken;
     const alive = () => token === runToken;
     term.innerHTML = "";
@@ -2141,7 +2135,7 @@ if (FEATURES.liveTerminal) {
       }
 
       if (step.line !== undefined) {
-        const text = typeof step.line === "function" ? step.line() : step.line;
+        const text = lineOf(step);
         term.innerHTML += "\n" + text;
         if (!reduced) await sleep(text ? 90 : 40);
         continue;
@@ -2150,15 +2144,13 @@ if (FEATURES.liveTerminal) {
       if (step.qr) {
         const art = await loadQR();
         if (!alive()) return;
-        term.innerHTML += art
-          ? `\n  <span class="qr">${art}</span>\n`
-          : `\n  <span class="d">[QR] ${HOST}/?s=${SESSION}</span>\n`;
+        term.innerHTML += qrBlock(art);
         if (!reduced) await sleep(260);
         continue;
       }
 
       if (step.caret) {
-        term.innerHTML += '\n<span class="caret"></span>';
+        term.innerHTML += CARET;
         if (replay) replay.hidden = false;
       }
     }
