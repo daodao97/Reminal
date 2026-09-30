@@ -10,8 +10,9 @@
 //     what goes on the site, in posts, and in people's shell history, so it
 //     redirects to the script on main rather than pinning a copy that quietly
 //     goes stale;
-//   * one canonical host: reminal.dev and any www. variant fold into
-//     reminal.app so links, OG cards and analytics don't fragment.
+//   * one canonical URL per page: https, reminal.app (reminal.dev and any
+//     www. variant fold into it), and a page's directory rather than its
+//     index.html, so links, OG cards and search rankings don't fragment.
 //   * stray `/?s=` on this host: someone typing the marketing domain with a
 //     session id is sent to live.reminal.app, which is the real viewer.
 //   * /downloads/: files kept in the DOWNLOADS bucket rather than on the
@@ -58,6 +59,20 @@ const PAGES = new Set([
   "/guides/agents-different-machines",
   "/guides/review-agent-work",
 ]);
+
+// Browsers and crawlers ask for /favicon.ico whatever the page links to.
+const FAVICON = "/assets/icon-96.png";
+
+// How long a browser may keep a file without asking again. Pages, styles and
+// scripts are not listed: their names don't change when they do, so they are
+// checked every time (the default). Fonts are vendored and renamed if they
+// are ever replaced; share cards and icons change rarely and a day's delay is
+// harmless.
+export function cacheControl(pathname) {
+  if (pathname.startsWith("/fonts/")) return "public, max-age=31536000, immutable";
+  if (pathname.startsWith("/og/") || pathname.startsWith("/assets/icon")) return "public, max-age=86400";
+  return null;
+}
 
 // A join URL typed on the marketing host. Path must stay `/` so /agents/?s=
 // cannot steal a page. The real viewer is live.reminal.app.
@@ -132,6 +147,13 @@ export default {
   async fetch(request, env) {
     const url = new URL(request.url);
 
+    // Plain http on a host we own is the same page at a second address.
+    if (url.protocol === "http:" && (url.hostname === CANONICAL_HOST || ALIASES.has(url.hostname))) {
+      url.protocol = "https:";
+      url.hostname = CANONICAL_HOST;
+      return Response.redirect(url.toString(), 301);
+    }
+
     // Empty 204 the page times to show the visitor their own round-trip to
     // the nearest Cloudflare edge. Uncached and bodiless so the number is
     // network latency and nothing else.
@@ -153,6 +175,7 @@ export default {
     }
 
     if (ALIASES.has(url.hostname)) {
+      url.protocol = "https:";
       url.hostname = CANONICAL_HOST;
       return Response.redirect(url.toString(), 301);
     }
@@ -174,6 +197,18 @@ export default {
       return Response.redirect(target, 302);
     }
 
+    if (url.pathname === "/favicon.ico") {
+      return Response.redirect(new URL(FAVICON, url).toString(), 301);
+    }
+
+    // /agents/index.html is /agents/ under a second name. ASSETS already
+    // redirects it, but with a temporary 307; this makes it permanent, for the
+    // same reason as the trailing slash below.
+    if (url.pathname.endsWith("/index.html")) {
+      url.pathname = url.pathname.slice(0, -"index.html".length);
+      return Response.redirect(url.toString(), 308);
+    }
+
     // 308, not the 307 ASSETS would send: these page URLs are settled, and a
     // permanent redirect is what folds the bare form's signal into the slashed
     // one instead of leaving the pair split.
@@ -182,6 +217,11 @@ export default {
       return Response.redirect(url.toString(), 308);
     }
 
-    return env.ASSETS.fetch(request);
+    const res = await env.ASSETS.fetch(request);
+    const cache = res.ok && cacheControl(url.pathname);
+    if (!cache) return res;
+    const out = new Response(res.body, res);
+    out.headers.set("cache-control", cache);
+    return out;
   },
 };

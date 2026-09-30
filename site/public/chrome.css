@@ -11,7 +11,7 @@
 
 :root{
   --page:#fff; --panel:#fff; --sub:#fafafa; --soft:#f5f5f5;
-  --ink:#0a0a0a; --dim:#4d4d4d; --mute:#8f8f8f;
+  --ink:#0a0a0a; --dim:#4d4d4d; --mute:#707070;
   --line:#eaeaea; --line2:#d4d4d4;
   --yes:#107d32; --part:#b35a00; --no:#a3a3a3; --blue:#0068d6;
   --code:#f2f2f2;
@@ -35,13 +35,13 @@
 @supports (height:1svh){:root{--svh:1svh}}
 @media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
   --page:#000; --panel:#0a0a0a; --sub:#0a0a0a; --soft:#111;
-  --ink:#ededed; --dim:#a1a1a1; --mute:#707070;
+  --ink:#ededed; --dim:#a1a1a1; --mute:#7d7d7d;
   --line:#1f1f1f; --line2:#2e2e2e;
   --yes:#62c073; --part:#f2a20d; --no:#5c5c5c; --blue:#52a8ff;
   --code:#1a1a1a; color-scheme:dark}}
 :root[data-theme="dark"]{
   --page:#000; --panel:#0a0a0a; --sub:#0a0a0a; --soft:#111;
-  --ink:#ededed; --dim:#a1a1a1; --mute:#707070;
+  --ink:#ededed; --dim:#a1a1a1; --mute:#7d7d7d;
   --line:#1f1f1f; --line2:#2e2e2e;
   --yes:#62c073; --part:#f2a20d; --no:#5c5c5c; --blue:#52a8ff;
   --code:#1a1a1a; color-scheme:dark}
@@ -80,7 +80,9 @@ footer a:hover{color:var(--ink)}
 .f-brand p{margin:14px 0 0;color:var(--mute);font-size:13.5px;line-height:1.65;max-width:36ch}
 .f-badges{display:flex;flex-wrap:wrap;gap:6px;margin-top:18px}
 .f-badges span{font:400 11.5px var(--mono);color:var(--mute);border:1px solid var(--line);border-radius:6px;padding:3px 9px;white-space:nowrap}
-.f-col h4{margin:0 0 14px;font:500 12px var(--mono);letter-spacing:.02em;text-transform:uppercase;color:var(--mute)}
+/* h2, not h4: a page's headings may not skip a level. (.f-grid raises it above
+   body.doc h2 on the legal pages.) */
+.f-grid .f-col h2{margin:0 0 14px;font:500 12px var(--mono);letter-spacing:.02em;text-transform:uppercase;color:var(--mute)}
 .f-col ul{list-style:none;margin:0;padding:0;display:grid;gap:10px}
 .f-col li{margin:0}
 .f-col a{font-size:13.5px}

@@ -6,8 +6,8 @@
 <title>reminal: every window, desktop and terminal, in any browser</title>
 <meta name="description" content="Your coding agents keep working after you walk away. Watch them, answer them, and let them reach each other, from any browser. Open source, no account.">
 <link rel="canonical" href="https://reminal.app/">
-<link rel="icon" href="/assets/icon.png" type="image/png">
-<link rel="apple-touch-icon" href="/assets/icon.png">
+<link rel="icon" href="/assets/icon-96.png" type="image/png" sizes="96x96">
+<link rel="apple-touch-icon" href="/assets/icon-180.png">
 
 <meta property="og:type" content="website">
 <meta property="og:site_name" content="reminal">
@@ -352,7 +352,7 @@ header figcaption{max-width:720px}
 
 /* slide deck */
 .win.deckwin{padding:10px 11px}
-.win.deckwin h4{margin:0 0 7px; font:600 10px/1.3 -apple-system,sans-serif; color:#e6edf3}
+.win.deckwin .dt{margin:0 0 7px; font:600 10px/1.3 -apple-system,sans-serif; color:#e6edf3}
 .win.deckwin .li{display:flex; align-items:center; gap:5px; margin-bottom:4px; color:var(--windim); font-size:7.5px}
 .win.deckwin .li::before{content:""; width:3px; height:3px; border-radius:50%; background:#a1a1a1; flex:none}
 .chartrow{display:flex; align-items:flex-end; gap:3px; height:26px; margin-top:7px}
@@ -560,7 +560,7 @@ form.signup button:disabled{opacity:.5;cursor:default}
 <nav id="nav" class="nav">
   <div class="navin">
     <a class="brand" href="/">
-      <img src="/assets/icon.png" alt="" width="22" height="22">
+      <img src="/assets/icon-96.png" alt="" width="22" height="22">
       <span>reminal</span>
     </a>
     <a href="/agents/" class="l hide-sm">For AI agents</a>
@@ -617,7 +617,7 @@ form.signup button:disabled{opacity:.5;cursor:default}
     <div class="term-wrap">
       <figure class="frame hero-shot" id="demo">
         <div class="bar"><span class="dots"><i></i><i></i><i></i></span><span class="url">zsh &middot; studio-mac</span><span class="live">HOST</span></div>
-        <pre class="term" id="term" aria-label="A recorded reminal session: running reminal prints a session ID, a PIN and a scannable QR code"></pre>
+        <pre class="term" id="term" role="img" aria-label="A recorded reminal session: running reminal prints a session ID, a PIN and a scannable QR code"></pre>
       </figure>
     </div>
     <figcaption>
@@ -686,7 +686,7 @@ form.signup button:disabled{opacity:.5;cursor:default}
         <div class="flyer" id="fly1" style="width:214px;height:134px">
           <div class="bar"><span class="dots"><i></i><i></i><i></i></span><span class="url">Q3-review.key</span></div>
           <div class="win deckwin">
-            <h4>Relay uptime, Q3</h4>
+            <div class="dt">Relay uptime, Q3</div>
             <div class="li">99.98% across 3 regions</div>
             <div class="li">p50 handshake 41 ms</div>
             <div class="chartrow"><i style="height:44%"></i><i style="height:61%"></i><i style="height:52%"></i><i style="height:78%"></i><i style="height:88%"></i><i style="height:100%"></i></div>
@@ -1146,7 +1146,7 @@ form.signup button:disabled{opacity:.5;cursor:default}
   <div class="wrap">
     <div class="f-grid">
       <div class="f-brand">
-        <span class="f-logo"><img src="/assets/icon.png" alt="" width="26" height="26"><span>reminal</span></span>
+        <span class="f-logo"><img src="/assets/icon-96.png" alt="" width="26" height="26"><span>reminal</span></span>
         <p>Every window, desktop and terminal on your machines, live in any browser.
         No open ports, no keys on disk, nothing to install on the device you&rsquo;re holding.</p>
         <div class="f-badges">
@@ -1157,7 +1157,7 @@ form.signup button:disabled{opacity:.5;cursor:default}
       </div>
 
       <div class="f-col">
-        <h4>Product</h4>
+        <h2>Product</h2>
         <ul>
           <li><a href="/#install">Install</a></li>
           <li><a href="/#bus">Agent bus</a></li>
@@ -1168,7 +1168,7 @@ form.signup button:disabled{opacity:.5;cursor:default}
       </div>
 
       <div class="f-col">
-        <h4>Developers</h4>
+        <h2>Developers</h2>
         <ul>
           <li><a href="https://github.com/harshalgajjar/Reminal">Source</a></li>
           <li><a href="https://github.com/harshalgajjar/Reminal/releases">Releases</a></li>
@@ -1179,7 +1179,7 @@ form.signup button:disabled{opacity:.5;cursor:default}
       </div>
 
       <div class="f-col">
-        <h4>Trust &amp; legal</h4>
+        <h2>Trust &amp; legal</h2>
         <ul>
           <li><a href="https://github.com/harshalgajjar/Reminal/blob/main/SECURITY.md">Report a vulnerability</a></li>
           <li><a href="https://github.com/harshalgajjar/Reminal/blob/main/LICENSING.md">Licensing</a></li>

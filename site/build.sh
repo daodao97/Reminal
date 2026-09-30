@@ -43,6 +43,13 @@ for name in "${SCENES[@]}"; do
 done
 
 cp ../assets/reminal-icon-1024.png "$OUT/icon.png"
+# The 1024 stays for the logo in structured data; the pages show the icon at
+# 22-26px and as a tab icon, so they get small copies (96 is a multiple of 48,
+# which Google wants for a site's search-result icon; 180 is iOS's home-screen
+# size).
+for px in 96 180; do
+  ffmpeg -loglevel error -y -i "$OUT/icon.png" -vf "scale=$px:$px:flags=lanczos" "$OUT/icon-$px.png"
+done
 
 # The hero terminal prints a version, so it has to be the real one. Hardcoding
 # it meant the site advertised v3.0.3 while people were installing v3.0.6.
