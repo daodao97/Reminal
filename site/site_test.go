@@ -26,6 +26,12 @@ func TestPagesShareHomeNavAndFooter(t *testing.T) {
 		t.Fatalf("found only %d pages under public/; is the test running from site/?", len(pages))
 	}
 	home := read(t, "public/index.html")
+	// Every page takes the shared chrome (fonts, tokens, nav, footer styles).
+	for _, p := range append([]string{"public/index.html"}, pages...) {
+		if !regexp.MustCompile(`<link rel="stylesheet" href="/chrome.css">`).MatchString(read(t, p)) {
+			t.Errorf("%s does not load /chrome.css, so its nav and footer are unstyled", p)
+		}
+	}
 	for _, part := range []struct {
 		name string
 		re   *regexp.Regexp
