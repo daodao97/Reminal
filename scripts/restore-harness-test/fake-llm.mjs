@@ -164,7 +164,9 @@ http.createServer((req, res) => {
     let body = {};
     try { body = raw ? JSON.parse(raw) : {}; } catch (_) {}
     const url = req.url || "";
-    log(new Date().toISOString(), req.method, url, JSON.stringify(lastUserText(body)).slice(0, 80));
+    // Enough of the prompt to see what was typed in, past any prefix a
+    // harness or reminal puts before it.
+    log(new Date().toISOString(), req.method, url, JSON.stringify(lastUserText(body)).slice(0, 240));
     try {
       const done = (p) => p && p.catch && p.catch(e => log("error", e.stack));
       if (url.includes("/messages/count_tokens")) { res.writeHead(200, { "content-type": "application/json" }); return res.end('{"input_tokens":10}'); }
