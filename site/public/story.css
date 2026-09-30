@@ -92,6 +92,9 @@ section.s .story-grid > *{max-width:none}
   .story-grid{display:block}
   .story-stage{position:sticky;top:var(--nav);z-index:3;margin:0 -16px;padding:10px 16px 12px;background:var(--page);border-bottom:1px solid var(--line)}
   .story-pin{position:relative;top:0;height:auto;display:block}
+  /* the scene lets go with the last held copy (--tail, set in story.js) */
+  .story.js .story-stage{margin-bottom:var(--tail,0px)}
+  .story.js .story-copy{margin-top:calc(-1 * var(--tail,0px))}
   .sx{--h:min(40 * var(--svh),(100vw - 32px) * .84);height:var(--h);width:min(100%,var(--h) * 1.19);margin:0 auto}
   .ch{padding:32px 0 24px}
   .ch h2{font-size:32px}
