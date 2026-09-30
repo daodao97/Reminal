@@ -286,7 +286,11 @@ header figcaption{max-width:720px}
 .stagewrap{height:560vh; position:relative; }
 /* Pinned under the nav, not behind it, so the whole set (and the hint at
    its top) sits in the part of the window you can see. */
-.stage-pin{position:sticky; top:var(--nav); height:calc(100vh - var(--nav)); display:grid; place-items:center; overflow:hidden}
+/* svh, not vh: on iPhone Safari 100vh is the height with the toolbars
+   hidden, so a 100vh stage runs below what you can see and the set sits low. */
+.stage-pin{position:sticky; top:var(--nav); height:calc(100 * var(--svh) - var(--nav)); display:grid; place-items:center; overflow:hidden;
+  /* room for the caption under the set, so set + caption centre together */
+  --cap-room:64px; padding-bottom:var(--cap-room)}
 .scene{
   position:relative; width:min(940px,92vw); height:min(560px,64vh);
   perspective:1600px; perspective-origin:50% 42%;
@@ -431,7 +435,7 @@ header figcaption{max-width:720px}
   width:5px; height:5px; border-radius:50%; background:#3fb950; flex:none;
   box-shadow:0 0 0 0 rgba(63,185,80,.7); animation:pulse 2s infinite;
 }
-.stage-cards{position:absolute; inset:0; display:grid; place-items:center; z-index:6; pointer-events:none}
+.stage-cards{position:absolute; inset:0 0 var(--cap-room) 0; display:grid; place-items:center; z-index:6; pointer-events:none}
 .sc-frame{position:relative; width:min(940px,92vw); height:min(560px,64vh)}
 .stagecard{
   position:absolute; width:clamp(228px,26vw,296px); opacity:0; text-align:left;
@@ -1310,6 +1314,19 @@ if (FEATURES.scrollFX && !reduced) {
     "header h1, header .lede, header .cta, header .stats, header .chips")];
   const frames = [...document.querySelectorAll(".frame")];
 
+  // Each hero piece's middle with the page scrolled to the top.
+  let heroStart = [];
+  const measureHero = () => {
+    heroStart = heroIn.map(el => {
+      const was = el.style.transform; el.style.transform = "";
+      const r = el.getBoundingClientRect(); el.style.transform = was;
+      return (r.top + r.bottom) / 2 + scrollY;   // its middle, page at the top
+    });
+  };
+  measureHero();
+  addEventListener("resize", measureHero);
+  if (document.fonts) document.fonts.ready.then(measureHero);
+
   let queued = false;
 
   function pass() {
@@ -1318,17 +1335,18 @@ if (FEATURES.scrollFX && !reduced) {
     const y  = scrollY;
 
 
-    // Hero: the copy drifts up, and each piece stays solid while at least
-    // half of it is still in view below the nav, fading only over its last
-    // half. Tying the fade to scroll distance instead dimmed text that was
-    // still mostly on screen on a short phone.
+    // Hero: the copy drifts up and fades as it rises. Each piece is solid
+    // where it starts (or anywhere below 40% of the way down the screen) and
+    // dims as its middle climbs from there to the nav. Fading by scroll
+    // distance instead greyed everything at once, text still on screen too.
     if (y < vh * 1.6) {
-      for (const el of heroIn) {
+      const fadeFrom = NAV + (vh - NAV) * .4;
+      heroIn.forEach((el, i) => {
         el.style.transform = `translate3d(0, ${y * 0.06}px, 0)`;
-        const r = el.getBoundingClientRect();
-        const inView = (r.bottom - NAV) / Math.max(1, r.height);   // 1 = all of it
-        el.style.opacity = String(clamp(inView * 2));
-      }
+        const r = el.getBoundingClientRect(), mid = (r.top + r.bottom) / 2;
+        const from = Math.min(fadeFrom, heroStart[i]);   // where it sat with the page at the top
+        el.style.opacity = String(clamp((mid - NAV) / Math.max(1, from - NAV)));
+      });
     }
 
     // Media parallax: each frame drifts a little against the page as it
@@ -1381,7 +1399,7 @@ if (FEATURES.lidStage) {
     // Narrow: it is one column with the cards below, so the widest thing that
     // has to fit is the 660px browser, which buys a much larger set than the
     // wide formula would give at the same width.
-    const h = innerHeight - NAV;   // the pinned stage's height
+    const h = sec.querySelector(".stage-pin").clientHeight;   // the pinned stage's height
     const k = narrow()
       ? Math.min(innerWidth / 720, h / 1180)
       : Math.min(1, innerWidth / 1020, h / 760);
