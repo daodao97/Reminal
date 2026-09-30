@@ -1,0 +1,9 @@
+[
+  { "out": "home", "t": "Every window, desktop and terminal, live in any browser.", "l": "reminal.app" },
+  { "out": "agents", "t": "A home for long-running AI agents.", "l": "For AI agents · reminal.app" },
+  { "out": "macbook-lid-closed", "t": "Keep a MacBook awake with the lid closed.", "l": "Guide · reminal.app" },
+  { "out": "claude-code-from-phone", "t": "Check on Claude Code from your phone.", "l": "Guide · reminal.app" },
+  { "out": "run-agents-overnight", "t": "Run AI agents overnight.", "l": "Guide · reminal.app" },
+  { "out": "agents-different-machines", "t": "Get AI agents on different machines to work together.", "l": "Guide · reminal.app" },
+  { "out": "review-agent-work", "t": "Review what an AI agent did, from anywhere.", "l": "Guide · reminal.app" }
+]

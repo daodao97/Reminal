@@ -18,6 +18,21 @@ frames — about 9× smaller and smoother than the gifs, which matters when five
 of them are on one page. Output lands in `public/assets/` and is gitignored;
 the gifs stay the single source of truth. Needs `ffmpeg` (`brew install ffmpeg`).
 
+## Link previews
+
+Each page's share image (`og:image`, what WhatsApp, iMessage, X or Slack show)
+is a card in `public/og/`, rendered from `og/card.html` with the text in
+`og/cards.json`. Chat apps crop the card to its middle square, so the template
+keeps everything that must read inside the centre 630×630. To change a card,
+edit its line in `cards.json` and re-render (the PNGs are committed):
+
+```bash
+npx -y -p playwright node og/render.mjs    # first time: npx playwright install chromium
+```
+
+Chat apps cache a URL's preview, so a changed card can take a while to show
+for links that were already shared.
+
 ## Deploy
 
 ```bash
