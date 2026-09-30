@@ -1,0 +1,35 @@
+<!doctype html>
+<!-- A link-preview card (1200x630), rendered to public/og/*.png by render.mjs.
+     Chat apps (WhatsApp, iMessage) crop it to the middle square, so everything
+     that must read sits inside the centre 630x630. Text comes from the query:
+     ?t=<the line> &l=<the small label under it>. -->
+<html><head><meta charset="utf-8">
+<style>
+@font-face{font-family:"Geist";src:url(../public/fonts/Geist-Variable.woff2) format("woff2");font-weight:100 900}
+@font-face{font-family:"Geist Mono";src:url(../public/fonts/GeistMono-Variable.woff2) format("woff2");font-weight:100 900}
+*{box-sizing:border-box;margin:0}
+html,body{width:1200px;height:630px}
+body{position:relative;overflow:hidden;background:#fafafa;font-family:"Geist",sans-serif;color:#0a0a0a;
+  display:flex;align-items:center;justify-content:center;-webkit-font-smoothing:antialiased}
+body::before{content:"";position:absolute;inset:0;
+  background-image:linear-gradient(#e6e6e6 1px,transparent 1px),linear-gradient(90deg,#e6e6e6 1px,transparent 1px);
+  background-size:63px 63px;background-position:center center;
+  -webkit-mask-image:radial-gradient(ellipse 60% 70% at 50% 50%,#000 20%,transparent 75%)}
+.card{position:relative;width:600px;display:flex;flex-direction:column;align-items:center;text-align:center;gap:34px}
+.brand{display:flex;align-items:center;gap:14px;font-weight:600;font-size:34px;letter-spacing:-.03em}
+.brand img{width:58px;height:58px;border-radius:14px}
+h1{font-weight:600;font-size:54px;line-height:1.06;letter-spacing:-.045em;text-wrap:balance}
+.label{font:500 19px "Geist Mono",monospace;letter-spacing:.04em;text-transform:uppercase;color:#8f8f8f}
+</style></head>
+<body>
+  <div class="card">
+    <div class="brand"><img src="../../assets/reminal-icon-1024.png" alt=""><span>reminal</span></div>
+    <h1 id="t"></h1>
+    <p class="label" id="l"></p>
+  </div>
+  <script>
+    const q = new URLSearchParams(location.search);
+    document.getElementById("t").textContent = q.get("t") || "";
+    document.getElementById("l").textContent = q.get("l") || "reminal.app";
+  </script>
+</body></html>
