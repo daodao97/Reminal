@@ -53,7 +53,7 @@
           "name": "Can Claude Code and Codex talk to each other?",
           "acceptedAnswer": {
             "@type": "Answer",
-            "text": "Not directly — there is no shared protocol between vendors, and each vendor's answer to multi-agent work is subagents inside its own product. What they do have in common is that both run in a terminal, so a shared view of terminals is enough for one to read and drive the other."
+            "text": "Not directly. There is no shared protocol between vendors, and each vendor's answer to multi-agent work is subagents inside its own product. What they do have in common is that both run in a terminal, so a shared view of terminals is enough for one to read and drive the other."
           }
         },
         {
@@ -69,7 +69,7 @@
           "name": "Do both agents need the same software installed?",
           "acceptedAnswer": {
             "@type": "Answer",
-            "text": "No, if the channel is the terminal. The agent being read does not need to know anything about it — a PTY is just a PTY. Only the side doing the reading needs the tooling."
+            "text": "No, if the channel is the terminal. The agent being read does not need to know anything about it; a PTY is just a PTY. Only the side doing the reading needs the tooling."
           }
         },
         {
@@ -110,7 +110,7 @@
 <p class="lede">Most people running more than one coding agent end up with the
 same shape: Claude Code on the laptop, Codex on a build box, maybe something
 scripted on a third machine. None of them can see each other, and every vendor's
-answer is subagents inside their own product — which does nothing when the tools
+answer is subagents inside their own product, which does nothing when the tools
 come from different vendors with complementary skills.</p>
 <figure class="shot">
   <video src="/assets/own.mp4" poster="/assets/own.jpg" muted loop playsinline autoplay preload="metadata" aria-label="A fleet view listing several machines and their live sessions"></video>
@@ -131,7 +131,7 @@ works, it is asynchronous, and it loses everything about what the other agent is
 actually doing right now.</p>
 <p><strong>Orchestration frameworks.</strong> A supervisor process drives several
 agents through an API. Powerful, and it requires every participant to be a
-first-class citizen of that framework — which usually means one vendor.</p>
+first-class citizen of that framework, which usually means one vendor.</p>
 <p><strong>Message queues and webhooks.</strong> Fine for events, poor for the
 thing you usually want, which is "what is that session doing and can I nudge
 it".</p>
@@ -141,9 +141,9 @@ it".</p>
 interface they share, and it needs no agreement from anyone.</p>
 <p>If a tool can list live sessions across the machines you own, search their
 scrollback, read a transcript and send keys into one, then an agent using that
-tool can read and drive another agent — without the other side integrating
+tool can read and drive another agent without the other side integrating
 anything at all. A Codex session has no idea it is being read; it is just a PTY.</p>
-<p>This is what we build (reminal — disclosed). <code>reminal integrate</code>
+<p>This is what we build (reminal, disclosed). <code>reminal integrate</code>
 registers an MCP server with whichever agent CLIs you have installed, and they
 get four tools: <code>list_sessions</code>, <code>search_sessions</code>,
 <code>read_transcript</code> and <code>send_keys</code>.</p>
@@ -167,13 +167,13 @@ opt-in and an audit trail are not there yet.</p>
 
 <h2>Common questions</h2>
 <h3>Can Claude Code and Codex talk to each other?</h3>
-<p>Not directly — there is no shared protocol between vendors, and each vendor's answer to multi-agent work is subagents inside its own product. What they do have in common is that both run in a terminal, so a shared view of terminals is enough for one to read and drive the other.</p>
+<p>Not directly. There is no shared protocol between vendors, and each vendor's answer to multi-agent work is subagents inside its own product. What they do have in common is that both run in a terminal, so a shared view of terminals is enough for one to read and drive the other.</p>
 
 <h3>What is MCP and does it let agents communicate?</h3>
 <p>The Model Context Protocol is a standard way for an agent to call external tools. It connects an agent to tools, not agents to each other. Agent-to-agent communication happens when the tool an agent calls happens to expose another agent's session.</p>
 
 <h3>Do both agents need the same software installed?</h3>
-<p>No, if the channel is the terminal. The agent being read does not need to know anything about it — a PTY is just a PTY. Only the side doing the reading needs the tooling.</p>
+<p>No, if the channel is the terminal. The agent being read does not need to know anything about it; a PTY is just a PTY. Only the side doing the reading needs the tooling.</p>
 
 <h3>Can agents on different machines work together?</h3>
 <p>Yes, provided something gives them a shared view across machines. That is the harder half: coordinating two agents on one box is a process problem, coordinating across boxes is a networking and identity problem.</p>
@@ -185,7 +185,7 @@ opt-in and an audit trail are not there yet.</p>
   <div class="f-grid">
     <div class="f-brand">
       <span class="f-logo"><img src="/assets/icon.png" alt="" width="26" height="26"><span>reminal</span></span>
-      <p>Every window, desktop and terminal on your machines &mdash; live in any browser.
+      <p>Every window, desktop and terminal on your machines, live in any browser.
       No open ports, no keys on disk, nothing to install on the device you&rsquo;re holding.</p>
       <div class="f-badges">
         <span>macOS &middot; Linux &middot; Windows</span>
@@ -232,7 +232,7 @@ opt-in and an audit trail are not there yet.</p>
     <span class="f-legal">
       <span>&copy; <span id="year">2026</span> Harshal Gajjar</span>
       <span class="sep">&middot;</span>
-      <span>Licensed under AGPL-3.0 &mdash; the relay included</span>
+      <span>Licensed under AGPL-3.0, the relay included</span>
     </span>
     <span class="f-social">
       <a href="https://github.com/harshalgajjar/Reminal" aria-label="reminal on GitHub"><svg viewBox="0 0 16 16" width="17" height="17" aria-hidden="true" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.012 8.012 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg></a>

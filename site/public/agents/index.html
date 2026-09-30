@@ -3,8 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>A home for long-running AI agents — Claude Code, Codex, pi | reminal</title>
-<meta name="description" content="AI agents can run for hours if you let them — and a long-running agent needs a machine that never sleeps, a view you can glance at, and a hand that can reach in. reminal keeps the Mac awake with the lid shut, puts every agent, terminal and window in any browser, and gives your agents an MCP server so they can read and answer each other across machines.">
+<title>A home for long-running AI agents: Claude Code, Codex, pi | reminal</title>
+<meta name="description" content="AI agents can run for hours if you let them, and a long-running agent needs a machine that never sleeps, a view you can glance at, and a hand that can reach in. reminal keeps the Mac awake with the lid shut, puts every agent, terminal and window in any browser, and gives your agents an MCP server so they can read and answer each other across machines.">
 <link rel="canonical" href="https://reminal.app/agents/">
 <link rel="icon" href="/assets/icon.png" type="image/png">
 <link rel="apple-touch-icon" href="/assets/icon.png">
@@ -59,7 +59,7 @@
           "name": "Does Claude Code's /remote-control work with Codex, pi, or aider?",
           "acceptedAnswer": {
             "@type": "Answer",
-            "text": "No. Each vendor's remote steers only its own agent: /remote-control mirrors a Claude Code session, and Codex pairs with the ChatGPT mobile app. reminal is agent-agnostic — it streams the terminal and the windows themselves, so anything that runs in a terminal (pi, aider, opencode, plain build scripts) is reachable from any browser."
+            "text": "No. Each vendor's remote steers only its own agent: /remote-control mirrors a Claude Code session, and Codex pairs with the ChatGPT mobile app. reminal is agent-agnostic: it streams the terminal and the windows themselves, so anything that runs in a terminal (pi, aider, opencode, plain build scripts) is reachable from any browser."
           }
         },
         {
@@ -67,7 +67,7 @@
           "name": "Can one AI agent talk to another one on a different machine?",
           "acceptedAnswer": {
             "@type": "Answer",
-            "text": "Yes. `reminal integrate` registers reminal's MCP server with the agent CLIs you have installed — Claude Code, Codex, Cursor, Gemini, OpenCode, Antigravity and Amp. An agent can then call list_sessions to see every terminal on every machine you own, search_sessions to regex their live scrollback, read_transcript to read one, and send_keys to type into it. The two agents need not come from the same vendor, and the far side needs no integration at all: it is just a terminal."
+            "text": "Yes. `reminal integrate` registers reminal's MCP server with the agent CLIs you have installed: Claude Code, Codex, Cursor, Gemini, OpenCode, Antigravity and Amp. An agent can then call list_sessions to see every terminal on every machine you own, search_sessions to regex their live scrollback, read_transcript to read one, and send_keys to type into it. The two agents need not come from the same vendor, and the far side needs no integration at all: it is just a terminal."
           }
         },
         {
@@ -75,7 +75,7 @@
           "name": "How does an AI agent tell me it is blocked without me watching the terminal?",
           "acceptedAnswer": {
             "@type": "Answer",
-            "text": "It calls add_note with status attention, which pins a red badge to the window the question is about — the browser it is driving, the editor it is editing. The badge shows on the desktop and in every viewer, so it reaches your phone. Press Done and the agent's next read_replies call returns a handback, and it picks the work back up. Window notes need the desktop badge helper, which is macOS today; the session tools work on macOS, Linux and Windows."
+            "text": "It calls add_note with status attention, which pins a red badge to the window the question is about (the browser it is driving, the editor it is editing). The badge shows on the desktop and in every viewer, so it reaches your phone. Press Done and the agent's next read_replies call returns a handback, and it picks the work back up. Window notes need the desktop badge helper, which is macOS today; the session tools work on macOS, Linux and Windows."
           }
         },
         {
@@ -91,7 +91,7 @@
           "name": "Does my session pass through a vendor's cloud?",
           "acceptedAnswer": {
             "@type": "Answer",
-            "text": "reminal sessions are end-to-end encrypted with AES-256-GCM under a fresh key per run; the relay routes ciphertext it cannot read. There is no account and nothing to sign in to, and the relay itself is open source — you can self-host it on Cloudflare in a few minutes."
+            "text": "reminal sessions are end-to-end encrypted with AES-256-GCM under a fresh key per run; the relay routes ciphertext it cannot read. There is no account and nothing to sign in to, and the relay itself is open source; you can self-host it on Cloudflare in a few minutes."
           }
         },
         {
@@ -194,10 +194,10 @@ section.s .notemock{max-width:none}
     <h1>Your agents can run for hours. <span class="em">Give them a home.</span></h1>
     <p class="lede">
       Claude Code can chew on a refactor for an hour. Codex can work a queue overnight. Run them
-      that way and they stop being chats — they become <strong>resident processes</strong>, and a
+      that way and they stop being chats. They become <strong>resident processes</strong>, and a
       resident process needs three things: a machine that never sleeps, a view you can glance at,
       and a hand that can reach in when it stalls.
-      <strong>reminal is that home</strong> — every agent, terminal and window, live in any browser,
+      <strong>reminal is that home</strong>: every agent, terminal and window, live in any browser,
       with the lid shut.
     </p>
 
@@ -211,8 +211,8 @@ section.s .notemock{max-width:none}
     </div>
 
     <div class="chips">
-      <span class="chip"><b>Any CLI agent</b> — or none</span>
-      <span class="chip"><b>No account</b> — the browser is the client</span>
+      <span class="chip"><b>Any CLI agent</b>, or none</span>
+      <span class="chip"><b>No account</b>: the browser is the client</span>
       <span class="chip"><b>End-to-end encrypted</b></span>
       <span class="chip"><b>No open ports</b></span>
       <span class="chip">Open source, AGPL-3.0</span>
@@ -227,7 +227,7 @@ section.s .notemock{max-width:none}
   <h2>Your agent dies when the lid closes.</h2>
   <p class="body">
     Both first-party remotes are clear about where the work happens: on your machine. Which means the
-    machine has to stay awake — and macOS sleeps a MacBook the moment the lid closes, unless a monitor
+    machine has to stay awake, and macOS sleeps a MacBook the moment the lid closes, unless a monitor
     and keyboard are plugged in. The refactor stops mid-file, and your phone is a window into a dead session.
     The usual fix is a hardware dummy HDMI plug.
   </p>
@@ -235,14 +235,14 @@ section.s .notemock{max-width:none}
     <strong>reminal fixes it in software.</strong> Flip on closed-lid mode and leave: it disables clamshell
     sleep and spins up a virtual display the moment the Mac goes headless, so the agent keeps working and
     every window keeps streaming. Toggle it off and everything is undone. Keep <code>/remote-control</code>
-    if you like it — reminal is what keeps the machine alive underneath it.
+    if you like it; reminal is what keeps the machine alive underneath it.
   </p>
   <figure class="frame">
     <div class="bar"><span class="dots"><i></i><i></i><i></i></span><span class="url">live.reminal.app/?s=7f3a2c9e</span><span class="live">live</span></div>
     <video src="/assets/lid.mp4" poster="/assets/lid.jpg" muted loop playsinline autoplay preload="metadata"
-           aria-label="A MacBook's lid folds shut — and its windows keep streaming, live and controllable, into a browser"></video>
+           aria-label="A MacBook's lid folds shut, and its windows keep streaming, live and controllable, into a browser"></video>
   </figure>
-  <figcaption>The lid shuts with nothing plugged in — and the windows keep streaming, live and controllable.</figcaption>
+  <figcaption>The lid shuts with nothing plugged in, and the windows keep streaming, live and controllable.</figcaption>
 </section>
 
 <section class="wrap s" id="any-agent">
@@ -261,26 +261,26 @@ section.s .notemock{max-width:none}
     </div>
     <div class="card">
       <h3>Codex CLI</h3>
-      <p>Codex pairing lives in the ChatGPT app, signed in. reminal needs no app and no account —
+      <p>Codex pairing lives in the ChatGPT app, signed in. reminal needs no app and no account:
       run <code>reminal</code>, scan the QR, and any browser on any device is a full terminal
       on that machine.</p>
     </div>
     <div class="card">
       <h3>pi · aider · opencode · anything</h3>
-      <p>No first-party remote exists for these at all. If it runs in a terminal, reminal streams it —
+      <p>No first-party remote exists for these at all. If it runs in a terminal, reminal streams it:
       true colour, touch selection, find-in-scrollback, reconnect from another city with the shell
       exactly where you left it.</p>
     </div>
     <div class="card">
       <h3>The whole fleet</h3>
-      <p>Claude Code on the MacBook, Codex on the Linux box, a build on the Mini — one live view of
+      <p>Claude Code on the MacBook, Codex on the Linux box, a build on the Mini: one live view of
       every machine, every session, what's running and who's watching. Attach, spawn or kill from
       the CLI or the browser.</p>
     </div>
   </div>
   <p class="body" style="margin-top:28px">
     <strong>An agent can use the same door.</strong> Hand a session ID and PIN to an agent and it connects
-    like any other viewer — triaging an incident on one box while it patches another, with you watching
+    like any other viewer, triaging an incident on one box while it patches another, with you watching
     both in the same browser. Since v3.5.0 it doesn't even need the PIN: see below.
   </p>
 </section>
@@ -289,7 +289,7 @@ section.s .notemock{max-width:none}
   <p class="eyebrow">Agent bus</p>
   <h2>Your agents can see each other.</h2>
   <p class="body">
-    Claude Code on the laptop, Codex on the build box. Same problem, no shared anything — every
+    Claude Code on the laptop, Codex on the build box. Same problem, no shared anything. Every
     vendor's answer is subagents inside its own product, which doesn't help when the agents come
     from different vendors. reminal makes the terminal the bus: one MCP server, nine tools, and
     every session on every machine you own becomes something an agent can read and answer.
@@ -301,40 +301,40 @@ section.s .notemock{max-width:none}
       <button class="copy" type="button" data-copy="#integrate code">Copy</button>
     </div>
     <p class="sub-cta">
-      Registers the MCP server with whichever agent CLIs you already have —
+      Registers the MCP server with whichever agent CLIs you already have:
       Claude Code, Codex CLI, Cursor CLI, Gemini CLI, OpenCode, Antigravity CLI, Amp.
     </p>
   </div>
   <div class="trace" role="img"
        aria-label="A trace of an agent's tool calls: it lists sessions across three machines, searches every scrollback for a failure, reads the failing session's transcript, and types an answer into it">
-    <div class="bar"><span class="dots"><i></i><i></i><i></i></span><span class="url">claude-code — studio-mac</span><span class="live">live</span></div>
+    <div class="bar"><span class="dots"><i></i><i></i><i></i></span><span class="url">claude-code &middot; studio-mac</span><span class="live">live</span></div>
     <ol>
       <li>
         <p class="call"><b>list_sessions</b></p>
-        <p class="ret">3 machines · 7 live sessions — <b>studio-mac</b>, <b>aws-eu-1</b>, <b>mini-01</b></p>
+        <p class="ret">3 machines · 7 live sessions: <b>studio-mac</b>, <b>aws-eu-1</b>, <b>mini-01</b></p>
       </li>
       <li>
         <p class="call"><b>search_sessions</b> <span class="arg">pattern: "FAIL|Traceback"</span></p>
-        <p class="ret"><b>aws-eu-1 · agent-7</b> — <code>pytest: 2 failed, 118 passed</code></p>
+        <p class="ret"><b>aws-eu-1 · agent-7</b>: <code>pytest: 2 failed, 118 passed</code></p>
       </li>
       <li>
         <p class="call"><b>read_transcript</b> <span class="arg">session: "agent-7"</span></p>
-        <p class="ret">…<code>AssertionError: expected 200, got 502</code> — it has been retrying the same request for nine minutes</p>
+        <p class="ret">…<code>AssertionError: expected 200, got 502</code>; it has been retrying the same request for nine minutes</p>
       </li>
       <li>
-        <p class="call"><b>send_keys</b> <span class="arg">session: "agent-7", keys: "the 502 is the proxy in front of you, not your handler — check X-Forwarded-Proto", enter: true</span></p>
+        <p class="call"><b>send_keys</b> <span class="arg">session: "agent-7", keys: "the 502 is the proxy in front of you, not your handler; check X-Forwarded-Proto", enter: true</span></p>
         <p class="ret">Typed into <b>agent-7</b> on aws-eu-1. It carries on from there.</p>
       </li>
     </ol>
   </div>
   <figcaption style="text-align:left">
-    Four calls, two vendors, two machines — and nothing was installed on the far side.
+    Four calls, two vendors, two machines, and nothing was installed on the far side.
     The other agent never learns it was read.
   </figcaption>
   <div class="grid">
     <div class="card">
       <h3><code>list_sessions</code></h3>
-      <p>Every live terminal on every machine you own — name, working directory, title, who's
+      <p>Every live terminal on every machine you own: name, working directory, title, who's
       watching it, how long it's been idle. No PINs, ever, in the output.</p>
     </div>
     <div class="card">
@@ -344,7 +344,7 @@ section.s .notemock{max-width:none}
     </div>
     <div class="card">
       <h3><code>read_transcript</code></h3>
-      <p>Pull a session's terminal as plain text, ANSI stripped — so one agent can read what
+      <p>Pull a session's terminal as plain text, ANSI stripped, so one agent can read what
       another is stuck on instead of asking you to copy it across. It doesn't attach a viewer.</p>
     </div>
     <div class="card">
@@ -356,12 +356,12 @@ section.s .notemock{max-width:none}
   <p class="body" style="margin-top:28px">
     <strong>They don't have to be the same agent, or from the same vendor.</strong> Claude Code can
     read a Codex session and answer it; a Gemini CLI on your Mac mini can watch a build the
-    laptop started. There is no protocol for anyone to adopt, because the bus is the terminal —
+    laptop started. There is no protocol for anyone to adopt, because the bus is the terminal:
     if it runs in a PTY, it can be read and typed into.
   </p>
   <p class="body" style="margin-top:14px; color:var(--dim); font-size:15px">
     <code>send_keys</code> types real keystrokes into a real shell. It only reaches machines you
-    enrolled yourself, everything it does is visible live in the viewer — and it's still a tool
+    enrolled yourself, everything it does is visible live in the viewer, and it's still a tool
     that can type Ctrl+C into your terminal. Treat it with the respect that deserves.
   </p>
 </section>
@@ -371,13 +371,13 @@ section.s .notemock{max-width:none}
   <h2>And an agent can raise a hand.</h2>
   <p class="body">
     An agent that gets stuck has exactly one channel today: a line of text in a terminal you
-    aren't looking at. reminal gives it another — a badge pinned to <em>the window the question is
+    aren't looking at. reminal gives it another: a badge pinned to <em>the window the question is
     actually about</em>. The browser it's driving, the editor it's editing, the simulator it can't
     get past. Colour carries the meaning, and red is the only one that moves.
   </p>
   <div class="notemock">
     <figure class="nm-win">
-      <div class="bar"><span class="dots"><i></i><i></i><i></i></span><span class="url">Google Chrome — checkout flow</span></div>
+      <div class="bar"><span class="dots"><i></i><i></i><i></i></span><span class="url">Google Chrome &middot; checkout flow</span></div>
       <div class="nm-canvas" aria-hidden="true">
         <div class="nm-page">
           <div class="nm-sk" style="width:38%"></div>
@@ -407,32 +407,32 @@ section.s .notemock{max-width:none}
         <i class="nm-dot working"></i>
         <div class="nm-txt">
           <div class="nm-t">Replaying the cart fixture</div>
-          <p class="nm-b">No action needed — this one just says what it's doing.</p>
+          <p class="nm-b">No action needed; this one just says what it's doing.</p>
           <div class="nm-m">claude-code · now</div>
         </div>
       </div>
     </div>
   </div>
   <figcaption style="text-align:left">
-    The badge is on the desktop <em>and</em> in every viewer — so it reaches the phone in your
+    The badge is on the desktop <em>and</em> in every viewer, so it reaches the phone in your
     pocket, and Done is a button you can press from there.
   </figcaption>
   <div class="legend" aria-hidden="true">
-    <span><i class="nm-dot attention"></i><b>attention</b> — blocked on you. Pulses.</span>
-    <span><i class="nm-dot working"></i><b>working</b> — mid-task, no action wanted</span>
-    <span><i class="nm-dot info"></i><b>info</b> — worth seeing</span>
-    <span><i class="nm-dot done"></i><b>done</b> — nothing owed</span>
+    <span><i class="nm-dot attention"></i><b>attention</b>: blocked on you. Pulses.</span>
+    <span><i class="nm-dot working"></i><b>working</b>: mid-task, no action wanted</span>
+    <span><i class="nm-dot info"></i><b>info</b>: worth seeing</span>
+    <span><i class="nm-dot done"></i><b>done</b>: nothing owed</span>
   </div>
   <div class="grid">
     <div class="card">
       <h3><code>list_windows</code></h3>
       <p>Every window on screen with the id the other tools take, its app and its bounds. Ids are
-      ephemeral on purpose — they die with the window, so an agent looks them up fresh.</p>
+      ephemeral on purpose: they die with the window, so an agent looks them up fresh.</p>
     </div>
     <div class="card">
       <h3><code>add_note</code></h3>
       <p>Pin a badge on one window: a short title, a line of detail, a status. Pass the same
-      <code>note_id</code> again and it updates in place — <code>working</code> becomes
+      <code>note_id</code> again and it updates in place, so <code>working</code> becomes
       <code>done</code> instead of a pile of stale notes.</p>
     </div>
     <div class="card">
@@ -444,7 +444,7 @@ section.s .notemock{max-width:none}
     <div class="card">
       <h3><code>remove_note</code> · <code>clear_notes</code></h3>
       <p>Take one note off, or the whole badge. Notes live exactly as long as their window, so
-      there is never anything left to tidy up — nothing is written to disk.</p>
+      there is never anything left to tidy up, since nothing is written to disk.</p>
     </div>
   </div>
   <p class="body" style="margin-top:28px">
@@ -452,7 +452,7 @@ section.s .notemock{max-width:none}
     <code>attention</code> and stops; you see a red dot on the actual window, from your desk or
     your phone; you fix the thing and press Done; the agent's next <code>read_replies</code>
     returns a handback and it picks the work back up. That's the loop a long-running agent has
-    been missing — a way to ask, and a way to be answered, without you tailing a log.
+    been missing: a way to ask, and a way to be answered, without you tailing a log.
   </p>
   <p class="body" style="margin-top:14px; color:var(--dim); font-size:15px">
     Window notes need the desktop badge helper, which is macOS today. The four session tools above
@@ -465,7 +465,7 @@ section.s .notemock{max-width:none}
   <h2>What each remote actually covers.</h2>
   <p class="body">
     This is a fair fight on purpose: the first-party remotes are good at what they do.
-    They just cover one agent's conversation — not the machine.
+    They just cover one agent's conversation, not the machine.
   </p>
   <div class="cmptable">
     <table>
@@ -474,10 +474,10 @@ section.s .notemock{max-width:none}
       </thead>
       <tbody>
         <tr><td>Reaches</td><td><b>Any terminal, any window, any agent</b></td><td><i>One Claude Code session</i></td><td><i>Codex sessions</i></td></tr>
-        <tr><td>Client</td><td><b>Any browser</b> — nothing to install, no account</td><td><i>Browser, signed in</i></td><td><i>ChatGPT mobile app, signed in</i></td></tr>
-        <tr><td>Lid closed / headless</td><td><b>Keeps the Mac awake</b> — software closed-lid mode, virtual display</td><td><i>Machine must stay awake</i></td><td><i>Machine must stay awake</i></td></tr>
-        <tr><td>GUI windows</td><td><b>Live at 60 fps, with input</b> — click, type, scroll, drag</td><td><i>No</i></td><td><i>Screenshots in the thread</i></td></tr>
-        <tr><td>Transport</td><td><b>End-to-end encrypted</b> — the relay routes ciphertext it can't read</td><td><i>Via Anthropic's relay</i></td><td><i>Via OpenAI's relay</i></td></tr>
+        <tr><td>Client</td><td><b>Any browser</b>: nothing to install, no account</td><td><i>Browser, signed in</i></td><td><i>ChatGPT mobile app, signed in</i></td></tr>
+        <tr><td>Lid closed / headless</td><td><b>Keeps the Mac awake</b>: software closed-lid mode, virtual display</td><td><i>Machine must stay awake</i></td><td><i>Machine must stay awake</i></td></tr>
+        <tr><td>GUI windows</td><td><b>Live at 60 fps, with input</b>: click, type, scroll, drag</td><td><i>No</i></td><td><i>Screenshots in the thread</i></td></tr>
+        <tr><td>Transport</td><td><b>End-to-end encrypted</b>: the relay routes ciphertext it can't read</td><td><i>Via Anthropic's relay</i></td><td><i>Via OpenAI's relay</i></td></tr>
         <tr><td>Source &amp; relay</td><td><b>AGPL-3.0, self-hostable relay</b></td><td><i>Closed</i></td><td><i>Closed</i></td></tr>
       </tbody>
     </table>
@@ -489,12 +489,12 @@ section.s .notemock{max-width:none}
   <p class="eyebrow">Ninety seconds</p>
   <h2>Start a session, close the lid, walk away.</h2>
   <ol class="steps">
-    <li><b>Install.</b> <code>curl -fsSL https://reminal.app/install.sh | sh</code> — macOS, Linux or Windows.</li>
+    <li><b>Install.</b> <code>curl -fsSL https://reminal.app/install.sh | sh</code> for macOS, Linux or Windows.</li>
     <li><b>Run <code>reminal</code></b> in the terminal where your agent lives (or wrap it: <code>reminal claude</code>). It prints a session ID, a PIN and a QR code.</li>
-    <li><b>Scan the QR with your phone.</b> That browser tab is now a real terminal on your machine — and the Apps menu streams any window next to it. Close the lid; nothing stops.</li>
+    <li><b>Scan the QR with your phone.</b> That browser tab is now a real terminal on your machine, and the Apps menu streams any window next to it. Close the lid; nothing stops.</li>
   </ol>
   <figure class="frame" style="margin-top:36px">
-    <div class="bar"><span class="dots"><i></i><i></i><i></i></span><span class="url">zsh — 2 viewers attached</span><span class="live">live</span></div>
+    <div class="bar"><span class="dots"><i></i><i></i><i></i></span><span class="url">zsh &middot; 2 viewers attached</span><span class="live">live</span></div>
     <video src="/assets/setup.mp4" poster="/assets/setup.jpg" muted loop playsinline autoplay preload="metadata"
            aria-label="A terminal runs reminal and prints a QR code; a phone scans it and joins the same session"></video>
   </figure>
@@ -507,7 +507,7 @@ section.s .notemock{max-width:none}
   <div class="faq">
     <details>
       <summary>How do I keep Claude Code or Codex running when I close my MacBook's lid?</summary>
-      <p>macOS sleeps a MacBook when the lid closes unless a monitor and keyboard are attached — which kills
+      <p>macOS sleeps a MacBook when the lid closes unless a monitor and keyboard are attached, which kills
       any agent session running on it. reminal's closed-lid mode disables clamshell sleep and spins up a
       virtual display the moment the Mac goes headless, so the agent keeps working and every window keeps
       streaming into your browser. No dummy HDMI plug. Toggle it off and everything is undone.</p>
@@ -515,42 +515,42 @@ section.s .notemock{max-width:none}
     <details>
       <summary>Does Claude Code's <code>/remote-control</code> work with Codex or pi?</summary>
       <p>No. Each vendor's remote steers only its own agent. reminal streams the terminal and the windows
-      themselves, so anything that runs in a terminal — pi, aider, opencode, a plain build script —
+      themselves, so anything that runs in a terminal (pi, aider, opencode, a plain build script)
       is reachable from any browser.</p>
     </details>
     <details>
       <summary>Can one AI agent talk to another one on a different machine?</summary>
       <p>Yes. <code>reminal integrate</code> registers reminal's MCP server with the agent CLIs you have
-      installed — Claude Code, Codex, Cursor, Gemini, OpenCode, Antigravity, Amp. An agent can then call
+      installed: Claude Code, Codex, Cursor, Gemini, OpenCode, Antigravity, Amp. An agent can then call
       <code>list_sessions</code> to see every terminal on every machine you own,
       <code>search_sessions</code> to regex their live scrollback, <code>read_transcript</code> to read
       one, and <code>send_keys</code> to type into it. The two agents don't have to come from the same
-      vendor, and the far side needs no integration — it's just a terminal.</p>
+      vendor, and the far side needs no integration: it's just a terminal.</p>
     </details>
     <details>
       <summary>How does an agent tell me it's blocked without me watching the terminal?</summary>
       <p>It calls <code>add_note</code> with status <code>attention</code>, which pins a red badge to the
-      window the question is about — the browser it's driving, the editor it's editing. The badge shows
+      window the question is about (the browser it's driving, the editor it's editing). The badge shows
       on the desktop and in every viewer, so it reaches your phone. Press <em>Done</em> and the agent's
       next <code>read_replies</code> returns a handback, and it picks the work back up. Window notes
       need the desktop badge helper, which is macOS today.</p>
     </details>
     <details>
       <summary>Can I watch several agents at once?</summary>
-      <p>Yes. <code>reminal machines</code> is one live view of every machine you own — every session,
+      <p>Yes. <code>reminal machines</code> is one live view of every machine you own: every session,
       what's running, who's watching. Attach to whichever needs input, from the CLI or the browser.</p>
     </details>
     <details>
       <summary>Does my session pass through a vendor's cloud?</summary>
       <p>Sessions are end-to-end encrypted with AES-256-GCM under a fresh key per run; the relay routes
       ciphertext it cannot read and can't brute-force the PIN offline. There is no account, and the relay
-      is open source — <a href="https://github.com/harshalgajjar/Reminal">self-host it on Cloudflare</a>
+      is open source, so you can <a href="https://github.com/harshalgajjar/Reminal">self-host it on Cloudflare</a>
       in a few minutes. The <a href="/privacy">privacy policy</a> shows how to verify this yourself.</p>
     </details>
     <details>
       <summary>What does it cost?</summary>
       <p>The CLI is free and open source under AGPL-3.0, including the relay.
-      A hosted tier — managed relay, permanent machine names — <a href="/#pro">is coming</a>.</p>
+      A hosted tier (managed relay, permanent machine names) <a href="/#pro">is coming</a>.</p>
     </details>
   </div>
   <p class="sub-cta" style="margin-top:30px">
@@ -567,7 +567,7 @@ section.s .notemock{max-width:none}
     <div class="f-grid">
       <div class="f-brand">
         <span class="f-logo"><img src="/assets/icon.png" alt="" width="26" height="26"><span>reminal</span></span>
-        <p>Every window, desktop and terminal on your machines &mdash; live in any browser.
+        <p>Every window, desktop and terminal on your machines, live in any browser.
         No open ports, no keys on disk, nothing to install on the device you&rsquo;re holding.</p>
         <div class="f-badges">
           <span>macOS &middot; Linux &middot; Windows</span>
@@ -614,7 +614,7 @@ section.s .notemock{max-width:none}
       <span class="f-legal">
         <span>&copy; <span id="year">2026</span> Harshal Gajjar</span>
         <span class="sep">&middot;</span>
-        <span>Licensed under AGPL-3.0 &mdash; the relay included</span>
+        <span>Licensed under AGPL-3.0, the relay included</span>
       </span>
       <span class="f-social">
         <a href="https://github.com/harshalgajjar/Reminal" aria-label="reminal on GitHub"><svg viewBox="0 0 16 16" width="17" height="17" aria-hidden="true" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.012 8.012 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg></a>

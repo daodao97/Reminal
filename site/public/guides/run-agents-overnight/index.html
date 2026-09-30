@@ -3,14 +3,14 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Running AI agents overnight — keeping them alive and knowing what happened (2026)</title>
-<meta name="description" content="The two failure modes of a long agent run: the process dying while you are away, and coming back with no idea what happened. tmux, sleep settings, usage limits, notifications and remote access — what each one fixes.">
+<title>Running AI agents overnight: keeping them alive and knowing what happened (2026)</title>
+<meta name="description" content="The two failure modes of a long agent run: the process dying while you are away, and coming back with no idea what happened. tmux, sleep settings, usage limits, notifications and remote access: what each one fixes.">
 <link rel="canonical" href="https://reminal.app/guides/run-agents-overnight/">
 <link rel="icon" href="/assets/icon.png" type="image/png">
 <meta property="og:site_name" content="reminal">
 <meta property="og:type" content="article">
 <meta property="og:url" content="https://reminal.app/guides/run-agents-overnight/">
-<meta property="og:title" content="Running AI agents overnight — the honest checklist">
+<meta property="og:title" content="Running AI agents overnight: the honest checklist">
 <meta property="og:description" content="Surviving the night and being useful are different problems. Detachable sessions, machine sleep, usage limits, and being able to answer a permission prompt at 3am.">
 <meta property="og:image" content="https://reminal.app/poster.png">
 <meta name="twitter:card" content="summary_large_image">
@@ -61,7 +61,7 @@
           "name": "How do I stop an SSH disconnect from killing a long agent run?",
           "acceptedAnswer": {
             "@type": "Answer",
-            "text": "Start the agent inside a detachable session — tmux, screen or shpool. Your SSH client dropping then sends SIGHUP to the client, not to the agent, and you reattach later with the session intact. This is the single highest-value habit for long runs."
+            "text": "Start the agent inside a detachable session: tmux, screen or shpool. Your SSH client dropping then sends SIGHUP to the client, not to the agent, and you reattach later with the session intact. This is the single highest-value habit for long runs."
           }
         },
         {
@@ -105,7 +105,7 @@
 </nav>
 <div class="wrap">
 
-<h1>Running AI agents overnight — how to keep them alive and know what happened</h1>
+<h1>Running AI agents overnight: how to keep them alive and know what happened</h1>
 
 <p class="lede">A long agent run has two failure modes that have nothing to do
 with the model: the process dies while you are not looking, and you come back
@@ -124,7 +124,7 @@ not in a detachable session dies with it. Fix: start every agent inside
 something lighter). This is the highest-value habit on the page and it is free.</p>
 <p><strong>The machine suspends.</strong> A laptop shut or idle will sleep, and
 the agent stops with it. If the work matters, run it on something that stays on
-— a desktop, a Mac mini, a spare box — or change the machine's sleep behaviour
+(a desktop, a Mac mini, a spare box) or change the machine's sleep behaviour
 deliberately rather than hoping.</p>
 <p><strong>Usage limits.</strong> Worth saying because it is common and nothing
 technical prevents it: a long unattended run can simply exhaust its quota and
@@ -134,7 +134,7 @@ stop. Scope the task and check your plan's limits before leaving it.</p>
 <p>Surviving is not the same as useful. If the agent stopped four hours in to
 ask "may I run this migration?", a session that stayed alive did not help you.</p>
 <p>Two shapes of answer. <strong>Notifications</strong> tell you something
-happened — hooks on completion, a webhook, a push. <strong>Reachability</strong>
+happened: hooks on completion, a webhook, a push. <strong>Reachability</strong>
 lets you look and respond. You generally want both, and most setups have only
 the first.</p>
 
@@ -147,7 +147,7 @@ means a terminal app.</p>
 the ChatGPT app both give you one agent's conversation from a phone. Simple,
 official, limited to that vendor and to the chat rather than the machine.</p>
 <p><strong>Keep it on your own machine and make it reachable.</strong> This is
-what we build (reminal — disclosed). The session stays where it is and any
+what we build (reminal, disclosed). The session stays where it is and any
 browser attaches to it, so you watch the terminal and the windows, and answer
 from wherever you are. No rent, no second environment. It needs the host to be
 running, which is the honest cost.</p>
@@ -171,7 +171,7 @@ reminal</code></pre>
 <p>Not by default. A laptop suspends when you shut it, and the agent process stops with it. The reliable options are to run agents on a machine that stays on, or to change the sleep behaviour on the laptop before you rely on it.</p>
 
 <h3>How do I stop an SSH disconnect from killing a long agent run?</h3>
-<p>Start the agent inside a detachable session — tmux, screen or shpool. Your SSH client dropping then sends SIGHUP to the client, not to the agent, and you reattach later with the session intact. This is the single highest-value habit for long runs.</p>
+<p>Start the agent inside a detachable session: tmux, screen or shpool. Your SSH client dropping then sends SIGHUP to the client, not to the agent, and you reattach later with the session intact. This is the single highest-value habit for long runs.</p>
 
 <h3>Should I run agents on a cloud box or my own machine?</h3>
 <p>A rented box is simpler to keep online and easy to resize. Your own machine costs nothing per month, keeps your credentials and code on hardware you control, and avoids maintaining a second environment in sync. The honest trade is uptime and convenience against rent and data location.</p>
@@ -186,7 +186,7 @@ reminal</code></pre>
   <div class="f-grid">
     <div class="f-brand">
       <span class="f-logo"><img src="/assets/icon.png" alt="" width="26" height="26"><span>reminal</span></span>
-      <p>Every window, desktop and terminal on your machines &mdash; live in any browser.
+      <p>Every window, desktop and terminal on your machines, live in any browser.
       No open ports, no keys on disk, nothing to install on the device you&rsquo;re holding.</p>
       <div class="f-badges">
         <span>macOS &middot; Linux &middot; Windows</span>
@@ -233,7 +233,7 @@ reminal</code></pre>
     <span class="f-legal">
       <span>&copy; <span id="year">2026</span> Harshal Gajjar</span>
       <span class="sep">&middot;</span>
-      <span>Licensed under AGPL-3.0 &mdash; the relay included</span>
+      <span>Licensed under AGPL-3.0, the relay included</span>
     </span>
     <span class="f-social">
       <a href="https://github.com/harshalgajjar/Reminal" aria-label="reminal on GitHub"><svg viewBox="0 0 16 16" width="17" height="17" aria-hidden="true" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.012 8.012 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg></a>

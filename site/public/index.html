@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>reminal — every window, desktop and terminal on your machines, in any browser</title>
+<title>reminal: every window, desktop and terminal on your machines, in any browser</title>
 <meta name="description" content="Your coding agents keep working after you walk away. Watch them, answer them, and let them reach each other, from any browser. Open source, no account.">
 <link rel="canonical" href="https://reminal.app/">
 <link rel="icon" href="/assets/icon.png" type="image/png">
@@ -12,8 +12,8 @@
 <meta property="og:type" content="website">
 <meta property="og:site_name" content="reminal">
 <meta property="og:url" content="https://reminal.app/">
-<meta property="og:title" content="reminal — your machines, in any browser">
-<meta property="og:description" content="Every window, desktop and terminal on your machines — live in any browser. Lid closed, nothing plugged in, no open ports.">
+<meta property="og:title" content="reminal: your machines, in any browser">
+<meta property="og:description" content="Every window, desktop and terminal on your machines, live in any browser. Lid closed, nothing plugged in, no open ports.">
 <meta property="og:image" content="https://reminal.app/poster.png">
 <meta property="og:image:width" content="1200">
 <meta property="og:image:height" content="630">
@@ -31,7 +31,7 @@
   for it. Google can only prefer us for the bare brand query once it holds
   *reminal the software* as a distinct entity, and the properties that build
   one are name/alternateName, a stable @id per node, and sameAs pointing at
-  profiles it already trusts. Every sameAs URL below is verified to resolve —
+  profiles it already trusts. Every sameAs URL below is verified to resolve;
   a dead or wrong one dissolves the entity instead of confirming it.
 -->
 <script type="application/ld+json">
@@ -134,7 +134,7 @@
 .term .g{color:var(--figyes);font-weight:500}
 .term .b{color:var(--figink);font-weight:500}
 .term .d{color:var(--figmute)}
-/* Dark-on-light and line-height:1 so the half-blocks tile without seams —
+/* Dark-on-light and line-height:1 so the half-blocks tile without seams:
    a QR that doesn't scan is worse than no QR. */
 .term .qr{display:inline-block;background:#fff;border-radius:4px;padding:9px;margin:4px 0 2px;line-height:0}
 .term .qr svg{display:block;width:168px;height:168px}
@@ -162,7 +162,7 @@ header figcaption{max-width:720px}
    whole chapter fits the reading area it holds as one (.whole); otherwise
    each step that fits holds in turn (.fits); a step that does not fit
    simply scrolls. Nothing ever holds partly hidden. The room to hold in is
-   an empty ::after at the end of whatever holds — sticky copy moves only
+   an empty ::after at the end of whatever holds. Sticky copy moves only
    within its container's content, and that is what extends it. Without JS
    nothing holds and the copy simply scrolls. */
 .story{padding-top:48px}
@@ -490,11 +490,11 @@ section.s .story-grid > *{max-width:none}
 }
 /* The agent's own two beats, at the end of the stage: a badge rides on the
    window it belongs to, and the note itself is readable beside the phone.
-   Both cards sit OUTSIDE .scene — inside a preserve-3d parent they would be
+   Both cards sit OUTSIDE .scene: inside a preserve-3d parent they would be
    z-sorted against the flyers (z up to 210) and magnified by the perspective.
    .sc-frame just mirrors the scene's box so they line up with it anyway. */
 /* The badge a window actually wears on a Mac: a notch standing proud of the
-   top edge, not a dot inside the title bar — a dot there is lost against the
+   top edge, not a dot inside the title bar. A dot there is lost against the
    traffic lights. Both this and the spec chip are inverse-scaled in JS so they
    stay a fixed size on screen while the window they are pinned to travels
    from 0.62 up to 1 and back down to 0.6 inside the phone. That is also how
@@ -576,7 +576,7 @@ section.s .story-grid > *{max-width:none}
 }
 
 /* On phones the set scales down (--stage-k) instead of being dropped, and the
-   two cards go full width above and below it rather than out to the sides —
+   two cards go full width above and below it rather than out to the sides:
    they are the readable half of the last two beats, so they must not shrink.
    The blur is dropped there: it is the one thing in here that costs real
    compositing on a phone. */
@@ -659,10 +659,10 @@ form.signup button:disabled{opacity:.5;cursor:default}
 <header class="hero">
 
   <div class="wrap">
-    <h1>Every window, desktop and terminal on your machines — <span class="em">live in any browser.</span></h1>
+    <h1>Every window, desktop and terminal on your machines, <span class="em">live in any browser.</span></h1>
     <p class="lede">
-      <strong>Close the laptop lid and walk away.</strong> reminal keeps the machine serving — and hands you
-      its actual apps, not just a shell — in any browser, from anywhere. No open ports, no keys on disk,
+      <strong>Close the laptop lid and walk away.</strong> reminal keeps the machine serving and hands you
+      its actual apps, not just a shell, in any browser, from anywhere. No open ports, no keys on disk,
       nothing to install on the device you're holding.
     </p>
 
@@ -684,26 +684,26 @@ form.signup button:disabled{opacity:.5;cursor:default}
     <div class="stats">
       <div><b>60<span>fps</span></b><em>of a live window</em></div>
       <div><b>17<span>ms</span></b><em>its screen to yours</em></div>
-      <div><b id="rtt">&mdash;<span>ms</span></b><em>your browser &rarr; the edge</em></div>
+      <div><b id="rtt">&hellip;<span>ms</span></b><em>your browser &rarr; the edge</em></div>
       <div><b>0</b><em>open ports</em></div>
     </div>
 
     <div class="chips">
-      <span class="chip"><b>No open ports</b><span class="more"> — nothing to scan</span></span>
-      <span class="chip"><b>End-to-end encrypted</b><span class="more"> — the relay routes ciphertext</span></span>
-      <span class="chip"><b>No client</b><span class="more"> — the browser is the client</span></span>
+      <span class="chip"><b>No open ports</b><span class="more">: nothing to scan</span></span>
+      <span class="chip"><b>End-to-end encrypted</b><span class="more">: the relay routes ciphertext</span></span>
+      <span class="chip"><b>No client</b><span class="more">: the browser is the client</span></span>
       <span class="chip">macOS · Linux · Windows</span>
       <span class="chip">Open source, AGPL-3.0</span>
     </div>
 
     <div class="term-wrap">
       <figure class="frame hero-shot" id="demo">
-        <div class="bar"><span class="dots"><i></i><i></i><i></i></span><span class="url">zsh &mdash; studio-mac</span><span class="live">HOST</span></div>
+        <div class="bar"><span class="dots"><i></i><i></i><i></i></span><span class="url">zsh &middot; studio-mac</span><span class="live">HOST</span></div>
         <pre class="term" id="term" aria-label="A recorded reminal session: running reminal prints a session ID, a PIN and a scannable QR code"></pre>
       </figure>
     </div>
     <figcaption>
-      Real output from <code>reminal</code> &mdash; and that QR is live.
+      Real output from <code>reminal</code>, and that QR is live.
       <span class="nowrap">Scan it and you&rsquo;ll land right back here.</span>
       <button class="term-replay" id="replay" type="button" hidden>Replay</button>
     </figcaption>
@@ -715,7 +715,7 @@ form.signup button:disabled{opacity:.5;cursor:default}
 
 <section class="stagewrap" id="lidstage" aria-label="Closing the lid: the windows keep streaming into a browser, then onto a phone">
   <div class="stage-pin">
-    <p class="stage-hint" id="stagehint">Scroll &mdash; close the lid</p>
+    <p class="stage-hint" id="stagehint">Scroll: close the lid</p>
     <div class="scene">
       <div class="mac">
         <div class="mac-lid" id="maclid">
@@ -737,7 +737,7 @@ form.signup button:disabled{opacity:.5;cursor:default}
         <!-- Already on the remote desktop, so the arrivals join a populated
              machine rather than an empty frame. -->
         <div class="flyer resident" id="res0" style="width:196px;height:112px">
-          <div class="bar"><span class="dots"><i></i><i></i><i></i></span><span class="url">zsh &mdash; api-prod</span></div>
+          <div class="bar"><span class="dots"><i></i><i></i><i></i></span><span class="url">zsh &middot; api-prod</span></div>
           <div class="win term-mini"><span class="g">~</span> tail -f api.log
 <span class="d">14:22:07</span> 200 GET /v1/sessions
 <span class="d">14:22:07</span> 200 POST /v1/relay
@@ -790,12 +790,12 @@ form.signup button:disabled{opacity:.5;cursor:default}
     <div class="stage-cards" aria-hidden="true">
       <div class="sc-frame">
         <div class="stagecard is-note" id="stagenote">
-          <div class="sc-head"><span>relay.ts &mdash; studio-mac</span><span>1 note</span></div>
+          <div class="sc-head"><span>relay.ts &middot; studio-mac</span><span>1 note</span></div>
           <div class="sc-row">
             <i class="nm-dot attention"></i>
             <div>
               <div class="sc-t">Tests still red after the fix</div>
-              <p class="sc-b">The 502 isn&rsquo;t coming from this handler &mdash; something on
+              <p class="sc-b">The 502 isn&rsquo;t coming from this handler. Something on
               <b>aws-eu-1</b> answers first. I&rsquo;ve paused rather than guess.</p>
               <div class="sc-m">claude-code &middot; now</div>
               <div class="sc-btns"><span class="sc-btn primary">Done</span><span class="sc-btn">Dismiss</span></div>
@@ -808,7 +808,7 @@ form.signup button:disabled{opacity:.5;cursor:default}
           <div class="sc-hit"><span class="sc-who">studio-mac &middot; relay.ts</span><span class="sc-no">no match</span></div>
           <div class="sc-hit on"><span class="sc-who">aws-eu-1 &middot; agent-7</span><span class="sc-yes">AssertionError: expected 200, got 502</span></div>
           <div class="sc-hit"><span class="sc-who">mini-01 &middot; backup</span><span class="sc-no">no match</span></div>
-          <div class="sc-foot">3 machines searched &middot; 1 hit &mdash; and it can type into that one too.</div>
+          <div class="sc-foot">3 machines searched &middot; 1 hit, and it can type into that one too.</div>
         </div>
       </div>
     </div>
@@ -821,13 +821,13 @@ form.signup button:disabled{opacity:.5;cursor:default}
   <p class="eyebrow reveal">Closed-lid mode</p>
   <h2 class="reveal">No monitor. No dummy plug. No dongle.</h2>
   <p class="body reveal">
-    Close a MacBook's lid and macOS puts it to sleep — unless it's on power with a monitor <em>and</em>
+    Close a MacBook's lid and macOS puts it to sleep, unless it's on power with a monitor <em>and</em>
     keyboard attached. The usual fix is a hardware dummy HDMI plug that fakes a display, or leaving the
     lid propped open on your desk forever.
   </p>
   <p class="body reveal" style="margin-top:14px">
-    <strong>reminal does it in software.</strong> Flip it on and leave. It disables clamshell sleep and —
-    because GUI apps need a screen to draw on — spins up a virtual display the moment the Mac goes
+    <strong>reminal does it in software.</strong> Flip it on and leave. It disables clamshell sleep and
+    (because GUI apps need a screen to draw on) spins up a virtual display the moment the Mac goes
     headless, so window mirroring keeps working with nothing plugged in. Toggle it off and everything
     is undone.
   </p>
@@ -851,18 +851,18 @@ form.signup button:disabled{opacity:.5;cursor:default}
               <div class="d-dock"><i></i><i></i><i></i><i></i><i></i><i></i></div>
             </div>
             <div class="sx-win d-w1">
-              <div class="sx-bar"><span class="dots"><i></i><i></i><i></i></span><span class="sx-url">TextEdit &mdash; studio-mac</span></div>
+              <div class="sx-bar"><span class="dots"><i></i><i></i><i></i></span><span class="sx-url">TextEdit &middot; studio-mac</span></div>
               <div class="d-doc"><p><span class="d-type"></span><i class="d-caret"></i></p><s></s><s></s><s class="h"></s></div>
             </div>
             <div class="sx-win d-w2">
-              <div class="sx-bar"><span class="dots"><i></i><i></i><i></i></span><span class="sx-url">Figma &mdash; studio-mac</span></div>
+              <div class="sx-bar"><span class="dots"><i></i><i></i><i></i></span><span class="sx-url">Figma &middot; studio-mac</span></div>
               <div class="d-canvas"><i class="a"></i><i class="b"></i><i class="c"></i><span class="d-sel"></span></div>
               <span class="d-own">own window</span>
             </div>
             <div class="d-menu"><p>Launch on studio-mac</p><span>Safari</span><span>Xcode</span><span class="f">Figma</span><span>Notes</span></div>
             <div class="sx-phone d-ph"><div class="sx-screen d-mirror">
               <div class="sx-win d-mwin">
-                <div class="sx-bar"><span class="dots"><i></i><i></i><i></i></span><span class="sx-url">Figma &mdash; studio-mac</span></div>
+                <div class="sx-bar"><span class="dots"><i></i><i></i><i></i></span><span class="sx-url">Figma &middot; studio-mac</span></div>
                 <div class="d-canvas"><i class="a"></i><i class="b"></i><i class="c"></i><span class="d-sel"></span></div>
               </div>
               <svg class="sx-cur d-mcur" viewBox="0 0 20 20" width="20" height="20"><path d="M3 2l13 7.5-6 1.4L7 17z" fill="#fff" stroke="#000" stroke-width="1.2" stroke-linejoin="round"/></svg>
@@ -875,7 +875,7 @@ form.signup button:disabled{opacity:.5;cursor:default}
           <!-- 02 sixty frames -->
           <div class="ly" data-ly="1" role="img" aria-label="A window from a Mac Studio streaming live into a browser at 60 frames per second: it is dragged across the screen while its video scrubs, and a meter holds 60 fps and 17 ms">
             <div class="sx-win f-win">
-              <div class="sx-bar"><span class="dots"><i></i><i></i><i></i></span><span class="sx-url">Final Cut &mdash; mac-studio</span></div>
+              <div class="sx-bar"><span class="dots"><i></i><i></i><i></i></span><span class="sx-url">Final Cut &middot; mac-studio</span></div>
               <div class="f-film"><div class="f-pan"></div><div class="f-scrub"><i class="f-head"></i></div></div>
             </div>
             <svg class="sx-cur f-cur" viewBox="0 0 20 20" width="20" height="20"><path d="M3 2l13 7.5-6 1.4L7 17z" fill="#fff" stroke="#000" stroke-width="1.2" stroke-linejoin="round"/></svg>
@@ -891,7 +891,7 @@ form.signup button:disabled{opacity:.5;cursor:default}
           <!-- 03 terminal + QR -->
           <div class="ly" data-ly="2" role="img" aria-label="A terminal runs reminal and prints a QR code; a phone scans it and joins the same session, keeps it when the laptop closes, and reconnects">
             <div class="sx-win t-term">
-              <div class="sx-bar"><span class="dots"><i></i><i></i><i></i></span><span class="sx-url">zsh &mdash; studio-mac</span></div>
+              <div class="sx-bar"><span class="dots"><i></i><i></i><i></i></span><span class="sx-url">zsh &middot; studio-mac</span></div>
               <div class="t-out">
                 <p class="t-l"><span class="g">~</span> reminal</p>
                 <p class="t-l">Session: <b>7f3a2c9e</b></p>
@@ -920,7 +920,7 @@ form.signup button:disabled{opacity:.5;cursor:default}
           <div class="ly" data-ly="3" role="img" aria-label="A thumb drags the keybar handle up on a phone; a dock of live sessions slides out, the thumb slides onto one and releases, and the terminal switches to that machine">
             <div class="sx-phone k-ph">
               <div class="sx-screen">
-                <p class="k-title"><span class="k-ta">claude &mdash; studio-mac</span><span class="k-tb">agent-7 &mdash; aws-eu-1</span></p>
+                <p class="k-title"><span class="k-ta">claude &middot; studio-mac</span><span class="k-tb">agent-7 &middot; aws-eu-1</span></p>
                 <div class="k-a"><p><span class="g">&#9679;</span> Reading relay.ts</p><p class="d">&nbsp; 3 files changed</p><p><span class="g">&#9679;</span> Running tests&hellip;</p></div>
                 <div class="k-b"><p class="d">pytest -x tests/</p><p><span class="r">FAILED</span> test_proxy</p><p class="d">retrying in 30s&hellip;</p></div>
                 <div class="k-sheet">
@@ -938,7 +938,7 @@ form.signup button:disabled{opacity:.5;cursor:default}
           </div>
 
           <!-- 05 fleet -->
-          <div class="ly" data-ly="4" role="img" aria-label="A live view of a fleet — three machines online, each showing its running sessions with live indicators and viewer counts; a session is started on one and ended on another, and an owner phone and an agent connect to them">
+          <div class="ly" data-ly="4" role="img" aria-label="A live view of a fleet: three machines online, each showing its running sessions with live indicators and viewer counts; a session is started on one and ended on another, and an owner phone and an agent connect to them">
             <svg class="m-lines" viewBox="0 0 560 440" width="560" height="440">
               <path class="m-own" d="M280 392 C280 330 150 300 140 190"/>
               <path class="m-own" d="M280 392 C280 330 410 300 420 190"/>
@@ -967,16 +967,16 @@ form.signup button:disabled{opacity:.5;cursor:default}
             </svg>
             <i class="b-pulse b-p1"></i><i class="b-pulse b-p2"></i>
             <div class="sx-win b-n b1">
-              <div class="sx-bar"><span class="dots"><i></i><i></i><i></i></span><span class="sx-url">claude-code &mdash; studio-mac</span></div>
+              <div class="sx-bar"><span class="dots"><i></i><i></i><i></i></span><span class="sx-url">claude-code &middot; studio-mac</span></div>
               <div class="b-out"><p class="b-call"></p></div>
             </div>
             <div class="sx-win b-n b2">
-              <div class="sx-bar"><span class="dots"><i></i><i></i><i></i></span><span class="sx-url">agent-7 &mdash; aws-eu-1</span></div>
+              <div class="sx-bar"><span class="dots"><i></i><i></i><i></i></span><span class="sx-url">agent-7 &middot; aws-eu-1</span></div>
               <div class="b-out"><p class="d">pytest tests/</p><p class="b-fail"><span class="r">2 failed</span>, 118 passed</p><p class="b-err">AssertionError: expected 200, got 502</p><p class="b-typed"><span class="g">&rsaquo;</span> <span class="b-type"></span></p></div>
               <span class="b-badge"><i class="nm-dot attention"></i>needs you</span>
             </div>
             <div class="sx-win b-n b3">
-              <div class="sx-bar"><span class="dots"><i></i><i></i><i></i></span><span class="sx-url">backup &mdash; mini-01</span></div>
+              <div class="sx-bar"><span class="dots"><i></i><i></i><i></i></span><span class="sx-url">backup &middot; mini-01</span></div>
               <div class="b-out"><p class="d">rsync -a ~/ /Volumes/b</p><p class="d">no match</p></div>
             </div>
           </div>
@@ -991,17 +991,17 @@ form.signup button:disabled{opacity:.5;cursor:default}
         <p class="eyebrow reveal">Windows &amp; desktops</p>
         <h2 class="reveal">Reach in and drive the apps.</h2>
         <p class="body reveal">
-        Any app window streams live into your browser &mdash; and you don't just watch it,
+        Any app window streams live into your browser, and you don't just watch it,
         you <strong>drive</strong> it.
       </p>
       </div></div>
       <div class="step"><div class="step-in">
         <ol class="beats">
-        <li class="beat"><b>Click, type, scroll, drag.</b> Right-click menus, pinch-zoom, text selection &mdash; the window answers exactly like it would under your own hand.</li>
+        <li class="beat"><b>Click, type, scroll, drag.</b> Right-click menus, pinch-zoom, text selection: the window answers exactly like it would under your own hand.</li>
         <li class="beat"><b>Nothing open yet?</b> Launch any installed app on the host straight from the Apps menu, then drive it.</li>
         <li class="beat"><b>Or take the whole desktop.</b> One tap on Host &rarr; View full desktop and the entire machine is yours.</li>
         <li class="beat"><b>On a phone, the screen becomes a trackpad.</b> Your Mac, fully hands-on, from your pocket.</li>
-        <li class="beat"><b>Or pop it out.</b> The window leaves the tab and sits on your desktop like its own app window &mdash; an editor from your MacBook beside a terminal on a cloud box.</li>
+        <li class="beat"><b>Or pop it out.</b> The window leaves the tab and sits on your desktop like its own app window, an editor from your MacBook beside a terminal on a cloud box.</li>
       </ol>
       </div></div>
     </div>
@@ -1012,7 +1012,7 @@ form.signup button:disabled{opacity:.5;cursor:default}
         <p class="eyebrow reveal">60 fps</p>
         <h2 class="reveal">Nothing about it says <em>stream</em>.</h2>
         <p class="body reveal">
-    Drag a window, scrub a video inside it, watch a build scroll past — it stays fluid the whole way, on
+    Drag a window, scrub a video inside it, watch a build scroll past: it stays fluid the whole way, on
     hotel Wi-Fi or a phone on cellular. <strong>Sixty frames a second, 17 ms from its screen to yours.</strong>
     H.264 down the session's own DataChannel, peer-to-peer, about 2.6 Mbps.
   </p>
@@ -1026,7 +1026,7 @@ form.signup button:disabled{opacity:.5;cursor:default}
         <h2 class="reveal">And a full terminal, too. Scan a QR and you're in.</h2>
         <p class="body reveal">
     <code>reminal</code> prints a session ID, a PIN and a QR code. Scan it and your phone is a real terminal
-    on your machine — true colour, touch text-selection, on-screen modifier keys, find-in-scrollback.
+    on your machine: true colour, touch text-selection, on-screen modifier keys, find-in-scrollback.
     Close the laptop, switch device, reconnect from another city: the shell is where you left it, and the
     screen paints instantly.
   </p>
@@ -1040,7 +1040,7 @@ form.signup button:disabled{opacity:.5;cursor:default}
         <h2 class="reveal">Every session, one swipe away.</h2>
         <p class="body reveal">
     You're on one machine and need another. Drag the keybar's <strong>≡ handle up</strong> and your live
-    sessions fan out — every machine you own plus your recents, freshest first. Slide onto one,
+    sessions fan out: every machine you own plus your recents, freshest first. Slide onto one,
     release, and you're connected: <strong>no IDs, no PINs, no typing.</strong> The shell is exactly where
     you left it.
   </p>
@@ -1054,7 +1054,7 @@ form.signup button:disabled{opacity:.5;cursor:default}
         <h2 class="reveal">Own your machines. Watch them all.</h2>
         <p class="body reveal">
     Your machines don't stop when you walk away any more. Builds, patches and test suites run on
-    hardware you aren't sitting at — and the hard part isn't starting that work, it's
+    hardware you aren't sitting at, and the hard part isn't starting that work, it's
     <em>seeing</em> it.
   </p>
       </div></div>
@@ -1062,14 +1062,14 @@ form.signup button:disabled{opacity:.5;cursor:default}
         <p class="body reveal" style="margin-top:14px">
     One live view of everything you own: every machine, every terminal on it, what's running, who's
     watching, how long it's been idle. Attach, rename, spawn or kill a session on any box, from the CLI
-    or the browser. Enroll a device as an owner once and it connects with no PIN — per-device trust,
+    or the browser. Enroll a device as an owner once and it connects with no PIN: per-device trust,
     revocable one at a time.
   </p>
       </div></div>
       <div class="step"><div class="step-in">
         <p class="body reveal" style="margin-top:14px">
     <strong>An agent can use the same door.</strong> Hand it a session ID and PIN and it connects like
-    any other viewer, to every machine you've shared — triaging an incident on one box while it patches
+    any other viewer, to every machine you've shared, triaging an incident on one box while it patches
     another, with you watching both in the same browser. Or skip the PIN entirely and give it the
     <a href="#bus">MCP server</a> instead.
   </p>
@@ -1083,14 +1083,14 @@ form.signup button:disabled{opacity:.5;cursor:default}
         <h2 class="reveal">Your agents can see each other.</h2>
         <p class="body reveal">
     Claude Code on the laptop, Codex on the build box, a test suite on the Mini. Same problem, no
-    shared anything — every vendor's answer is subagents inside its own product, which is no help
+    shared anything. Every vendor's answer is subagents inside its own product, which is no help
     when the agents come from different vendors.
   </p>
       </div></div>
       <div class="step"><div class="step-in">
         <p class="body reveal" style="margin-top:14px">
     <code>reminal integrate</code> registers reminal's <strong>MCP server</strong> with the agent CLIs
-    you already have — Claude Code, Codex, Cursor, Gemini, OpenCode, Antigravity, Amp — and from then
+    you already have (Claude Code, Codex, Cursor, Gemini, OpenCode, Antigravity, Amp), and from then
     on the terminal <em>is</em> the bus. Nothing to adopt on the far side: if it runs in a PTY, it can
     be read and typed into, and it never knows anything is watching.
   </p>
@@ -1098,19 +1098,19 @@ form.signup button:disabled{opacity:.5;cursor:default}
       <div class="step"><div class="step-in">
         <div class="trace reveal" role="img"
        aria-label="A trace of an agent's tool calls: it lists sessions across three machines, searches every scrollback for a failure, reads the failing session's transcript, and types an answer into it">
-    <div class="bar"><span class="dots"><i></i><i></i><i></i></span><span class="url">claude-code — studio-mac</span><span class="live">live</span></div>
+    <div class="bar"><span class="dots"><i></i><i></i><i></i></span><span class="url">claude-code · studio-mac</span><span class="live">live</span></div>
     <ol>
       <li>
         <p class="call"><b>list_sessions</b></p>
-        <p class="ret">3 machines · 7 live sessions — <b>studio-mac</b>, <b>aws-eu-1</b>, <b>mini-01</b></p>
+        <p class="ret">3 machines · 7 live sessions: <b>studio-mac</b>, <b>aws-eu-1</b>, <b>mini-01</b></p>
       </li>
       <li>
         <p class="call"><b>search_sessions</b> <span class="arg">pattern: "FAIL|Traceback"</span></p>
-        <p class="ret"><b>aws-eu-1 · agent-7</b> — <code>pytest: 2 failed, 118 passed</code></p>
+        <p class="ret"><b>aws-eu-1 · agent-7</b>: <code>pytest: 2 failed, 118 passed</code></p>
       </li>
       <li>
         <p class="call"><b>read_transcript</b> <span class="arg">session: "agent-7"</span></p>
-        <p class="ret">…<code>AssertionError: expected 200, got 502</code> — it has been retrying the same request for nine minutes</p>
+        <p class="ret">…<code>AssertionError: expected 200, got 502</code>. It has been retrying the same request for nine minutes</p>
       </li>
       <li>
         <p class="call"><b>send_keys</b> <span class="arg">session: "agent-7", keys: "the 502 is the proxy in front of you, not your handler", enter: true</span></p>
@@ -1118,20 +1118,20 @@ form.signup button:disabled{opacity:.5;cursor:default}
       </li>
     </ol>
   </div>
-        <figcaption class="reveal">Four calls, two vendors, two machines — and nothing was installed on the far side.</figcaption>
+        <figcaption class="reveal">Four calls, two vendors, two machines, and nothing was installed on the far side.</figcaption>
       </div></div>
       <div class="step"><div class="step-in">
         <p class="body reveal" style="margin-top:28px">
     <strong>An agent can raise a hand, too.</strong> Instead of a line of text in a terminal you
-    aren't looking at, it pins a note to the actual window — red if it's blocked on you. The badge
+    aren't looking at, it pins a note to the actual window, red if it's blocked on you. The badge
     is on the desktop and in every viewer, so it reaches the phone in your pocket, and
     <em>Done</em> is a button you press from there.
   </p>
         <div class="legend reveal" aria-hidden="true">
-    <span><i class="nm-dot attention"></i><b>attention</b> — blocked on you</span>
-    <span><i class="nm-dot working"></i><b>working</b> — no action wanted</span>
-    <span><i class="nm-dot info"></i><b>info</b> — worth seeing</span>
-    <span><i class="nm-dot done"></i><b>done</b> — nothing owed</span>
+    <span><i class="nm-dot attention"></i><b>attention</b>: blocked on you</span>
+    <span><i class="nm-dot working"></i><b>working</b>: no action wanted</span>
+    <span><i class="nm-dot info"></i><b>info</b>: worth seeing</span>
+    <span><i class="nm-dot done"></i><b>done</b>: nothing owed</span>
   </div>
         <p class="sub-cta reveal" style="margin-top:26px">
     <a href="/agents/">How the agent bus works, tool by tool →</a>
@@ -1146,7 +1146,7 @@ form.signup button:disabled{opacity:.5;cursor:default}
 <section class="wrap s" id="security">
   <div class="band">
   <p class="eyebrow reveal">Security</p>
-  <h2 class="reveal">As secure as a properly configured SSH — and safer by default.</h2>
+  <h2 class="reveal">As secure as a properly configured SSH, and safer by default.</h2>
   <p class="body reveal">
     SSH leaves port 22 open, stores long-lived keys on disk, and trusts you to configure everything
     correctly. reminal takes the opposite approach: nothing to expose, nothing permanent to steal.
@@ -1154,11 +1154,11 @@ form.signup button:disabled{opacity:.5;cursor:default}
   <div class="grid">
     <div class="card wide reveal">
       <h3>No open ports</h3>
-      <p>Your machine only dials out. There is nothing on the network to scan, brute-force or zero-day — the single biggest difference from exposing SSH to the internet.</p>
+      <p>Your machine only dials out. There is nothing on the network to scan, brute-force or zero-day. That is the single biggest difference from exposing SSH to the internet.</p>
     </div>
     <div class="card wide reveal">
       <h3>Ephemeral credentials</h3>
-      <p>The session ID and PIN exist only while reminal runs. Ctrl+C and they're gone forever — a stolen laptop grants nothing, because there is nothing left to steal.</p>
+      <p>The session ID and PIN exist only while reminal runs. Ctrl+C and they're gone forever. A stolen laptop grants nothing, because there is nothing left to steal.</p>
     </div>
     <div class="card reveal">
       <h3>End-to-end encrypted</h3>
@@ -1174,7 +1174,7 @@ form.signup button:disabled{opacity:.5;cursor:default}
     </div>
     <div class="card wide reveal">
       <h3>Auditable, and yours</h3>
-      <p>Every line is open source under AGPL-3.0 — including the relay, which you can host yourself on Cloudflare in a few minutes.</p>
+      <p>Every line is open source under AGPL-3.0, including the relay, which you can host yourself on Cloudflare in a few minutes.</p>
     </div>
     <div class="card wide reveal">
       <h3>Rate-limited at the source</h3>
@@ -1231,7 +1231,7 @@ form.signup button:disabled{opacity:.5;cursor:default}
     <div class="f-grid">
       <div class="f-brand">
         <span class="f-logo"><img src="/assets/icon.png" alt="" width="26" height="26"><span>reminal</span></span>
-        <p>Every window, desktop and terminal on your machines &mdash; live in any browser.
+        <p>Every window, desktop and terminal on your machines, live in any browser.
         No open ports, no keys on disk, nothing to install on the device you&rsquo;re holding.</p>
         <div class="f-badges">
           <span>macOS &middot; Linux &middot; Windows</span>
@@ -1278,7 +1278,7 @@ form.signup button:disabled{opacity:.5;cursor:default}
       <span class="f-legal">
         <span>&copy; <span id="year">2026</span> Harshal Gajjar</span>
         <span class="sep">&middot;</span>
-        <span>Licensed under AGPL-3.0 &mdash; the relay included</span>
+        <span>Licensed under AGPL-3.0, the relay included</span>
       </span>
       <span class="f-social">
         <a href="https://github.com/harshalgajjar/Reminal" aria-label="reminal on GitHub"><svg viewBox="0 0 16 16" width="17" height="17" aria-hidden="true" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.012 8.012 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg></a>
@@ -1302,13 +1302,13 @@ const INSTALL = {
 };
 
 // ── feature switchboard ────────────────────────────────────────────────
-// Flip any of these to false and the feature is gone — no other edit needed.
+// Flip any of these to false and the feature is gone; no other edit needed.
 // Each is self-contained below under a matching heading.
 const FEATURES = {
   liveTerminal: true,   // hero: types `reminal`, prints the banner + a real QR
   edgeLatency:  true,   // stat band: the visitor's own round-trip to the edge
   osDetect:     true,   // install box: preselect the visitor's actual OS
-  scrollFX:     true,   // parallax, reading progress, counters — one rAF loop
+  scrollFX:     true,   // parallax, reading progress, counters: one rAF loop
   story:        true,   // six features, one pinned scene the copy scrolls past
   lidStage:     true,   // 3D set piece: the lid shuts, the windows fly to a browser
 };
@@ -1355,8 +1355,8 @@ if (reduced || !("IntersectionObserver" in window)) {
   revealables.forEach(el => ro.observe(el));
 
   // Failsafe. The animation is decoration; the text is the product. If
-  // anything at all goes wrong — a flick past the observer, a browser quirk,
-  // a restore from bfcache — everything becomes visible regardless.
+  // anything at all goes wrong (a flick past the observer, a browser quirk,
+  // a restore from bfcache), everything becomes visible regardless.
   const revealAll = () => revealables.forEach(el => { el.style.transitionDelay = "0ms"; show(el); });
   setTimeout(revealAll, 4000);
   addEventListener("pageshow", e => { if (e.persisted) revealAll(); });
@@ -1383,7 +1383,7 @@ copyBtn.addEventListener("click", async () => {
     copyBtn.classList.add("done");
     setTimeout(() => { copyBtn.textContent = "Copy"; copyBtn.classList.remove("done"); }, 1800);
   } catch {
-    // Clipboard blocked (insecure context, or the user said no) — select it
+    // Clipboard blocked (insecure context, or the user said no): select it
     // instead so ⌘C still works.
     const r = document.createRange();
     r.selectNodeContents(installEl);
@@ -1405,7 +1405,7 @@ onScroll();
 // their own layout flush and turn a smooth page into a stuttering one.
 if (FEATURES.scrollFX && !reduced) {
   const bar    = document.getElementById("progress");
-  // The lead copy only — NOT header .wrap, which also holds the terminal.
+  // The lead copy only, NOT header .wrap, which also holds the terminal.
   // Fading the whole wrap dims the hero terminal to nothing at the exact
   // moment you scroll down to read it.
   const heroIn = [...document.querySelectorAll(
@@ -1474,7 +1474,7 @@ if (FEATURES.lidStage) {
   // The set is built in fixed pixels (a 540px laptop, a 262px phone), so it
   // only fits a phone screen if the whole thing is scaled. One factor, applied
   // to .scene, keeps every offset below in the coordinate space it was
-  // authored in. The cards live outside .scene and stay full size — the point
+  // authored in. The cards live outside .scene and stay full size; the point
   // of them is that they are readable.
   const narrow = () => innerWidth <= 820;
   let stageK = 1;
@@ -1482,7 +1482,7 @@ if (FEATURES.lidStage) {
     if (!scene) return;
     // Wide: the set is authored at ~1020x760 and only shrinks below that.
     // Narrow: it is one column with the cards below, so the widest thing that
-    // has to fit is the 660px browser — which buys a much larger set than the
+    // has to fit is the 660px browser, which buys a much larger set than the
     // wide formula would give at the same width.
     const h = innerHeight - NAV;   // the pinned stage's height
     const k = narrow()
@@ -1500,7 +1500,7 @@ if (FEATURES.lidStage) {
     // Keeping it at z=110 puts it back on the monitor.
     //
     // Three stops per window: on the laptop screen, on the remote desktop,
-    // then stacked in the phone. No rotation anywhere — a tilted window reads
+    // then stacked in the phone. No rotation anywhere: a tilted window reads
     // as a graphic; a straight one reads as a window.
     const PLAN = [
       { on: [-150,-104, 10], desk: [-150,-46, 110], ph: [0,-150, 210], phs: 0.60 },
@@ -1516,7 +1516,7 @@ if (FEATURES.lidStage) {
       [0.20, 0.26, 0.36, 0.41, "<b>One window, one pane.</b> Pop any of them onto your own desktop."],
       [0.43, 0.48, 0.56, 0.60, "<b>Lid shut. Nothing plugged in.</b> The windows never stopped."],
       [0.62, 0.67, 0.73, 0.76, "<b>Same machine. Same windows.</b> Now in your pocket."],
-      [0.775, 0.825, 0.885, 0.905, "<b>Then an agent raised a hand.</b> <code>add_note</code> pinned it to the window it is about \u2014 so it reached the phone."],
+      [0.775, 0.825, 0.885, 0.905, "<b>Then an agent raised a hand.</b> <code>add_note</code> pinned it to the window it is about, so it reached the phone."],
       [0.905, 0.945, 1.20, 1.30, "<b>And it pointed at another machine.</b> <code>search_sessions</code> ran one regex across every box you own."],
     ];
 
@@ -1542,7 +1542,7 @@ if (FEATURES.lidStage) {
 
       lid.style.transform = `rotateX(${mix(0, -88, close)}deg)`;
       if (mac) {
-        // The shut machine settles below rather than disappearing — the point
+        // The shut machine settles below rather than disappearing; the point
         // is that it is still there, lid down, still serving.
         const away = Math.max(close, pocket);
         mac.style.transform =
@@ -1571,7 +1571,7 @@ if (FEATURES.lidStage) {
       });
 
       // Undo whatever scale relay.ts is under, so the badge and the spec chip
-      // read at the same size all the way through — the window shrinks, the
+      // read at the same size all the way through: the window shrinks, the
       // things drawn over it do not.
       const inv = 1 / Math.max(0.2, fly0Scale * stageK);
       if (badge) badge.style.transform = `scale(${inv})`;
@@ -1604,7 +1604,7 @@ if (FEATURES.lidStage) {
       }
 
       // The badge is ON relay.ts, riding whatever transform that window is
-      // under — which is the whole idea of a window note. The card beside it
+      // under, which is the whole idea of a window note. The card beside it
       // is the same note, at a size you can actually read.
       if (badge) badge.style.opacity = String(note);
       const one = narrow();
@@ -1627,7 +1627,7 @@ if (FEATURES.lidStage) {
         // One line per beat, each with its own fade in and fade out, so the
         // caption always names what is on screen right now. The first exists
         // because the windows spend a while detached and drifting with nothing
-        // holding them — that IS the pop-out idea, and it used to scroll past
+        // holding them. That IS the pop-out idea, and it used to scroll past
         // unnarrated. The last two belong to the agent.
         let phase = -1, show = 0;
         for (let i = 0; i < CAPS.length; i++) {
@@ -1726,7 +1726,7 @@ if (FEATURES.edgeLatency) {
       const t0 = performance.now();
       try {
         await fetch("/ping?" + i, { cache: "no-store" });
-      } catch { return; }               // offline or blocked — leave the dash
+      } catch { return; }               // offline or blocked: leave the placeholder
       if (i > 0) samples.push(performance.now() - t0);
     }
     if (!samples.length || !rttEl) return;
@@ -1827,7 +1827,7 @@ if (FEATURES.story) {
     css(D.desk, { opacity: String(desk) });
     const sk = mix(1, .82, desk);
     css(D.w1, { transform: `translate(${mix(0, -8, desk)}px,${mix(0, 6, desk)}px) scale(${sk})` });
-    // beat 5: pop out — the Figma window leaves the tab
+    // beat 5: pop out: the Figma window leaves the tab
     const pop = seg(t, .82, .95);
     css(D.w2, {
       opacity: String(w2),
@@ -1952,7 +1952,7 @@ if (FEATURES.story) {
   const FADE = 20;                             // px over which one scene hands to the next
   const narrow = () => innerWidth <= 900;
   // The reading area's top: under the nav beside the scene; under the pinned
-  // scene on a narrow screen — where it is now, or where it sits once pinned.
+  // scene on a narrow screen: where it is now, or where it sits once pinned.
   const readTop = (pinned) => !narrow() ? NAV : pinned ? NAV + stage.offsetHeight : stage.getBoundingClientRect().bottom;
   // A viewport height that holds still while a phone's address bar slides.
   const stableHeight = () => {
@@ -1963,7 +1963,7 @@ if (FEATURES.story) {
     return h || innerHeight;
   };
 
-  // Layout: where copy holds (--stick) and what holds there — the whole
+  // Layout: where copy holds (--stick) and what holds there: the whole
   // chapter if it fits the reading area, otherwise each step that does.
   // Copy holds level with the top of the scene beside it, or just under the
   // scene pinned above it on a narrow screen.
@@ -2040,14 +2040,14 @@ if (FEATURES.story) {
 
 // ── [FEATURES.liveTerminal] the hero session ───────────────────────────
 // The real banner from internal/client/agent.go, typed out. The QR is
-// generated at build time by genqr.py and encodes https://reminal.app/ —
+// generated at build time by genqr.py and encodes https://reminal.app/,
 // so scanning it genuinely works.
 if (FEATURES.liveTerminal) {
   const term = document.getElementById("term");
   const replay = document.getElementById("replay");
   const SESSION = "7f3a2c9e", PIN = "418902", HOST = "https://live.reminal.app";
   // Written by build.sh from the latest git tag. The literal below is only a
-  // fallback for a stale or failed fetch — never the source of truth.
+  // fallback for a stale or failed fetch, never the source of truth.
   let VERSION = "3.0.6";
   fetch("/assets/version.txt").then(r => r.ok ? r.text() : null)
     .then(v => { if (v && /^\d+\.\d+\.\d+$/.test(v.trim())) VERSION = v.trim(); })
@@ -2068,7 +2068,7 @@ if (FEATURES.liveTerminal) {
     { line: "" },
     { line: "  Scan to join from your phone:" },
     { qr: true },
-    { line: `  <span class="g">HOST:</span> This terminal IS the shared shell — type away.` },
+    { line: `  <span class="g">HOST:</span> This terminal IS the shared shell. Type away.` },
     { line: `  <span class="d">Ctrl-] stops sharing · the shell keeps running</span>` },
     { line: "" },
     { caret: true },
@@ -2206,7 +2206,7 @@ form.addEventListener("submit", async event => {
   }
 
   if (LOOPS_ENDPOINT.includes("REPLACE_WITH_FORM_ID")) {
-    say("The waitlist isn't wired up yet — set LOOPS_ENDPOINT in index.html.", "err");
+    say("The waitlist isn't wired up yet. Set LOOPS_ENDPOINT in index.html.", "err");
     return;
   }
 
@@ -2215,7 +2215,7 @@ form.addEventListener("submit", async event => {
 
   try {
     // Loops' form endpoint wants form-encoded, and answers opaquely on
-    // some plans — so a network-level success is treated as a success.
+    // some plans, so a network-level success is treated as a success.
     const res = await fetch(LOOPS_ENDPOINT, {
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded" },

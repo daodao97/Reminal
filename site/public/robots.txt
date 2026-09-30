@@ -3,7 +3,7 @@
 # This file is the whole served response. Two things had to be true for that:
 # it has to exist (without it Cloudflare serves a managed robots.txt in its
 # place, which carries no Sitemap: line and disallows every AI crawler), and
-# the managed one has to be off in the dashboard — it *prepends* rather than
+# the managed one has to be off in the dashboard, since it *prepends* rather than
 # replaces, which left GPTBot, ClaudeBot and Google-Extended each carrying a
 # Disallow group above our Allow. Both done, 2026-08-28. If AI crawlers ever
 # start behaving as though they're blocked, check AI Crawl Control → robots.txt
@@ -13,8 +13,8 @@ User-agent: *
 Allow: /
 
 # Answer engines are a real discovery channel for a developer tool, and the
-# brand term "reminal" collides with a Steam game, a B12 supplement and a song
-# — being quotable is worth more to us than being unquoted. Nothing on this
+# brand term "reminal" collides with a Steam game, a B12 supplement and a song,
+# so being quotable is worth more to us than being unquoted. Nothing on this
 # site is private; the client and relay ship no telemetry either way.
 User-agent: GPTBot
 Allow: /

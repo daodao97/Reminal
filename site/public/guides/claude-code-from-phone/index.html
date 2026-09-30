@@ -3,14 +3,14 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>How to check on Claude Code from your phone — every method compared (2026)</title>
-<meta name="description" content="Claude's /rc, Codex in the ChatGPT app, tmux over Tailscale with Termux or Blink, and browser-based streaming — what each actually gives you when an agent is still running and you have walked away.">
+<title>How to check on Claude Code from your phone: every method compared (2026)</title>
+<meta name="description" content="Claude's /rc, Codex in the ChatGPT app, tmux over Tailscale with Termux or Blink, and browser-based streaming: what each actually gives you when an agent is still running and you have walked away.">
 <link rel="canonical" href="https://reminal.app/guides/claude-code-from-phone/">
 <link rel="icon" href="/assets/icon.png" type="image/png">
 <meta property="og:site_name" content="reminal">
 <meta property="og:type" content="article">
 <meta property="og:url" content="https://reminal.app/guides/claude-code-from-phone/">
-<meta property="og:title" content="Check on Claude Code from your phone — every method compared">
+<meta property="og:title" content="Check on Claude Code from your phone: every method compared">
 <meta property="og:description" content="A long agent run only helps if you can see it and answer it. The honest comparison: /rc, the ChatGPT app, tmux over Tailscale, and streaming the machine itself.">
 <meta property="og:image" content="https://reminal.app/poster.png">
 <meta name="twitter:card" content="summary_large_image">
@@ -105,7 +105,7 @@
 </nav>
 <div class="wrap">
 
-<h1>How to check on Claude Code from your phone — every method, honest</h1>
+<h1>How to check on Claude Code from your phone: every method, honest</h1>
 
 <p class="lede">Agents run long enough now that whoever started the job is usually
 not sitting there for most of it. The moment you walk away you lose the thread:
@@ -126,8 +126,8 @@ remote-control</code>) and scan the QR with the Claude app. You get that
 session's conversation on your phone, with the same files and MCP servers.</p>
 <p><strong>Good:</strong> zero setup, official, no third party.
 <strong>Limits:</strong> one agent's chat, not the terminal it runs in and not
-the other windows on the machine — the dev server it just broke, the browser it
-is driving, the tests in the next pane.</p>
+the other windows on the machine (the dev server it just broke, the browser it
+is driving, the tests in the next pane).</p>
 
 <h2>Method 2: Codex in the ChatGPT app</h2>
 <p>The equivalent for Codex: pairing lives in the ChatGPT app, signed in.</p>
@@ -142,11 +142,11 @@ survives your client dropping. Add Termux on Android or Blink on iOS and you
 have a real terminal in your pocket.</p>
 <p><strong>Good:</strong> free, robust, vendor-neutral, and the session genuinely
 survives a network blip. <strong>Limits:</strong> two. A phone keyboard is a poor
-fit for a TUI — arrow keys, Ctrl-C and Esc are all awkward, and the layout
+fit for a TUI: arrow keys, Ctrl-C and Esc are all awkward, and the layout
 reflows when you rotate. And it is terminal only: if the agent opened a browser
 or a simulator, you cannot see it.</p>
 
-<h2>Method 4: stream the machine into a browser (reminal — ours, disclosed)</h2>
+<h2>Method 4: stream the machine into a browser (reminal, ours, disclosed)</h2>
 <p>Disclosure: we build reminal, so weigh this accordingly.</p>
 <p>The session stays on a machine you already own and any browser attaches to
 it. You get the terminal with true colour and scrollback search, and the actual
@@ -154,7 +154,7 @@ GUI windows with real input, so you can watch the browser an agent is driving
 and click in it yourself. Nothing to install on the device you are holding,
 which means a borrowed laptop or a work phone works.</p>
 <p>It also ships an MCP server, so agents can read and drive each other's
-sessions across machines — useful when the tools come from different vendors.</p>
+sessions across machines, useful when the tools come from different vendors.</p>
 <p><strong>Limits, honestly:</strong> it needs the host machine to be running,
 it is a younger project than the alternatives, and if all you want is one
 agent's chat then <code>/rc</code> is simpler and you should use that.</p>
@@ -203,7 +203,7 @@ streaming the machine earns its place.</p>
   <div class="f-grid">
     <div class="f-brand">
       <span class="f-logo"><img src="/assets/icon.png" alt="" width="26" height="26"><span>reminal</span></span>
-      <p>Every window, desktop and terminal on your machines &mdash; live in any browser.
+      <p>Every window, desktop and terminal on your machines, live in any browser.
       No open ports, no keys on disk, nothing to install on the device you&rsquo;re holding.</p>
       <div class="f-badges">
         <span>macOS &middot; Linux &middot; Windows</span>
@@ -250,7 +250,7 @@ streaming the machine earns its place.</p>
     <span class="f-legal">
       <span>&copy; <span id="year">2026</span> Harshal Gajjar</span>
       <span class="sep">&middot;</span>
-      <span>Licensed under AGPL-3.0 &mdash; the relay included</span>
+      <span>Licensed under AGPL-3.0, the relay included</span>
     </span>
     <span class="f-social">
       <a href="https://github.com/harshalgajjar/Reminal" aria-label="reminal on GitHub"><svg viewBox="0 0 16 16" width="17" height="17" aria-hidden="true" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.012 8.012 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg></a>

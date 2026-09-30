@@ -6,15 +6,15 @@
 //
 // Everything is static except a few things this handles by hand:
 //
-//   * short install URLs — `curl -fsSL https://reminal.app/install.sh | sh` is
+//   * short install URLs: `curl -fsSL https://reminal.app/install.sh | sh` is
 //     what goes on the site, in posts, and in people's shell history, so it
 //     redirects to the script on main rather than pinning a copy that quietly
 //     goes stale;
-//   * one canonical host — reminal.dev and any www. variant fold into
+//   * one canonical host: reminal.dev and any www. variant fold into
 //     reminal.app so links, OG cards and analytics don't fragment.
-//   * stray `/?s=` on this host — someone typing the marketing domain with a
+//   * stray `/?s=` on this host: someone typing the marketing domain with a
 //     session id is sent to live.reminal.app, which is the real viewer.
-//   * /downloads/ — files kept in the DOWNLOADS bucket rather than on the
+//   * /downloads/: files kept in the DOWNLOADS bucket rather than on the
 //     public releases page (see serveDownload).
 
 const RAW = "https://raw.githubusercontent.com/harshalgajjar/Reminal/main";
@@ -24,7 +24,7 @@ const CANONICAL_HOST = "reminal.app";
 const LIVE_ORIGIN = "https://live.reminal.app";
 
 // Hosts we own and fold into the canonical one. workers.dev and localhost are
-// absent on purpose — that's where the thing gets tested before DNS exists.
+// absent on purpose; that's where the thing gets tested before DNS exists.
 const ALIASES = new Set([
   "reminal.dev",
   "www.reminal.dev",
@@ -42,7 +42,7 @@ const REDIRECTS = new Map([
 ]);
 
 // Every page that lives at a directory index. Each answers 200 only with its
-// trailing slash, and ASSETS bounces the bare form there with a 307 — a
+// trailing slash, and ASSETS bounces the bare form there with a 307: a
 // *temporary* redirect, which tells a crawler the no-slash URL is the real one
 // and to keep asking. Two URLs then compete for one page and neither
 // accumulates the other's signal. Listing the routes explicitly (rather than
@@ -70,12 +70,12 @@ export function liveJoinURL(url) {
 }
 
 // Downloads: files kept in the DOWNLOADS bucket, one key per file, at
-// /downloads/<key>. Never indexed and never listed — what is here is fetched
-// by the software that knows its name, not found by a search engine — and a
+// /downloads/<key>. Never indexed and never listed (what is here is fetched
+// by the software that knows its name, not found by a search engine), and a
 // path that names no file is a plain 404, folders included.
 //
 // A build's name carries its version, so its bytes never change and it is
-// cached for good. Everything else — a manifest, an install script — is
+// cached for good. Everything else (a manifest, an install script) is
 // fetched fresh every time, so a new release is seen the moment it lands.
 const DOWNLOADS_PREFIX = "/downloads/";
 
