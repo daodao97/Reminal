@@ -171,14 +171,16 @@ header figcaption{max-width:720px}
    chapter has been read, so scrolling back rewinds it exactly.
 
    Reading area: beside the scene, everything under the nav; on a narrow
-   screen, the strip under the pinned scene. JS measures it and sets:
-     --stick  where a chapter's copy (or a tall chapter's heading) holds
-     --gap    the space between the reading area's top and --stick
-   and gives each chapter that fits the room to hold while its scene plays.
-   A chapter too tall for the reading area (.tall) never freezes, since a
-   frozen block that size has to hide a line somewhere: its heading holds
-   and its body keeps scrolling up beneath it. Without JS nothing holds and
-   the copy simply scrolls. */
+   screen, the strip under the pinned scene. Copy holds still at the top of
+   it (--stick, set by JS) while its scene plays, by one rule: hold the
+   biggest piece that fits. A chapter's copy is split into steps (the heading
+   with its first paragraph, then each paragraph or block after it). If the
+   whole chapter fits the reading area it holds as one (.whole); otherwise
+   each step that fits holds in turn (.fits); a step that does not fit
+   simply scrolls. Nothing ever holds partly hidden. The room to hold in is
+   an empty ::after at the end of whatever holds — sticky copy moves only
+   within its container's content, and that is what extends it. Without JS
+   nothing holds and the copy simply scrolls. */
 .story{padding-top:48px}
 .story-grid{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.15fr);gap:56px;align-items:start}
 section.s .story-grid > *{max-width:none}
@@ -199,20 +201,12 @@ section.s .story-grid > *{max-width:none}
 
 .ch{padding:calc(18 * var(--svh)) 0 calc(10 * var(--svh))}
 .ch:first-child{padding-top:calc(10 * var(--svh))}
-.story.js .ch-in{position:sticky;top:var(--stick)}
-.story.js .tall .ch-in{position:static}
-/* A tall chapter's heading: the page-coloured strip above it is exactly
-   --gap tall (enough to hide body text passing under the heading, never
-   enough to cover the chapter before), and text fades out beneath it
-   rather than being sliced by a hard edge. The fade covers only the
-   heading's own bottom margin, which in normal flow is the empty gap before
-   the body — so nothing is faded until text actually slides under it. */
-.story.js .tall .ch-head{position:sticky;top:var(--stick);z-index:2;background:var(--page);margin-bottom:20px}
-.story.js .tall .ch-head h2{margin-bottom:0}
-.story.js .tall .ch-head::before,.story.js .tall .ch-head::after{content:"";position:absolute;left:0;right:0}
-.story.js .tall .ch-head::before{bottom:100%;height:var(--gap);background:var(--page)}
-.story.js .tall .ch-head::after{top:100%;height:20px;background:linear-gradient(var(--page),transparent);pointer-events:none}
-.story.measuring .ch-in,.story.measuring .ch-head{position:static}
+.story.js .whole > .ch-in,.story.js .fits > .step-in{position:sticky;top:var(--stick)}
+.story.js .whole::after,.story.js .fits::after{content:"";display:block;height:calc(30 * var(--svh))}
+.story.js .whole::after{height:calc(60 * var(--svh))}
+.story.js #windows.whole::after{height:calc(100 * var(--svh))}   /* five beats to play */
+.story.measuring .ch-in,.story.measuring .step-in{position:static}
+.step + .step{margin-top:14px}
 .story .beats{list-style:none;margin:28px 0 0;padding:0;counter-reset:beat}
 .story .beat{position:relative;padding:14px 0 14px 40px;border-top:1px solid var(--line);color:var(--mute);font-size:15px;line-height:1.55;transition:color .3s}
 .story .beat:last-child{border-bottom:1px solid var(--line)}
@@ -616,7 +610,6 @@ section.s .story-grid > *{max-width:none}
 
 /* ── the two framed sections ───────────────────────── */
 #security .sub-cta{margin-top:28px}
-#pro .band{margin-top:0}
 
 /* ── waitlist ──────────────────────────────────────── */
 .who{display:inline-flex;margin:28px 0 0}
@@ -1002,108 +995,117 @@ form.signup button:disabled{opacity:.5;cursor:default}
     </div>
     <div class="story-copy">
     <article class="ch" id="windows" data-ch="0">
-      <div class="ch-in">
-      <div class="ch-head">
-      <p class="eyebrow reveal">Windows &amp; desktops</p>
-      <h2 class="reveal">Reach in and drive the apps.</h2>
-      </div>
-      <p class="body reveal">
+    <div class="ch-in">
+      <div class="step"><div class="step-in">
+        <p class="eyebrow reveal">Windows &amp; desktops</p>
+        <h2 class="reveal">Reach in and drive the apps.</h2>
+        <p class="body reveal">
         Any app window streams live into your browser &mdash; and you don't just watch it,
         you <strong>drive</strong> it.
       </p>
-      <ol class="beats">
+      </div></div>
+      <div class="step"><div class="step-in">
+        <ol class="beats">
         <li class="beat"><b>Click, type, scroll, drag.</b> Right-click menus, pinch-zoom, text selection &mdash; the window answers exactly like it would under your own hand.</li>
         <li class="beat"><b>Nothing open yet?</b> Launch any installed app on the host straight from the Apps menu, then drive it.</li>
         <li class="beat"><b>Or take the whole desktop.</b> One tap on Host &rarr; View full desktop and the entire machine is yours.</li>
         <li class="beat"><b>On a phone, the screen becomes a trackpad.</b> Your Mac, fully hands-on, from your pocket.</li>
         <li class="beat"><b>Or pop it out.</b> The window leaves the tab and sits on your desktop like its own app window &mdash; an editor from your MacBook beside a terminal on a cloud box.</li>
       </ol>
-      </div>
+      </div></div>
+    </div>
     </article>
     <article class="ch" id="fps" data-ch="1">
-      <div class="ch-in">
-      <div class="ch-head">
-      <p class="eyebrow reveal">60 fps</p>
-      <h2 class="reveal">Nothing about it says <em>stream</em>.</h2>
-      </div>
-  <p class="body reveal">
+    <div class="ch-in">
+      <div class="step"><div class="step-in">
+        <p class="eyebrow reveal">60 fps</p>
+        <h2 class="reveal">Nothing about it says <em>stream</em>.</h2>
+        <p class="body reveal">
     Drag a window, scrub a video inside it, watch a build scroll past — it stays fluid the whole way, on
     hotel Wi-Fi or a phone on cellular. <strong>Sixty frames a second, 17 ms from its screen to yours.</strong>
     H.264 down the session's own DataChannel, peer-to-peer, about 2.6 Mbps.
   </p>
-      </div>
+      </div></div>
+    </div>
     </article>
     <article class="ch" id="terminal" data-ch="2">
-      <div class="ch-in">
-      <div class="ch-head">
-      <p class="eyebrow reveal">Terminal</p>
-      <h2 class="reveal">And a full terminal, too. Scan a QR and you're in.</h2>
-      </div>
-  <p class="body reveal">
+    <div class="ch-in">
+      <div class="step"><div class="step-in">
+        <p class="eyebrow reveal">Terminal</p>
+        <h2 class="reveal">And a full terminal, too. Scan a QR and you're in.</h2>
+        <p class="body reveal">
     <code>reminal</code> prints a session ID, a PIN and a QR code. Scan it and your phone is a real terminal
     on your machine — true colour, touch text-selection, on-screen modifier keys, find-in-scrollback.
     Close the laptop, switch device, reconnect from another city: the shell is where you left it, and the
     screen paints instantly.
   </p>
-      </div>
+      </div></div>
+    </div>
     </article>
     <article class="ch" id="dock" data-ch="3">
-      <div class="ch-in">
-      <div class="ch-head">
-      <p class="eyebrow reveal">Session dock</p>
-      <h2 class="reveal">Every session, one swipe away.</h2>
-      </div>
-  <p class="body reveal">
+    <div class="ch-in">
+      <div class="step"><div class="step-in">
+        <p class="eyebrow reveal">Session dock</p>
+        <h2 class="reveal">Every session, one swipe away.</h2>
+        <p class="body reveal">
     You're on one machine and need another. Drag the keybar's <strong>≡ handle up</strong> and your live
     sessions fan out — every machine you own plus your recents, freshest first. Slide onto one,
     release, and you're connected: <strong>no IDs, no PINs, no typing.</strong> The shell is exactly where
     you left it.
   </p>
-      </div>
+      </div></div>
+    </div>
     </article>
     <article class="ch" id="fleet" data-ch="4">
-      <div class="ch-in">
-      <div class="ch-head">
-      <p class="eyebrow reveal">Your fleet</p>
-      <h2 class="reveal">Own your machines. Watch them all.</h2>
-      </div>
-  <p class="body reveal">
+    <div class="ch-in">
+      <div class="step"><div class="step-in">
+        <p class="eyebrow reveal">Your fleet</p>
+        <h2 class="reveal">Own your machines. Watch them all.</h2>
+        <p class="body reveal">
     Your machines don't stop when you walk away any more. Builds, patches and test suites run on
     hardware you aren't sitting at — and the hard part isn't starting that work, it's
     <em>seeing</em> it.
   </p>
-  <p class="body reveal" style="margin-top:14px">
+      </div></div>
+      <div class="step"><div class="step-in">
+        <p class="body reveal" style="margin-top:14px">
     One live view of everything you own: every machine, every terminal on it, what's running, who's
     watching, how long it's been idle. Attach, rename, spawn or kill a session on any box, from the CLI
     or the browser. Enroll a device as an owner once and it connects with no PIN — per-device trust,
     revocable one at a time.
   </p>
-  <p class="body reveal" style="margin-top:14px">
+      </div></div>
+      <div class="step"><div class="step-in">
+        <p class="body reveal" style="margin-top:14px">
     <strong>An agent can use the same door.</strong> Hand it a session ID and PIN and it connects like
     any other viewer, to every machine you've shared — triaging an incident on one box while it patches
     another, with you watching both in the same browser. Or skip the PIN entirely and give it the
     <a href="#bus">MCP server</a> instead.
   </p>
-      </div>
+      </div></div>
+    </div>
     </article>
     <article class="ch" id="bus" data-ch="5">
-      <div class="ch-in">
-      <div class="ch-head">
-      <p class="eyebrow reveal">Agent bus</p>
-      <h2 class="reveal">Your agents can see each other.</h2>
-      </div>
-  <p class="body reveal">
+    <div class="ch-in">
+      <div class="step"><div class="step-in">
+        <p class="eyebrow reveal">Agent bus</p>
+        <h2 class="reveal">Your agents can see each other.</h2>
+        <p class="body reveal">
     Claude Code on the laptop, Codex on the build box, a test suite on the Mini. Same problem, no
     shared anything — every vendor's answer is subagents inside its own product, which is no help
     when the agents come from different vendors.
   </p>
-  <p class="body reveal" style="margin-top:14px">
+      </div></div>
+      <div class="step"><div class="step-in">
+        <p class="body reveal" style="margin-top:14px">
     <code>reminal integrate</code> registers reminal's <strong>MCP server</strong> with the agent CLIs
     you already have — Claude Code, Codex, Cursor, Gemini, OpenCode, Antigravity, Amp — and from then
     on the terminal <em>is</em> the bus. Nothing to adopt on the far side: if it runs in a PTY, it can
     be read and typed into, and it never knows anything is watching.
   </p>
-  <div class="trace reveal" role="img"
+      </div></div>
+      <div class="step"><div class="step-in">
+        <div class="trace reveal" role="img"
        aria-label="A trace of an agent's tool calls: it lists sessions across three machines, searches every scrollback for a failure, reads the failing session's transcript, and types an answer into it">
     <div class="bar"><span class="dots"><i></i><i></i><i></i></span><span class="url">claude-code — studio-mac</span><span class="live">live</span></div>
     <ol>
@@ -1125,23 +1127,26 @@ form.signup button:disabled{opacity:.5;cursor:default}
       </li>
     </ol>
   </div>
-  <figcaption class="reveal">Four calls, two vendors, two machines — and nothing was installed on the far side.</figcaption>
-  <p class="body reveal" style="margin-top:28px">
+        <figcaption class="reveal">Four calls, two vendors, two machines — and nothing was installed on the far side.</figcaption>
+      </div></div>
+      <div class="step"><div class="step-in">
+        <p class="body reveal" style="margin-top:28px">
     <strong>An agent can raise a hand, too.</strong> Instead of a line of text in a terminal you
     aren't looking at, it pins a note to the actual window — red if it's blocked on you. The badge
     is on the desktop and in every viewer, so it reaches the phone in your pocket, and
     <em>Done</em> is a button you press from there.
   </p>
-  <div class="legend reveal" aria-hidden="true">
+        <div class="legend reveal" aria-hidden="true">
     <span><i class="nm-dot attention"></i><b>attention</b> — blocked on you</span>
     <span><i class="nm-dot working"></i><b>working</b> — no action wanted</span>
     <span><i class="nm-dot info"></i><b>info</b> — worth seeing</span>
     <span><i class="nm-dot done"></i><b>done</b> — nothing owed</span>
   </div>
-  <p class="sub-cta reveal" style="margin-top:26px">
+        <p class="sub-cta reveal" style="margin-top:26px">
     <a href="/agents/">How the agent bus works, tool by tool →</a>
   </p>
-      </div>
+      </div></div>
+    </div>
     </article>
     </div>
   </div>
@@ -1958,22 +1963,20 @@ if (FEATURES.story) {
     return h || innerHeight;
   };
 
-  // Layout: where copy holds, which chapters are too tall to hold whole,
-  // and how tall each chapter is. One that holds gets room to hold in: most
-  // of a screen, a whole one for the five-beat opener. A tall one is just
-  // as tall as its copy — its scene plays out as the body is read.
+  // Layout: where copy holds (--stick) and what holds there — the whole
+  // chapter if it fits the reading area, otherwise each step that does.
+  // Heights are read with nothing holding, then every class is set at once.
   function hold() {
-    const vh = stableHeight(), top = readTop(true);
-    const stick = top + HOLD_GAP[narrow() ? "narrow" : "wide"];
+    const vh = stableHeight();
+    const stick = readTop(true) + HOLD_GAP[narrow() ? "narrow" : "wide"];
+    const fits = el => el.offsetHeight <= vh - stick - 24;
     story.style.setProperty("--stick", stick + "px");
-    story.style.setProperty("--gap", (stick - top) + "px");
-    for (const ch of chs) {
-      const h = ch.querySelector(".ch-in").offsetHeight;
-      const tall = h > vh - stick - 24;
-      ch.classList.toggle("tall", tall);
-      const room = vh * (ch.id === "windows" ? 1 : .6);
-      ch.style.minHeight = tall ? "" : (parseFloat(getComputedStyle(ch).paddingTop) + h + room) + "px";
-    }
+    const steps = [...story.querySelectorAll(".step")];
+    chs.concat(steps).forEach(el => el.classList.remove("whole", "fits"));
+    const whole = chs.map(ch => fits(ch.querySelector(".ch-in")));
+    const each = steps.map(s => fits(s.firstElementChild));
+    chs.forEach((ch, i) => ch.classList.toggle("whole", whole[i]));
+    steps.forEach((s, i) => s.classList.toggle("fits", each[i] && !s.closest(".whole")));
   }
 
   // Each heading's offset inside its chapter, measured with nothing held.
@@ -1997,7 +2000,7 @@ if (FEATURES.story) {
     const at = chs.map((ch, i) => ch.getBoundingClientRect().top + heads[i]);
     at.push(chs[chs.length - 1].getBoundingClientRect().bottom - (vh - line));
     for (let i = 0; i < chs.length - 1; i++) {
-      const left = chs[i].querySelector(".ch-in").getBoundingClientRect().bottom - (top + 8);
+      const left = chs[i].querySelector(".step:last-child > .step-in").getBoundingClientRect().bottom - (top + 8);
       at[i + 1] = Math.min(at[i + 1], line + left);
     }
     // t: 0 → 1 from this heading crossing the line to the next one doing so.

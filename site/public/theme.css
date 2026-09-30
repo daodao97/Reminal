@@ -111,7 +111,8 @@ header.hero .wrap{z-index:1}
    zero the side gutters .wrap sets. */
 section.s{padding-top:112px;position:relative}
 section.s > .wrap > *,section.s.wrap > *{max-width:720px}
-section.s > .band{max-width:none}
+/* a framed section inside a section: the section already spaces it */
+section.s > .band{max-width:none;margin-top:0}
 section.s h2,.band h2{font:600 52px/1.05 var(--sans);letter-spacing:-.05em;margin:0 0 20px}
 .body{color:var(--dim);font-size:18px;line-height:1.6;letter-spacing:-.011em;margin:0}
 .body + .body{margin-top:14px}
