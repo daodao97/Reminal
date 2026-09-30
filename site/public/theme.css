@@ -236,12 +236,14 @@ section.s .frame,section.s .trace{max-width:none}
 .faq{max-width:720px;margin:32px 0 0}
 .faq details{border-top:1px solid var(--line)}
 .faq details:last-of-type{border-bottom:1px solid var(--line)}
-.faq summary{cursor:pointer;padding:16px 2px;font-weight:500;font-size:15.5px;letter-spacing:-.011em;list-style:none;display:flex;
-  justify-content:space-between;align-items:center;gap:16px;color:var(--ink)}
+/* The question is one line of text (not a flex row: that would split text
+   around inline <code> into items spread across the width), with the
+   chevron pinned to its right. */
+.faq summary{position:relative;cursor:pointer;padding:16px 36px 16px 2px;font-weight:500;font-size:15.5px;letter-spacing:-.011em;list-style:none;display:block;color:var(--ink)}
 .faq summary::-webkit-details-marker{display:none}
-.faq summary::after{content:"";flex:0 0 8px;height:8px;border-right:1.5px solid var(--mute);border-bottom:1.5px solid var(--mute);
-  transform:rotate(45deg);transition:transform .2s;margin-right:6px}
-.faq details[open] summary::after{transform:rotate(-135deg)}
+.faq summary::after{content:"";position:absolute;right:8px;top:50%;width:8px;height:8px;margin-top:-6px;border-right:1.5px solid var(--mute);border-bottom:1.5px solid var(--mute);
+  transform:rotate(45deg);transition:transform .2s}
+.faq details[open] summary::after{transform:rotate(-135deg);margin-top:-2px}
 .faq summary:hover{text-decoration:underline;text-underline-offset:4px}
 .faq details p{margin:0 0 22px;color:var(--dim);font-size:15px;line-height:1.65}
 
@@ -325,6 +327,9 @@ body.doc .cta pre{margin:0}
   body.doc .lede{font-size:17.5px}
   body.doc .cta{padding:20px}
 }
+
+/* a text caret's blink (hero terminal, storyline scenes) */
+@keyframes blink{50%{opacity:0}}
 
 @media (prefers-reduced-motion:reduce){
   html{scroll-behavior:auto}

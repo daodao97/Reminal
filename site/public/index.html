@@ -116,6 +116,7 @@
 
 <link rel="preload" href="/fonts/Geist-Variable.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="stylesheet" href="/theme.css">
+<link rel="stylesheet" href="/story.css">
 <script src="/theme.js"></script>
 <style>
 /* Home page set pieces. Tokens, type, nav, figures, lists and footer come from
@@ -140,7 +141,6 @@
 .term .qr svg{display:block;width:168px;height:168px}
 @media (max-width:700px){.term .qr svg{width:140px;height:140px}}
 .caret{display:inline-block;width:7px;height:1em;background:var(--figink);vertical-align:text-bottom;animation:blink 1.05s steps(1) infinite}
-@keyframes blink{50%{opacity:0}}
 .term-replay{margin-left:8px;background:var(--panel);border:1px solid var(--line);color:var(--dim);font:500 12px var(--sans);height:26px;padding:0 10px;border-radius:6px;cursor:pointer;
   transition:color .15s,border-color .15s}
 .term-replay:hover{color:var(--ink);border-color:var(--line2)}
@@ -149,48 +149,7 @@ header figcaption{max-width:720px}
 @media (max-width:700px){.term{font-size:10px;min-height:330px;padding:12px 12px 14px}}
 @media (max-width:400px){.term{font-size:8.6px;min-height:290px}}
 
-/* ── the storyline  [FEATURES.story] ───────────────── */
-/* One pinned scene and six chapters of copy. The copy is the page's real
-   text in normal flow; each chapter of the scene is drawn from how far that
-   chapter has been read, so scrolling back rewinds it exactly.
-
-   Reading area: beside the scene, everything under the nav; on a narrow
-   screen, the strip under the pinned scene. Copy holds still at the top of
-   it (--stick, set by JS) while its scene plays, by one rule: hold the
-   biggest piece that fits. A chapter's copy is split into steps (the heading
-   with its first paragraph, then each paragraph or block after it). If the
-   whole chapter fits the reading area it holds as one (.whole); otherwise
-   each step that fits holds in turn (.fits); a step that does not fit
-   simply scrolls. Nothing ever holds partly hidden. The room to hold in is
-   an empty ::after at the end of whatever holds. Sticky copy moves only
-   within its container's content, and that is what extends it. Without JS
-   nothing holds and the copy simply scrolls. */
-.story{padding-top:48px}
-.story-grid{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.15fr);gap:56px;align-items:start}
-section.s .story-grid > *{max-width:none}
-.story-copy{grid-column:1;grid-row:1}
-.story-stage{grid-column:2;grid-row:1;align-self:stretch}
-.story-pin{position:sticky;top:max(76px,calc(50 * var(--svh) - 240px));height:min(calc(100 * var(--svh) - 100px),500px);display:grid;place-items:center}
-.sx{position:relative;width:100%;height:100%;border-radius:16px;background:var(--wall);border:1px solid var(--figline);overflow:hidden}
-:root[data-theme="dark"] .sx{border-color:var(--figline2)}
-@media (prefers-color-scheme:dark){:root:not([data-theme="light"]) .sx{border-color:var(--figline2)}}
-.sx::before{content:"";position:absolute;inset:0;pointer-events:none;
-  background-image:linear-gradient(rgba(0,0,0,.05) 1px,transparent 1px),linear-gradient(90deg,rgba(0,0,0,.05) 1px,transparent 1px);
-  background-size:32px 32px;-webkit-mask-image:radial-gradient(ellipse 80% 70% at 50% 40%,#000 30%,transparent 80%);mask-image:radial-gradient(ellipse 80% 70% at 50% 40%,#000 30%,transparent 80%)}
-.sx-k{position:absolute;left:50%;top:50%;width:560px;height:440px;margin:-220px 0 0 -280px;transform:scale(var(--sxk,1));transform-origin:50% 50%}
-.sx-count{position:absolute;left:-2px;top:-26px;margin:0;font:500 11px var(--mono);color:#3a3a3a;letter-spacing:.04em}
-.sx-count b{color:#0a0a0a;font-weight:600}
-.ly{position:absolute;inset:0;opacity:0;visibility:hidden}
-.ly.on{visibility:visible}
-
-.ch{padding:calc(18 * var(--svh)) 0 calc(10 * var(--svh))}
-.ch:first-child{padding-top:calc(10 * var(--svh))}
-.story.js .whole > .ch-in,.story.js .fits > .step-in{position:sticky;top:var(--stick)}
-.story.js .whole::after,.story.js .fits::after{content:"";display:block;height:calc(30 * var(--svh))}
-.story.js .whole::after{height:calc(60 * var(--svh))}
-.story.js #windows.whole::after{height:calc(100 * var(--svh))}   /* five beats to play */
-.story.measuring .ch-in,.story.measuring .step-in{position:static}
-.step + .step{margin-top:14px}
+/* ── the storyline: this page's chapters (layout and parts: /story.css) ── */
 .story .beats{list-style:none;margin:28px 0 0;padding:0;counter-reset:beat}
 .story .beat{position:relative;padding:14px 0 14px 40px;border-top:1px solid var(--line);color:var(--mute);font-size:15px;line-height:1.55;transition:color .3s}
 .story .beat:last-child{border-bottom:1px solid var(--line)}
@@ -198,29 +157,9 @@ section.s .story-grid > *{max-width:none}
 .story .beat::before{counter-increment:beat;content:counter(beat,decimal-leading-zero);position:absolute;left:0;top:17px;font:500 12px var(--mono);color:var(--mute)}
 .story .beat.lit{color:var(--dim)}
 .story .beat.lit b,.story .beat.lit::before{color:var(--ink)}
-.ch h2{font-size:44px}
-.ch .body{font-size:17px}
 .ch .trace li{transition:opacity .3s}
 .story.js .ch .trace li{opacity:.35}
 .story.js .ch .trace li.on{opacity:1}
-
-/* shared scene parts */
-.sx-bar{display:flex;align-items:center;gap:8px;height:24px;padding:0 9px;background:var(--winbar);border-bottom:1px solid #3c3c3c;border-radius:9px 9px 0 0}
-.sx-bar .dots i{width:7px;height:7px}
-.sx-bar .dots{gap:4px}
-.sx-url{flex:1;text-align:center;font:400 8.5px var(--mono);color:var(--windim);overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
-.sx-chip{flex:none;font:500 8px var(--sans);color:var(--winink);border:1px solid #6a6a6a;border-radius:4px;padding:2px 6px;transition:background .2s,color .2s}
-.sx-chip.hit{background:#ededed;color:#0a0a0a;border-color:#ededed}
-.sx-win{position:absolute;border:1px solid var(--winline);border-radius:10px;background:var(--win);box-shadow:0 18px 40px -18px rgba(0,0,0,.9);overflow:hidden}
-.sx-br{position:absolute;left:0;top:14px;width:500px;height:336px;border:1px solid var(--winline);border-radius:10px;background:var(--wall);overflow:hidden}
-.sx-phone{position:absolute;border-radius:22px;background:linear-gradient(165deg,#4a4a4a,#262626);border:1px solid #6a6a6a;padding:6px;box-shadow:0 30px 60px -24px rgba(0,0,0,.9)}
-.sx-screen{position:relative;width:100%;height:100%;border-radius:17px;background:#161616;overflow:hidden;font:400 8px/1.6 var(--mono);color:var(--winink)}
-.sx-screen p{margin:0}
-.sx-cur{position:absolute;left:0;top:0;width:18px;height:18px;z-index:9;filter:drop-shadow(0 2px 3px rgba(0,0,0,.6))}
-.sx-ring{position:absolute;left:0;top:0;width:26px;height:26px;margin:-13px 0 0 -13px;border:1.5px solid #fff;border-radius:50%;opacity:0;z-index:8}
-.sx-keys{position:absolute;left:0;right:0;bottom:0;display:flex;gap:3px;padding:5px;background:#262626;border-top:1px solid #3c3c3c}
-.sx-keys span{flex:1;text-align:center;font:500 7px var(--sans);color:var(--windim);background:#3d3d3d;border-radius:3px;padding:3px 0}
-.g{color:var(--figyes)} .r{color:#ff6b60} .d{color:var(--winmute)}
 
 /* 01 drive */
 .d-br .sx-bar{height:28px}
@@ -279,24 +218,6 @@ section.s .story-grid > *{max-width:none}
 .f-pipe{position:absolute;left:0;right:0;bottom:6px;display:flex;align-items:center;justify-content:center;gap:8px;opacity:0}
 .f-pipe span{font:500 9px var(--mono);color:var(--winink);border:1px solid #6a6a6a;border-radius:6px;padding:4px 9px;background:var(--win)}
 .f-pipe i{width:26px;height:1.5px;background:#2a2a2a}
-
-/* 03 terminal */
-.t-term{left:0;top:16px;width:300px;height:340px}
-.t-out{padding:14px 16px;font:400 10.5px/1.8 var(--mono);color:var(--winink)}
-.t-out p{margin:0;white-space:pre}
-.t-out b{color:#ededed;font-weight:500}
-.t-l{opacity:0}
-.t-qr{margin-top:8px;display:inline-block;background:#fff;padding:5px;border-radius:3px;line-height:0}
-.t-qr img{display:block}
-.t-ph{left:370px;top:50px;width:150px;height:300px;opacity:0}
-.t-cam{position:absolute;inset:0;display:grid;place-items:center;background:#3a3a3a}
-.t-cam img{background:#fff;padding:4px;border-radius:2px;filter:blur(.3px)}
-.t-frame{position:absolute;left:50%;top:50%;width:100px;height:100px;margin:-50px 0 0 -50px;border:1.5px solid #ededed;border-radius:10px}
-.t-sweep{position:absolute;left:25px;right:25px;top:30%;height:2px;background:var(--figyes);box-shadow:0 0 12px var(--figyes)}
-.t-shell{position:absolute;inset:0;padding:34px 9px 0;background:#161616;opacity:0}
-.t-shell p{white-space:nowrap}
-.t-caret{display:inline-block;width:5px;height:9px;background:#ededed;vertical-align:-1px;animation:blink 1s steps(1) infinite}
-.t-back{position:absolute;left:8px;right:8px;top:8px;text-align:center;font:500 7px var(--mono);color:#0a0a0a;background:var(--figyes);border-radius:99px;padding:3px 0;opacity:0}
 
 /* 04 dock */
 .k-ph{left:170px;top:8px;width:210px;height:420px}
@@ -357,19 +278,6 @@ section.s .story-grid > *{max-width:none}
   background:#0a0a0a;border:1px solid #0a0a0a;font:600 8px var(--sans);color:#f2f2f2;opacity:0;transform-origin:100% 100%}
 .b-badge .nm-dot{width:6px;height:6px}
 
-@media (max-width:900px){
-  /* The scene pins under the nav and the copy reads in the strip below it.
-     The panel keeps the drawing's proportions rather than stretching across
-     a tablet with the scene marooned in the middle of it. */
-  .story{padding-top:24px}
-  .story-grid{display:block}
-  .story-stage{position:sticky;top:var(--nav);z-index:3;margin:0 -16px;padding:10px 16px 12px;background:var(--page);border-bottom:1px solid var(--line)}
-  .story-pin{position:relative;top:0;height:auto;display:block}
-  .sx{--h:min(40 * var(--svh),(100vw - 32px) * .84);height:var(--h);width:min(100%,var(--h) * 1.19);margin:0 auto}
-  .ch{padding:32px 0 24px}
-  .ch h2{font-size:32px}
-  .ch .body{font-size:16px}
-}
 
 /* ── the lid stage  [FEATURES.lidStage] ────────────── */
 /* A pinned 3D set piece: the MacBook shuts while its windows escape into a
@@ -985,7 +893,7 @@ form.signup button:disabled{opacity:.5;cursor:default}
       </div>
     </div>
     <div class="story-copy">
-    <article class="ch" id="windows" data-ch="0">
+    <article class="ch" id="windows" data-ch="0" data-room="long">
     <div class="ch-in">
       <div class="step"><div class="step-in">
         <p class="eyebrow reveal">Windows &amp; desktops</p>
@@ -1288,6 +1196,7 @@ form.signup button:disabled{opacity:.5;cursor:default}
   </div>
 </footer>
 
+<script src="/story.js"></script>
 <script>
 // ── Loops form endpoint ────────────────────────────────────────────────
 // Create the form in Loops (Forms → Create → "Use my own form") and paste
@@ -1313,18 +1222,7 @@ const FEATURES = {
   lidStage:     true,   // 3D set piece: the lid shuts, the windows fly to a browser
 };
 
-const reduced = matchMedia("(prefers-reduced-motion: reduce)").matches;
-
-// ── shared scroll-animation maths ──────────────────────────────────────
-// The lid stage and the storyline are both pure functions of scroll
-// progress; they share these.
-const clamp = (v, a = 0, b = 1) => v < a ? a : v > b ? b : v;
-const mix = (a, b, t) => a + (b - a) * t;
-const span = (t, a, b) => clamp((t - a) / (b - a));           // t's progress through [a, b]
-const ease = t => t < .5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
-const easeOut = t => 1 - Math.pow(1 - t, 3);                 // for count-ups
-// The nav's height (--nav in theme.css): pinned things sit under it.
-const NAV = parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--nav")) || 52;
+// reduced, clamp, mix, span, ease, easeOut and NAV: see /story.js
 
 // ── scroll reveal ──────────────────────────────────────────────────────
 // Staggered within a section so a block arrives as one gesture rather than
@@ -1739,41 +1637,9 @@ if (FEATURES.edgeLatency) {
 }
 
 // ── [FEATURES.story] six features, one pinned scene ────────────────────
-// The copy is ordinary page text in six chapters; the scene beside it (on top
-// of it on a phone) is drawn from how far each chapter has been read. Every
-// value below is a pure function of that, so scrolling back rewinds exactly.
-// Reduced motion shows each chapter's finished frame instead of the build-up.
-if (FEATURES.story) {
-  const story = document.getElementById("story");
-  const chs = [...story.querySelectorAll(".ch")];
-  const lys = [...story.querySelectorAll(".ly")];
-  const box = document.getElementById("sx");
-  const kEl = document.getElementById("sxk");
-  const num = document.getElementById("sxn");
-  const $ = (s) => story.querySelector(s);
-  const $$ = (s) => [...story.querySelectorAll(s)];
-  story.classList.add("js");
-
-  const seg = (t, a, b) => ease(span(t, a, b));
-  const css = (el, o) => { if (el) for (const k in o) el.style[k] = o[k]; };
-  // Walk a list of [t, x, y] keyframes.
-  const path = (t, pts) => {
-    if (t <= pts[0][0]) return pts[0].slice(1);
-    for (let i = 1; i < pts.length; i++) {
-      if (t <= pts[i][0]) {
-        const u = ease((t - pts[i - 1][0]) / (pts[i][0] - pts[i - 1][0]));
-        return [mix(pts[i - 1][1], pts[i][1], u), mix(pts[i - 1][2], pts[i][2], u)];
-      }
-    }
-    return pts[pts.length - 1].slice(1);
-  };
-  const typed = new WeakMap();
-  const type = (el, text, u) => {
-    const n = Math.round(text.length * clamp(u));
-    if (typed.get(el) !== n) { el.textContent = text.slice(0, n); typed.set(el, n); }
-  };
-  const ring = (el, x, y, u) => css(el, { transform: `translate(${x}px,${y}px) scale(${mix(.4, 1.6, u)})`, opacity: String(u > 0 && u < 1 ? 1 - u : 0) });
-
+// Layout, holding and scroll sync are /story.js; this is what each of the
+// six chapters draws for t, 0 → 1, of the way it has been read.
+if (FEATURES.story) Storyline(document.getElementById("story"), ({ $, $$ }) => {
   // frame-time graph: steady, with the small wobble a real one has
   const graph = $(".f-graph");
   const bars = [];
@@ -1939,98 +1805,8 @@ if (FEATURES.story) {
     css(B.badge, { opacity: String(hand), transform: `scale(${mix(.6, 1, hand)})` });
   }
 
-  const DRAW = [drive, fps, term, dock, fleet, bus];
-  const stage = story.querySelector(".story-stage");
-  const pin = story.querySelector(".story-pin");
-  const HOLD_GAP = 20;                         // under the pinned scene → held copy (narrow)
-  const FADE = 20;                             // px over which one scene hands to the next
-  const narrow = () => innerWidth <= 900;
-  // The reading area's top: under the nav beside the scene; under the pinned
-  // scene on a narrow screen: where it is now, or where it sits once pinned.
-  const readTop = (pinned) => !narrow() ? NAV : pinned ? NAV + stage.offsetHeight : stage.getBoundingClientRect().bottom;
-  // A viewport height that holds still while a phone's address bar slides.
-  const stableHeight = () => {
-    const probe = document.createElement("div");
-    probe.style.cssText = "position:fixed;top:0;height:calc(100 * var(--svh));visibility:hidden;pointer-events:none";
-    document.body.appendChild(probe);
-    const h = probe.offsetHeight; probe.remove();
-    return h || innerHeight;
-  };
-
-  // Layout: where copy holds (--stick) and what holds there: the whole
-  // chapter if it fits the reading area, otherwise each step that does.
-  // Copy holds level with the top of the scene beside it, or just under the
-  // scene pinned above it on a narrow screen.
-  // Heights are read with nothing holding, then every class is set at once.
-  function hold() {
-    const vh = stableHeight();
-    const stick = narrow() ? readTop(true) + HOLD_GAP : parseFloat(getComputedStyle(pin).top);
-    const fits = el => el.offsetHeight <= vh - stick - 24;
-    story.style.setProperty("--stick", stick + "px");
-    const steps = [...story.querySelectorAll(".step")];
-    chs.concat(steps).forEach(el => el.classList.remove("whole", "fits"));
-    const whole = chs.map(ch => fits(ch.querySelector(".ch-in")));
-    const each = steps.map(s => fits(s.firstElementChild));
-    chs.forEach((ch, i) => ch.classList.toggle("whole", whole[i]));
-    steps.forEach((s, i) => s.classList.toggle("fits", each[i] && !s.closest(".whole")));
-  }
-
-  // Each heading's offset inside its chapter, measured with nothing held.
-  // Chapters hand over on their headings, not their boxes: a box starts a
-  // screenful above its heading.
-  let heads = [];
-  function measure() {
-    story.classList.add("measuring");
-    heads = chs.map(ch => ch.querySelector("h2").getBoundingClientRect().top - ch.getBoundingClientRect().top);
-    story.classList.remove("measuring");
-  }
-
-  let queued = false;
-  function frame() {
-    queued = false;
-    const vh = innerHeight, top = readTop(false);
-    // The reading line: a third of the way down the reading area.
-    const line = top + (vh - top) / 3;
-    // at[i]: where chapter i's heading is. A chapter whose copy has left the
-    // reading area hands over at once, whatever the next heading is doing.
-    const at = chs.map((ch, i) => ch.getBoundingClientRect().top + heads[i]);
-    at.push(chs[chs.length - 1].getBoundingClientRect().bottom - (vh - line));
-    for (let i = 0; i < chs.length - 1; i++) {
-      const left = chs[i].querySelector(".step:last-child > .step-in").getBoundingClientRect().bottom - (top + 8);
-      at[i + 1] = Math.min(at[i + 1], line + left);
-    }
-    // t: 0 → 1 from this heading crossing the line to the next one doing so.
-    // out: the hand-over to the next scene, in the last FADE px before that.
-    const ts = chs.map((ch, i) => clamp((line - at[i]) / (at[i + 1] - at[i])));
-    const out = chs.map((ch, i) => i < chs.length - 1 ? clamp((line - at[i + 1] + FADE) / FADE) : 0);
-    let shown = 0;
-    lys.forEach((ly, i) => {
-      const o = (i === 0 ? 1 : out[i - 1]) * (1 - out[i]);
-      ly.style.opacity = String(o);
-      ly.classList.toggle("on", o > 0);
-      if (o > .5) shown = i;
-      if (o > 0) DRAW[i](reduced ? 1 : span(ts[i], .02, .92));
-    });
-    num.textContent = "0" + (shown + 1);
-  }
-
-  // Holding is a layout decision, remade only when the layout really
-  // changes: a new width, or fonts and images arriving. A height-only resize
-  // (a phone's address bar) would otherwise flip chapters mid-scroll.
-  let laidOutWidth = -1;
-  function fit(e) {
-    if (!(e && e.type === "resize" && innerWidth === laidOutWidth)) { laidOutWidth = innerWidth; hold(); }
-    measure();
-    const r = box.getBoundingClientRect();
-    kEl.style.setProperty("--sxk", String(Math.min((r.width - 32) / 560, (r.height - 56) / 440)));
-    frame();
-  }
-  addEventListener("scroll", () => { if (!queued) { queued = true; requestAnimationFrame(frame); } }, { passive: true });
-  addEventListener("resize", fit);
-  if (document.fonts) document.fonts.ready.then(() => fit());   // Geist changes every chapter's height
-  addEventListener("load", () => fit());
-  fit();
-}
+  return [drive, fps, term, dock, fleet, bus];
+});
 
 // ── [FEATURES.liveTerminal] the hero session ───────────────────────────
 // The real banner from internal/client/agent.go, typed out. The QR is

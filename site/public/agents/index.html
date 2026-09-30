@@ -114,6 +114,7 @@
 
 <link rel="preload" href="/fonts/Geist-Variable.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="stylesheet" href="/theme.css">
+<link rel="stylesheet" href="/story.css">
 <script src="/theme.js"></script>
 <style>
 /* /agents set pieces. Everything shared lives in /theme.css. */
@@ -134,42 +135,71 @@
 .steps b{color:var(--ink);font-weight:600}
 
 /* ── window notes: a badge on the window, drawn in CSS (a figure) ── */
-.notemock{display:grid;grid-template-columns:1.1fr .9fr;gap:26px;align-items:start;margin-top:44px}
+/* The mock sits on the same wallpaper as the storyline scenes: a Chrome
+   window showing an ordinary checkout page, and the notes popover beside
+   it, both in soft greys so neither glares against the wallpaper. The badge on the window stays dark: that is the real one. */
+.notemock{display:grid;grid-template-columns:1.1fr .9fr;gap:26px;align-items:start;margin-top:44px;padding:36px 28px 28px;border-radius:16px;background:var(--wall);border:1px solid var(--figline)}
 section.s .notemock{max-width:none}
-.nm-win{position:relative;border:1px solid var(--figline2);border-radius:12px;background:var(--fig);margin-top:12px}
-.nm-win .bar{border-radius:11px 11px 0 0}
-.nm-canvas{
-  min-height:212px;border-radius:0 0 11px 11px;
-  background:
-    linear-gradient(rgba(255,255,255,.035) 1px,transparent 1px),
-    linear-gradient(90deg,rgba(255,255,255,.035) 1px,transparent 1px),
-    var(--fig);
-  background-size:34px 34px,34px 34px,auto;
-}
+.nm-win{position:relative;border:1px solid var(--winline);border-radius:12px;background:#e6e6e6;margin-top:12px;box-shadow:0 18px 40px -18px rgba(0,0,0,.6)}
+.nm-win .bar{border-radius:11px 11px 0 0;background:var(--winbar);border-bottom-color:#3c3c3c}
+.nm-win .bar .url{background:#1c1c1c;border-color:#444;color:var(--windim)}
+.nm-canvas{min-height:212px;border-radius:0 0 11px 11px;background:#e6e6e6}
 .nm-badge{position:absolute;top:-13px;right:20px;display:inline-flex;align-items:center;gap:6px;padding:6px 11px;border-radius:999px;
   background:rgba(9,10,13,.95);border:1px solid rgba(255,255,255,.16);box-shadow:0 10px 26px rgba(0,0,0,.35)}
 .nm-badge b{font:500 10.5px var(--mono);color:rgba(255,255,255,.75);letter-spacing:.02em}
 .nm-page{padding:22px 24px 26px;display:grid;gap:10px;max-width:330px}
-.nm-sk{height:9px;border-radius:5px;background:rgba(255,255,255,.12)}
-.nm-field{font:400 12px var(--mono);color:rgba(255,255,255,.62);background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.10);border-radius:6px;padding:9px 11px}
+.nm-sk{height:9px;border-radius:5px;background:#cdcdcd}
+.nm-field{font:400 12px var(--mono);color:#0a0a0a;background:#f2f2f2;border:1px solid #c6c6c6;border-radius:6px;padding:9px 11px}
 .nm-fieldrow{display:grid;grid-template-columns:1fr 1fr;gap:10px}
-.nm-err{margin:2px 0 0;font-size:12px;color:#ff6b60}
-.nm-cta{margin-top:4px;justify-self:start;font-size:12.5px;font-weight:500;color:rgba(255,255,255,.45);background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.14);border-radius:6px;padding:9px 16px}
-.nm-pop{border:1px solid var(--figline2);border-radius:12px;background:#111;padding:6px;box-shadow:0 22px 50px -18px rgba(0,0,0,.4)}
-.nm-head{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:7px 10px 9px;border-bottom:1px solid rgba(255,255,255,.08);font-size:11px;color:rgba(255,255,255,.5)}
+.nm-err{margin:2px 0 0;font-size:12px;color:#d93036}
+.nm-cta{margin-top:4px;justify-self:start;font-size:12.5px;font-weight:500;color:#fff;background:#0a0a0a;border:1px solid #0a0a0a;border-radius:6px;padding:9px 16px;opacity:.4}
+.nm-pop{border:1px solid #c6c6c6;border-radius:12px;background:#e8e8e8;padding:6px;box-shadow:0 22px 50px -18px rgba(0,0,0,.45)}
+.nm-head{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:7px 10px 9px;border-bottom:1px solid #d2d2d2;font-size:11px;color:#6e6e6e}
 .nm-row{display:flex;gap:9px;padding:10px;align-items:flex-start}
-.nm-row + .nm-row{border-top:1px solid rgba(255,255,255,.08)}
+.nm-row + .nm-row{border-top:1px solid #d2d2d2}
 .nm-row .nm-dot{margin-top:5px}
-.nm-t{font-size:12.5px;font-weight:600;color:#fff}
-.nm-b{font-size:12px;color:rgba(255,255,255,.62);margin:3px 0 0;line-height:1.5}
-.nm-m{font-size:10.5px;color:rgba(255,255,255,.42);margin-top:5px}
+.nm-t{font-size:12.5px;font-weight:600;color:#0a0a0a}
+.nm-b{font-size:12px;color:#4d4d4d;margin:3px 0 0;line-height:1.5}
+.nm-m{font-size:10.5px;color:#8f8f8f;margin-top:5px}
 .nm-btns{display:flex;gap:6px;margin-top:10px}
-.nm-btn{font:inherit;font-size:11.5px;font-weight:500;padding:5px 11px;border-radius:6px;background:rgba(255,255,255,.07);border:1px solid rgba(255,255,255,.18);color:rgba(255,255,255,.8);cursor:default}
-.nm-btn.primary{background:#ededed;border-color:transparent;color:#0a0a0a}
-@media (max-width:820px){.notemock{grid-template-columns:1fr;gap:20px}}
+.nm-btn{font:inherit;font-size:11.5px;font-weight:500;padding:5px 11px;border-radius:6px;background:#f5f5f5;border:1px solid #c6c6c6;color:#0a0a0a;cursor:default}
+.nm-btn.primary{background:#0a0a0a;border-color:#0a0a0a;color:#fff}
+@media (max-width:820px){.notemock{grid-template-columns:1fr;gap:20px;padding:28px 14px 16px}}
 /* Narrow: the badge sits over the title bar's right end, so let the title
    truncate rather than run under it. */
 @media (max-width:560px){.nm-win .bar .url{max-width:150px}}
+
+/* ── the two storylines (layout and shared parts: /story.css) ── */
+/* "Your agent dies when the lid closes": the lid folds, the phone keeps watching */
+/* A MacBook seen from above and in front: the deck lies back in 3D, the lid
+   is hinged at the deck's back edge. Open, the screen faces you; shut, the
+   lid lies on the deck and you see its aluminium back, not a sliver. */
+.l-scene{position:absolute;left:0;top:30px;width:380px;height:360px;perspective:1000px;perspective-origin:50% 10%}
+.l-mac{position:absolute;left:30px;top:120px;width:320px;height:200px;transform-style:preserve-3d;transform:rotateX(58deg);transform-origin:50% 100%}
+.l-base{position:absolute;inset:0;border-radius:12px;background:linear-gradient(180deg,#d6d6d6,#a8a8a8);box-shadow:0 30px 50px -20px rgba(0,0,0,.6)}
+.l-keys{position:absolute;left:22px;right:22px;top:18px;height:92px;border-radius:5px;background:repeating-linear-gradient(90deg,#2a2a2a 0 18px,#3a3a3a 18px 20px),#2a2a2a}
+.l-pad{position:absolute;left:50%;bottom:16px;width:110px;height:62px;margin-left:-55px;border-radius:6px;background:#bdbdbd;box-shadow:inset 0 0 0 1px #9a9a9a}
+.l-lid{position:absolute;left:0;top:0;width:320px;height:200px;transform-style:preserve-3d;transform-origin:50% 0;transform:translateZ(1px) rotateX(100deg)}
+.l-back,.l-face{position:absolute;inset:0;border-radius:12px;backface-visibility:hidden;-webkit-backface-visibility:hidden}
+.l-back{background:linear-gradient(160deg,#dcdcdc,#a4a4a4);box-shadow:inset 0 0 0 1px #9a9a9a}
+.l-back i{position:absolute;left:50%;top:50%;width:26px;height:30px;margin:-15px 0 0 -13px;border-radius:40%;background:rgba(255,255,255,.55)}
+.l-face{transform:rotateX(180deg);padding:8px;background:#161616}
+.l-screen{position:relative;width:100%;height:100%;border-radius:6px;overflow:hidden;background:var(--wall)}
+.l-term{left:18px;top:20px;width:268px;height:140px}
+.l-out{padding:10px 12px;font:400 9.5px/1.7 var(--mono);color:var(--winink)}
+.l-out p{margin:0}
+.l-bar{height:5px;margin:8px 0 5px;border-radius:3px;background:#3d3d3d;overflow:hidden}
+.l-bar i{display:block;height:100%;width:0;background:var(--figyes)}
+.l-n{color:var(--windim)}
+.l-ph{left:394px;top:86px;width:150px;height:300px;opacity:0}
+.l-ph-t{padding:24px 10px 8px!important;border-bottom:1px solid #333;font:500 8px var(--mono);color:var(--windim)}
+.l-ph .l-out{font-size:8.5px}
+.l-done{opacity:0;margin-top:6px!important}
+.l-chips{position:absolute;left:14px;top:404px;display:flex;gap:8px}
+.l-chips span{font:500 10px var(--mono);color:var(--winink);border:1px solid #777;background:var(--win);border-radius:6px;padding:5px 10px;opacity:0}
+
+/* "Start a session, close the lid, walk away" (terminal + phone parts are shared) */
+.s-cap{font-size:13.5px;color:var(--mute);margin:0}
 </style>
 </head>
 <body>
@@ -226,27 +256,60 @@ section.s .notemock{max-width:none}
 
 <main>
 
-<section class="wrap s" id="lid">
-  <p class="eyebrow">The part no remote solves</p>
-  <h2>Your agent dies when the lid closes.</h2>
-  <p class="body">
+<section class="story s" id="lid" aria-label="Closing the lid: the agent keeps working, and the phone watches it">
+  <div class="wrap story-grid">
+    <div class="story-stage">
+      <div class="story-pin">
+        <div class="sx"><div class="sx-k">
+          <div class="ly on" role="img" aria-label="A MacBook runs Claude Code through a refactor while a phone shows the same session live; the lid folds shut with nothing plugged in, the Mac stays awake on a virtual display, and the phone watches the agent finish">
+            <div class="l-scene">
+              <div class="l-mac">
+                <div class="l-base"><i class="l-keys"></i><i class="l-pad"></i></div>
+                <div class="l-lid">
+                  <div class="l-back"><i></i></div>
+                  <div class="l-face"><div class="l-screen">
+                    <div class="sx-win l-term">
+                      <div class="sx-bar"><span class="dots"><i></i><i></i><i></i></span><span class="sx-url">claude &middot; studio-mac</span></div>
+                      <div class="l-out"><p><span class="g">&#9679;</span> Refactoring relay.ts</p><p class="d">&nbsp; updating callers</p><div class="l-bar"><i></i></div><p class="l-n"></p></div>
+                    </div>
+                  </div></div>
+                </div>
+              </div>
+            </div>
+            <div class="sx-phone l-ph"><div class="sx-screen">
+              <p class="l-ph-t"><span class="g">&#9679;</span> claude &middot; studio-mac</p>
+              <div class="l-out"><p><span class="g">&#9679;</span> Refactoring relay.ts</p><p class="d">&nbsp; updating callers</p><div class="l-bar"><i></i></div><p class="l-n"></p><p class="l-done g">&#10003; all tests pass</p></div>
+            </div></div>
+            <div class="l-chips"><span>lid closed</span><span>sleep: off</span><span>virtual display 1920&times;1080</span></div>
+          </div>
+        </div></div>
+      </div>
+    </div>
+    <div class="story-copy">
+    <article class="ch">
+    <div class="ch-in">
+      <div class="step"><div class="step-in">
+        <p class="eyebrow">The part no remote solves</p>
+        <h2>Your agent dies when the lid closes.</h2>
+        <p class="body">
     Both first-party remotes are clear about where the work happens: on your machine. Which means the
     machine has to stay awake, and macOS sleeps a MacBook the moment the lid closes, unless a monitor
     and keyboard are plugged in. The refactor stops mid-file, and your phone is a window into a dead session.
     The usual fix is a hardware dummy HDMI plug.
   </p>
-  <p class="body" style="margin-top:14px">
+      </div></div>
+      <div class="step"><div class="step-in">
+        <p class="body">
     <strong>reminal fixes it in software.</strong> Flip on closed-lid mode and leave: it disables clamshell
     sleep and spins up a virtual display the moment the Mac goes headless, so the agent keeps working and
     every window keeps streaming. Toggle it off and everything is undone. Keep <code>/remote-control</code>
     if you like it; reminal is what keeps the machine alive underneath it.
   </p>
-  <figure class="frame">
-    <div class="bar"><span class="dots"><i></i><i></i><i></i></span><span class="url">live.reminal.app/?s=7f3a2c9e</span><span class="live">live</span></div>
-    <video src="/assets/lid.mp4" poster="/assets/lid.jpg" muted loop playsinline autoplay preload="metadata"
-           aria-label="A MacBook's lid folds shut, and its windows keep streaming, live and controllable, into a browser"></video>
-  </figure>
-  <figcaption>The lid shuts with nothing plugged in, and the windows keep streaming, live and controllable.</figcaption>
+      </div></div>
+    </div>
+    </article>
+    </div>
+  </div>
 </section>
 
 <section class="wrap s" id="any-agent">
@@ -489,20 +552,59 @@ section.s .notemock{max-width:none}
   <figcaption style="margin-top:14px">They compose: many people run <code>/remote-control</code> for the conversation and reminal for the machine.</figcaption>
 </section>
 
-<section class="wrap s" id="start">
-  <p class="eyebrow">Ninety seconds</p>
-  <h2>Start a session, close the lid, walk away.</h2>
-  <ol class="steps">
+<section class="story s" id="start" aria-label="Starting a session: install, run, scan, close the lid">
+  <div class="wrap story-grid">
+    <div class="story-stage">
+      <div class="story-pin">
+        <div class="sx"><div class="sx-k">
+          <div class="ly on" role="img" aria-label="A terminal installs reminal and runs reminal claude, which prints a session ID, a PIN and a QR code; a phone scans it and joins the Claude session, and it keeps running after the laptop lid closes">
+            <div class="sx-win t-term s-term">
+              <div class="sx-bar"><span class="dots"><i></i><i></i><i></i></span><span class="sx-url">zsh &middot; studio-mac</span></div>
+              <div class="t-out">
+                <p><span class="g">~</span> <span class="s-type" data-text="curl -fsSL https://reminal.app/install.sh | sh"></span></p>
+                <p class="t-l d">installed reminal</p>
+                <p class="t-l"><span class="g">~</span> <span class="s-type" data-text="reminal claude"></span></p>
+                <p class="t-l">Session: <b>7f3a2c9e</b></p>
+                <p class="t-l">PIN:     <b>418902</b></p>
+                <div class="t-l t-qr"><img src="/qr.svg" alt="" width="96" height="96"></div>
+              </div>
+            </div>
+            <div class="sx-phone t-ph">
+              <div class="sx-screen">
+                <div class="t-cam"><img src="/qr.svg" alt="" width="78" height="78"><i class="t-sweep"></i><em class="t-frame"></em></div>
+                <div class="t-shell">
+                  <p><span class="g">&#9679;</span> claude &middot; studio-mac</p>
+                  <p class="d">&nbsp; Reading relay.ts</p>
+                  <p><span class="g">&#9679;</span> Refactoring&hellip;</p>
+                  <p><span class="g">&gt;</span> <i class="t-caret"></i></p>
+                  <div class="sx-keys"><span>esc</span><span>ctrl</span><span>alt</span><span>tab</span><span>&uarr;</span><span>&darr;</span></div>
+                </div>
+                <p class="t-back">lid closed &middot; still running</p>
+              </div>
+            </div>
+          </div>
+        </div></div>
+      </div>
+    </div>
+    <div class="story-copy">
+    <article class="ch">
+    <div class="ch-in">
+      <div class="step"><div class="step-in">
+        <p class="eyebrow">Ninety seconds</p>
+        <h2>Start a session, close the lid, walk away.</h2>
+        <ol class="steps">
     <li><b>Install.</b> <code>curl -fsSL https://reminal.app/install.sh | sh</code> for macOS, Linux or Windows.</li>
     <li><b>Run <code>reminal</code></b> in the terminal where your agent lives (or wrap it: <code>reminal claude</code>). It prints a session ID, a PIN and a QR code.</li>
     <li><b>Scan the QR with your phone.</b> That browser tab is now a real terminal on your machine, and the Apps menu streams any window next to it. Close the lid; nothing stops.</li>
   </ol>
-  <figure class="frame" style="margin-top:36px">
-    <div class="bar"><span class="dots"><i></i><i></i><i></i></span><span class="url">zsh &middot; 2 viewers attached</span><span class="live">live</span></div>
-    <video src="/assets/setup.mp4" poster="/assets/setup.jpg" muted loop playsinline autoplay preload="metadata"
-           aria-label="A terminal runs reminal and prints a QR code; a phone scans it and joins the same session"></video>
-  </figure>
-  <figcaption>Ephemeral credentials: the ID and PIN exist only while reminal runs. Ctrl+C and they're gone.</figcaption>
+      </div></div>
+      <div class="step"><div class="step-in">
+        <p class="s-cap">Ephemeral credentials: the ID and PIN exist only while reminal runs. Ctrl+C and they're gone.</p>
+      </div></div>
+    </div>
+    </article>
+    </div>
+  </div>
 </section>
 
 <section class="wrap s" id="faq">
@@ -628,6 +730,7 @@ section.s .notemock{max-width:none}
   </div>
 </footer>
 
+<script src="/story.js"></script>
 <script>
 document.getElementById("year").textContent = new Date().getFullYear();
 // Every .cmd block copies its own command; the hero's is the one without a
@@ -641,6 +744,48 @@ document.querySelectorAll(".cmd .copy").forEach((btn) => {
       setTimeout(() => { btn.textContent = "Copy"; btn.classList.remove("done"); }, 1600);
     } catch {}
   });
+});
+
+// ── the two storylines: what each draws for t, 0 → 1, of the way read ──
+// Layout, holding and scroll sync are /story.js.
+Storyline(document.getElementById("lid"), ({ $, $$ }) => {
+  const lid = $(".l-lid"), bars = $$(".l-bar i"), counts = $$(".l-n"), done = $(".l-done"), phone = $(".l-ph"), chips = $$(".l-chips span");
+  return [t => {
+    // the agent works through the refactor the whole time; the phone shows it
+    const files = Math.round(mix(12, 40, span(t, .05, .9)));
+    bars.forEach(b => { b.style.width = files / 40 * 100 + "%"; });
+    counts.forEach(n => { const s = `files ${files}/40`; if (n.textContent !== s) n.textContent = s; });
+    const ph = seg(t, 0, .12);
+    css(phone, { opacity: String(ph), transform: `translateX(${mix(40, 0, ph)}px)` });
+    // the lid shuts with nothing plugged in, and the Mac stays up
+    css(lid, { transform: `translateZ(1px) rotateX(${mix(100, 0, seg(t, .3, .55))}deg)` });
+    chips.forEach((c, i) => { const u = span(t, .55 + i * .06, .6 + i * .06); css(c, { opacity: String(u), transform: `translateY(${mix(8, 0, u)}px)` }); });
+    css(done, { opacity: String(span(t, .9, .96)) });
+  }];
+});
+Storyline(document.getElementById("start"), ({ $, $$ }) => {
+  const typed = $$(".s-type"), lines = $$(".t-l"), phone = $(".t-ph"), cam = $(".t-cam"), sweep = $(".t-sweep"),
+        shell = $(".t-shell"), back = $(".t-back"), term = $(".s-term");
+  return [t => {
+    // 1. install, 2. run it: the session ID, PIN and QR print
+    type(typed[0], typed[0].dataset.text, span(t, .02, .16));
+    css(lines[0], { opacity: String(span(t, .17, .2)) });
+    css(lines[1], { opacity: t > .21 ? "1" : "0" });
+    type(typed[1], typed[1].dataset.text, span(t, .22, .3));
+    lines.slice(2).forEach((l, i) => css(l, { opacity: String(span(t, .32 + i * .04, .35 + i * .04)) }));
+    // 3. the phone scans it and is in
+    const ph = seg(t, .46, .56);
+    css(phone, { opacity: String(ph), transform: `translate(${mix(70, 0, ph)}px,${mix(20, 0, ph)}px) rotate(${mix(6, 0, ph)}deg)` });
+    const scan = span(t, .56, .68);
+    css(sweep, { top: (22 + 56 * ((scan * 2) % 1)) + "%", opacity: String(scan > 0 && scan < 1 ? 1 : 0) });
+    const on = seg(t, .68, .74);
+    css(cam, { opacity: String(1 - on) });
+    css(shell, { opacity: String(on) });
+    // close the lid and walk away: it keeps running on the phone
+    const away = seg(t, .8, .88);
+    css(term, { opacity: String(mix(1, .25, away)), filter: `grayscale(${away})` });
+    css(back, { opacity: String(span(t, .9, .94)) });
+  }];
 });
 </script>
 

@@ -1,0 +1,99 @@
+/* reminal.app storyline: one pinned scene beside (or, on a narrow screen,
+   above) chapters of copy, used by the home page and /agents. Layout,
+   holding and the scene's building blocks live here; each page draws its
+   own chapters (see story.js).
+
+   One pinned scene and chapters of copy. The copy is the page's real
+   text in normal flow; each chapter of the scene is drawn from how far that
+   chapter has been read, so scrolling back rewinds it exactly.
+
+   Reading area: beside the scene, everything under the nav; on a narrow
+   screen, the strip under the pinned scene. Copy holds still at the top of
+   it (--stick, set by JS) while its scene plays, by one rule: hold the
+   biggest piece that fits. A chapter's copy is split into steps (the heading
+   with its first paragraph, then each paragraph or block after it). If the
+   whole chapter fits the reading area it holds as one (.whole); otherwise
+   each step that fits holds in turn (.fits); a step that does not fit
+   simply scrolls. Nothing ever holds partly hidden. The room to hold in is
+   an empty ::after at the end of whatever holds. Sticky copy moves only
+   within its container's content, and that is what extends it. Without JS
+   nothing holds and the copy simply scrolls. */
+.story{padding-top:48px}
+.story-grid{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.15fr);gap:56px;align-items:start}
+section.s .story-grid > *{max-width:none}
+.story-copy{grid-column:1;grid-row:1}
+.story-stage{grid-column:2;grid-row:1;align-self:stretch}
+.story-pin{position:sticky;top:max(76px,calc(50 * var(--svh) - 240px));height:min(calc(100 * var(--svh) - 100px),500px);display:grid;place-items:center}
+.sx{position:relative;width:100%;height:100%;border-radius:16px;background:var(--wall);border:1px solid var(--figline);overflow:hidden}
+:root[data-theme="dark"] .sx{border-color:var(--figline2)}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]) .sx{border-color:var(--figline2)}}
+.sx::before{content:"";position:absolute;inset:0;pointer-events:none;
+  background-image:linear-gradient(rgba(0,0,0,.05) 1px,transparent 1px),linear-gradient(90deg,rgba(0,0,0,.05) 1px,transparent 1px);
+  background-size:32px 32px;-webkit-mask-image:radial-gradient(ellipse 80% 70% at 50% 40%,#000 30%,transparent 80%);mask-image:radial-gradient(ellipse 80% 70% at 50% 40%,#000 30%,transparent 80%)}
+.sx-k{position:absolute;left:50%;top:50%;width:560px;height:440px;margin:-220px 0 0 -280px;transform:scale(var(--sxk,1));transform-origin:50% 50%}
+.sx-count{position:absolute;left:-2px;top:-26px;margin:0;font:500 11px var(--mono);color:#3a3a3a;letter-spacing:.04em}
+.sx-count b{color:#0a0a0a;font-weight:600}
+.ly{position:absolute;inset:0;opacity:0;visibility:hidden}
+.ly.on{visibility:visible}
+
+.ch{padding:calc(18 * var(--svh)) 0 calc(10 * var(--svh))}
+.ch:first-child{padding-top:calc(10 * var(--svh))}
+.story.js .whole > .ch-in,.story.js .fits > .step-in{position:sticky;top:var(--stick)}
+.story.js .whole::after,.story.js .fits::after{content:"";display:block;height:calc(30 * var(--svh))}
+.story.js .whole::after{height:calc(60 * var(--svh))}
+.story.js .ch[data-room="long"].whole::after{height:calc(100 * var(--svh))}   /* a chapter with a lot to play */
+.story.measuring .ch-in,.story.measuring .step-in{position:static}
+.step + .step{margin-top:14px}
+.ch h2{font-size:44px}
+.ch .body{font-size:17px}
+
+/* shared scene parts */
+.sx-bar{display:flex;align-items:center;gap:8px;height:24px;padding:0 9px;background:var(--winbar);border-bottom:1px solid #3c3c3c;border-radius:9px 9px 0 0}
+.sx-bar .dots i{width:7px;height:7px}
+.sx-bar .dots{gap:4px}
+.sx-url{flex:1;text-align:center;font:400 8.5px var(--mono);color:var(--windim);overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.sx-chip{flex:none;font:500 8px var(--sans);color:var(--winink);border:1px solid #6a6a6a;border-radius:4px;padding:2px 6px;transition:background .2s,color .2s}
+.sx-chip.hit{background:#ededed;color:#0a0a0a;border-color:#ededed}
+.sx-win{position:absolute;border:1px solid var(--winline);border-radius:10px;background:var(--win);box-shadow:0 18px 40px -18px rgba(0,0,0,.9);overflow:hidden}
+.sx-br{position:absolute;left:0;top:14px;width:500px;height:336px;border:1px solid var(--winline);border-radius:10px;background:var(--wall);overflow:hidden}
+.sx-phone{position:absolute;border-radius:22px;background:linear-gradient(165deg,#4a4a4a,#262626);border:1px solid #6a6a6a;padding:6px;box-shadow:0 30px 60px -24px rgba(0,0,0,.9)}
+.sx-screen{position:relative;width:100%;height:100%;border-radius:17px;background:#161616;overflow:hidden;font:400 8px/1.6 var(--mono);color:var(--winink)}
+.sx-screen p{margin:0}
+.sx-cur{position:absolute;left:0;top:0;width:18px;height:18px;z-index:9;filter:drop-shadow(0 2px 3px rgba(0,0,0,.6))}
+.sx-ring{position:absolute;left:0;top:0;width:26px;height:26px;margin:-13px 0 0 -13px;border:1.5px solid #fff;border-radius:50%;opacity:0;z-index:8}
+.sx-keys{position:absolute;left:0;right:0;bottom:0;display:flex;gap:3px;padding:5px;background:#262626;border-top:1px solid #3c3c3c}
+.sx-keys span{flex:1;text-align:center;font:500 7px var(--sans);color:var(--windim);background:#3d3d3d;border-radius:3px;padding:3px 0}
+.g{color:var(--figyes)} .r{color:#ff6b60} .d{color:var(--winmute)}
+
+
+/* terminal + QR + a phone that scans it (home chapter 03, /agents "start") */
+.t-term{left:0;top:16px;width:300px;height:340px}
+.t-out{padding:14px 16px;font:400 10.5px/1.8 var(--mono);color:var(--winink)}
+.t-out p{margin:0;white-space:pre}
+.t-out b{color:#ededed;font-weight:500}
+.t-l{opacity:0}
+.t-qr{margin-top:8px;display:inline-block;background:#fff;padding:5px;border-radius:3px;line-height:0}
+.t-qr img{display:block}
+.t-ph{left:370px;top:50px;width:150px;height:300px;opacity:0}
+.t-cam{position:absolute;inset:0;display:grid;place-items:center;background:#3a3a3a}
+.t-cam img{background:#fff;padding:4px;border-radius:2px;filter:blur(.3px)}
+.t-frame{position:absolute;left:50%;top:50%;width:100px;height:100px;margin:-50px 0 0 -50px;border:1.5px solid #ededed;border-radius:10px}
+.t-sweep{position:absolute;left:25px;right:25px;top:30%;height:2px;background:var(--figyes);box-shadow:0 0 12px var(--figyes)}
+.t-shell{position:absolute;inset:0;padding:34px 9px 0;background:#161616;opacity:0}
+.t-shell p{white-space:nowrap}
+.t-caret{display:inline-block;width:5px;height:9px;background:#ededed;vertical-align:-1px;animation:blink 1s steps(1) infinite}
+.t-back{position:absolute;left:8px;right:8px;top:8px;text-align:center;font:500 7px var(--mono);color:#0a0a0a;background:var(--figyes);border-radius:99px;padding:3px 0;opacity:0}
+
+@media (max-width:900px){
+  /* The scene pins under the nav and the copy reads in the strip below it.
+     The panel keeps the drawing's proportions rather than stretching across
+     a tablet with the scene marooned in the middle of it. */
+  .story{padding-top:24px}
+  .story-grid{display:block}
+  .story-stage{position:sticky;top:var(--nav);z-index:3;margin:0 -16px;padding:10px 16px 12px;background:var(--page);border-bottom:1px solid var(--line)}
+  .story-pin{position:relative;top:0;height:auto;display:block}
+  .sx{--h:min(40 * var(--svh),(100vw - 32px) * .84);height:var(--h);width:min(100%,var(--h) * 1.19);margin:0 auto}
+  .ch{padding:32px 0 24px}
+  .ch h2{font-size:32px}
+  .ch .body{font-size:16px}
+}
