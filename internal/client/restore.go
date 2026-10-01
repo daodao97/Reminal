@@ -80,15 +80,10 @@ func (a *Agent) saveRestore() {
 			r.Cwd = c
 		}
 	}
-	// Something else is in the foreground for a moment (a pager the agent
-	// opened, say): keep what was last known. Only the shell's own prompt
-	// says the agent has ended — except just after a restore, when the
-	// prompt is there because the agent has not been started again yet.
-	// Sessions restored after this one decide from this record whether
-	// they shared a folder with it (see resumePlan), so until the restore
-	// settles it keeps saying what was running.
-	restoringNow := a.restoring && time.Since(a.startedAt) < restoreSettle
-	if r.Fg == "" && (restoringNow || !atPrompt) {
+	if r.Fg != "" {
+		a.restoreAgentSeen = true // it is running again; the restore is over
+	}
+	if r.Fg == "" && holdPreviousAgent(a.restoring, a.restoreAgentSeen, atPrompt, time.Since(a.startedAt)) {
 		if prev, err := session.ReadRestore(a.sessionID); err == nil {
 			r.Fg, r.FgArgs, r.Conv = prev.Fg, prev.FgArgs, prev.Conv
 		}
@@ -101,6 +96,28 @@ func (a *Agent) saveRestore() {
 			}
 		}
 	}
+}
+
+// holdPreviousAgent reports whether a record with nothing recognised in the
+// foreground should go on naming the agent it had.
+//
+// Something else in front for a moment — a pager the agent opened — is not the
+// agent ending, so the record holds. The shell's own prompt IS the agent
+// ending, with one exception: just after a restore the prompt is there only
+// because the agent has not been started again yet, and sessions restored
+// after this one read this record to decide whether they shared its folder
+// (see resumePlan).
+//
+// That exception used to last the whole settle window regardless, so quitting
+// the agent within two minutes of a restore left the record still naming it
+// and the next restart brought it back from the dead. Once the agent has
+// actually been seen running, the exception has served its purpose: a prompt
+// after that is a person quitting, and must be recorded as one.
+func holdPreviousAgent(restoring, agentSeen, atPrompt bool, since time.Duration) bool {
+	if !atPrompt {
+		return true
+	}
+	return restoring && !agentSeen && since < restoreSettle
 }
 
 func (a *Agent) restoreLoop(stop <-chan struct{}) {
