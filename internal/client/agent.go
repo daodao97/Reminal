@@ -117,12 +117,16 @@ type Agent struct {
 	// resumes the agent that was running; restoreSeq is the scrollback last
 	// saved for a restore; stopSignal, that a signal (not the shell) ended
 	// the session, so it may come back. See restore.go.
-	restoring   bool
-	restoreRun  string
-	restoreNote string
-	restorePlan func() (run, note string)
-	restoreSeq  uint64
-	stopSignal  atomic.Bool
+	restoring bool
+	// restoreAgentSeen: since this restore, the agent has been seen running
+	// again — so a prompt now means it was quit, not that it is still coming
+	// back. Touched only by saveRestore, on the restore loop's goroutine.
+	restoreAgentSeen bool
+	restoreRun       string
+	restoreNote      string
+	restorePlan      func() (run, note string)
+	restoreSeq       uint64
+	stopSignal       atomic.Bool
 
 	// screen is a headless terminal emulator fed the same plaintext output
 	// that goes to viewers. On a fresh attach we serialize its current state
@@ -1385,8 +1389,6 @@ func (a *Agent) markActivity(now time.Time) {
 	a.metaDirty.Store(true)
 }
 
-// markInput stamps when a person last typed, for the record; throttled to
-// disk like markActivity.
 // noteInput records that a person typed — if it really was a person. Both
 // input paths (the host terminal and a viewer) go through here, so the rule
 // lives in one place: when it was written out at each site, resolving a merge
@@ -1398,6 +1400,8 @@ func (a *Agent) noteInput(data []byte) {
 	}
 }
 
+// markInput stamps when a person last typed, for the record; throttled to
+// disk like markActivity.
 func (a *Agent) markInput() {
 	a.metaMu.Lock()
 	a.lastInput = time.Now()

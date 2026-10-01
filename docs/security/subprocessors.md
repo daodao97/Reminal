@@ -37,9 +37,15 @@ reminal client or relay ever contacts it. Running reminal touches none of it.
 The absence of a client-side telemetry SDK is verifiable:
 
 ```bash
-grep -rIn "analytics\|telemetry\|posthog\|sentry\|mixpanel\|amplitude" internal/ cmd/
+grep -rIn --exclude-dir=testdata "analytics\|telemetry\|posthog\|sentry\|mixpanel\|amplitude" internal/ cmd/
 # no output
 ```
+
+`testdata` is excluded because it holds the captured `--help` output of other
+tools (claude, qwen, pi), which reminal reads to work out how to resume them.
+Those mention their own telemetry flags; none of it is reminal's. Drop the
+exclusion to see exactly what is in there — it is eight lines of third-party
+help text and nothing else.
 
 ## What Cloudflare can and cannot see
 

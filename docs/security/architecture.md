@@ -346,5 +346,6 @@ grep -n "storage\|alarm" cloudflare/src/session.ts
 grep -rn "console\." cloudflare/src        # no output
 
 # No telemetry in the client
-grep -rIn "analytics\|telemetry\|posthog\|sentry\|mixpanel" internal/ cmd/   # no output
+# (testdata excluded: it holds other tools' captured --help text, not reminal's)
+grep -rIn --exclude-dir=testdata "analytics\|telemetry\|posthog\|sentry\|mixpanel" internal/ cmd/   # no output
 ```
