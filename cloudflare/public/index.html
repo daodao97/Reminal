@@ -914,6 +914,7 @@
                      background: #21262d; border: 1px solid #30363d; color: #c9d1d9;
                      border-radius: 5px; padding: 2px 7px; }
     .host-whatsnew:hover { background: #2a313a; border-color: #3d444d; }
+    .host-tour { margin-left: 4px; }
 
     /* The sheet lives outside the 290px panel: release notes are prose, and a
        250px column turns three bullets into fourteen lines. */
@@ -1680,6 +1681,237 @@
     .machine-box.filter-open .machine-sessions.collapsed { display: block; }
     /* Nothing to search yet: no machines, no recents, no query. */
     .panel-search.is-idle { display: none; }
+    /* ── Guided tour ──────────────────────────────────────────────────────
+       A spotlight that glides from control to control, and a card that
+       follows it. It borrows reminal.app's look: Geist, monochrome,
+       hairline borders, mono eyebrows, colour only where it means something.
+       Everything is fixed-position above the app (the header is z 50, the
+       share modal 100), and the tour owns input while it runs: a transparent
+       blocker eats clicks so a stray tap cannot open a menu out from under a
+       step. Geist comes from the same CDN as xterm.js, so the viewer gains
+       no new third party. */
+    @font-face { font-family: "Tour Geist"; src: url(https://cdn.jsdelivr.net/npm/geist@1.3.1/dist/fonts/geist-sans/Geist-Variable.woff2) format("woff2"); font-weight: 100 900; font-display: swap; }
+    @font-face { font-family: "Tour Geist Mono"; src: url(https://cdn.jsdelivr.net/npm/geist@1.3.1/dist/fonts/geist-mono/GeistMono-Variable.woff2) format("woff2"); font-weight: 100 900; font-display: swap; }
+    .tour-card, .tour-mock {
+      --t-sans: "Tour Geist", -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+      --t-mono: "Tour Geist Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      --t-panel: #0a0a0a; --t-soft: #111; --t-ink: #ededed; --t-dim: #a1a1a1; --t-mute: #7d7d7d;
+      --t-line: #1f1f1f; --t-line2: #2e2e2e; --t-yes: #62c073;
+    }
+
+    .tour-block { position: fixed; inset: 0; z-index: 9000; background: transparent; touch-action: none; }
+    /* The spotlight is only a hole in the dim: no outline, no glow. */
+    .tour-ring {
+      position: fixed; z-index: 9002; pointer-events: none; border-radius: 10px;
+      box-shadow: 0 0 0 200vmax rgba(0, 0, 0, 0.72);
+      transition: left .55s cubic-bezier(.2,.7,.2,1), top .55s cubic-bezier(.2,.7,.2,1),
+                  width .55s cubic-bezier(.2,.7,.2,1), height .55s cubic-bezier(.2,.7,.2,1),
+                  box-shadow .4s ease;
+    }
+    .tour-ring.intro { box-shadow: 0 0 0 200vmax rgba(0, 0, 0, 0); }
+
+    .tour-card {
+      position: fixed; z-index: 9003; width: 360px; max-width: calc(100vw - 24px); overflow: hidden;
+      background: var(--t-panel); border: 1px solid var(--t-line2); border-radius: 12px;
+      box-shadow: 0 30px 80px rgba(0, 0, 0, 0.6);
+      color: var(--t-ink); font: 400 14px/1.55 var(--t-sans); letter-spacing: -.006em;
+      -webkit-font-smoothing: antialiased;
+      transition: left .5s cubic-bezier(.2,.7,.2,1), top .5s cubic-bezier(.2,.7,.2,1), opacity .3s ease;
+      -webkit-user-select: none; user-select: none; touch-action: pan-y;
+    }
+    .tour-card.hero { width: 480px; }
+    .tour-card .tour-bar { height: 1px; margin: 0 14px; background: var(--t-line); }
+    .tour-card .tour-bar i { display: block; height: 100%; width: 0; background: var(--t-ink); transition: width .5s cubic-bezier(.2,.7,.2,1); }
+    .tour-card .tour-in { position: relative; padding: 18px 20px 16px; }
+    .tour-card.hero .tour-in { padding: 30px 30px 24px; }
+    .tour-top { display: flex; align-items: center; gap: 12px; margin-bottom: 14px; }
+    .tour-ico {
+      flex: none; width: 32px; height: 32px; display: grid; place-items: center; color: var(--t-ink);
+      background: var(--t-soft); border: 1px solid var(--t-line2); border-radius: 8px;
+    }
+    .tour-ico svg { width: 17px; height: 17px; }
+    .tour-count { font: 500 12px var(--t-mono); color: var(--t-ink); letter-spacing: .02em; }
+    .tour-count span { color: var(--t-mute); }
+    .tour-x {
+      margin-left: auto; background: transparent; border: none; padding: 4px 2px;
+      font: 400 13px var(--t-sans); color: var(--t-mute);
+    }
+    .tour-x:hover { background: transparent; color: var(--t-ink); }
+    .tour-title { font: 600 18px/1.3 var(--t-sans); letter-spacing: -.025em; margin-bottom: 6px; }
+    .tour-body { color: var(--t-dim); }
+    .tour-body b { color: var(--t-ink); font-weight: 500; }
+    .tour-body b.ok { color: var(--t-yes); }
+    .tour-body b.warn { color: #f2a20d; }
+    .tour-card kbd, .tour-body code {
+      font: 500 12px var(--t-mono); color: var(--t-ink);
+      background: var(--t-soft); border: 1px solid var(--t-line2); border-radius: 5px; padding: 1px 5px;
+    }
+    /* A control named mid-sentence: its real glyph on a key cap. */
+    .tour-k {
+      display: inline-grid; place-items: center; width: 20px; height: 20px; vertical-align: -5px;
+      background: var(--t-soft); border: 1px solid var(--t-line2); border-radius: 5px; color: var(--t-ink);
+    }
+    .tour-k svg { width: 12px; height: 12px; }
+    .tour-tips { margin: 12px 0 0; padding: 0; list-style: none; display: grid; gap: 8px; }
+    .tour-tips li { display: flex; gap: 10px; align-items: baseline; color: var(--t-dim); font-size: 13.5px; }
+    .tour-tips li::before { content: ''; flex: none; width: 4px; height: 4px; border-radius: 50%; background: var(--t-mute); transform: translateY(-3px); }
+    .tour-note {
+      display: flex; gap: 10px; align-items: center; margin-top: 14px; padding-top: 12px;
+      border-top: 1px solid var(--t-line); font-size: 12.5px; color: var(--t-mute); line-height: 1.45;
+    }
+    .tour-chip, .tm-tag {
+      flex: none; font: 500 10.5px var(--t-mono); letter-spacing: .06em; text-transform: uppercase;
+      color: var(--t-dim); border: 1px solid var(--t-line2); border-radius: 5px; padding: 2px 7px; background: var(--t-soft);
+    }
+    .tour-foot { display: flex; align-items: center; gap: 8px; margin-top: 18px; }
+    .tour-dots { display: flex; gap: 5px; flex-wrap: wrap; margin-right: auto; }
+    .tour-dots button {
+      width: 6px; height: 6px; padding: 0; border-radius: 50%; background: var(--t-line2); border: none;
+      transition: background .25s ease, transform .25s ease;
+    }
+    .tour-dots button:hover { background: var(--t-mute); }
+    .tour-dots button.seen { background: #4d4d4d; }
+    .tour-dots button.on { background: var(--t-ink); transform: scale(1.15); }
+    .tour-btn2, .tour-btn1 {
+      height: 34px; padding: 0 14px; border-radius: 6px; font: 500 13.5px var(--t-sans); letter-spacing: -.01em;
+      display: inline-flex; align-items: center; gap: 6px; transition: background .15s, border-color .15s, color .15s;
+    }
+    .tour-btn2 { background: transparent; border: 1px solid var(--t-line2); color: var(--t-dim); }
+    .tour-btn2:hover { background: var(--t-soft); color: var(--t-ink); border-color: #3d3d3d; }
+    .tour-btn1 { background: var(--t-ink); border: 1px solid var(--t-ink); color: #0a0a0a; }
+    .tour-btn1:hover { background: #fff; }
+    .tour-btn1:focus-visible, .tour-btn2:focus-visible { outline: 2px solid #52a8ff; outline-offset: 2px; }
+    .tour-btn1 svg { width: 15px; height: 15px; transition: transform .2s ease; }
+    .tour-btn1:hover svg { transform: translateX(2px); }
+    .tour-arrow {
+      position: absolute; width: 12px; height: 12px; background: var(--t-panel); transform: rotate(45deg);
+      border: 1px solid var(--t-line2); transition: left .5s cubic-bezier(.2,.7,.2,1); z-index: 1;
+    }
+    .tour-arrow.up { top: -7px; border-right: none; border-bottom: none; }
+    .tour-arrow.down { bottom: -7px; border-left: none; border-top: none; }
+    .tour-arrow.none { display: none; }
+    .tour-card:has(.tour-arrow:not(.none)) { overflow: visible; }
+
+    /* Welcome + finale: reminal.app's hero in miniature. */
+    .tour-grid {
+      position: absolute; inset: 0 0 auto; height: 220px; pointer-events: none;
+      background-image: linear-gradient(var(--t-line) 1px, transparent 1px), linear-gradient(90deg, var(--t-line) 1px, transparent 1px);
+      background-size: 32px 32px; background-position: center top;
+      -webkit-mask-image: radial-gradient(ellipse 80% 90% at 30% 0%, #000 15%, transparent 75%);
+      mask-image: radial-gradient(ellipse 80% 90% at 30% 0%, #000 15%, transparent 75%);
+    }
+    .tour-card.hero .tour-in > :not(.tour-grid) { position: relative; }
+    .tour-eyebrow { font: 500 11.5px var(--t-mono); letter-spacing: .04em; text-transform: uppercase; color: var(--t-mute); margin-bottom: 12px; }
+    .tour-card.hero .tour-title { font-size: 30px; line-height: 1.08; letter-spacing: -.045em; color: var(--t-mute); margin-bottom: 12px; }
+    .tour-card.hero .tour-title .em { color: var(--t-ink); }
+    .tour-card.hero .tour-body { font-size: 15px; }
+    .tour-fig {
+      margin-top: 20px; background: #0a0a0a; border: 1px solid var(--t-line2); border-radius: 10px; overflow: hidden;
+      font: 400 12.5px/1.7 var(--t-mono); color: var(--t-ink);
+    }
+    .tour-figbar { display: flex; align-items: center; gap: 6px; height: 30px; padding: 0 12px; background: #111; border-bottom: 1px solid var(--t-line); }
+    .tour-figbar i { width: 9px; height: 9px; border-radius: 50%; background: #2e2e2e; }
+    .tour-figbar span { flex: 1; text-align: center; margin-right: 33px; font-size: 11px; color: var(--t-mute); }
+    .tour-figbody { padding: 12px 14px 14px; min-height: 92px; }
+    .tour-figbody .p { color: var(--t-mute); }
+    .tour-figbody .ok { color: var(--t-yes); }
+    .tour-figbody .out { color: var(--t-dim); opacity: 0; animation: tour-in .3s ease forwards; }
+    .tour-figbody .o1 { animation-delay: 1.5s; }
+    .tour-figbody .o2 { animation-delay: 1.8s; }
+    .tour-figbody .typed { display: inline-block; vertical-align: bottom; overflow: hidden; white-space: nowrap; width: 0; animation: tour-type .9s steps(11) .4s forwards; }
+    .tour-figbody .cur { display: inline-block; width: 7px; height: 14px; margin-left: 2px; vertical-align: -2px; background: var(--t-ink); animation: tour-blink 1s steps(1) infinite; }
+    @keyframes tour-type { to { width: 11ch; } }
+    @keyframes tour-in { to { opacity: 1; } }
+    @keyframes tour-blink { 50% { opacity: 0; } }
+    .tour-stats { display: flex; margin-top: 14px; border: 1px solid var(--t-line2); border-radius: 10px; overflow: hidden; }
+    .tour-stats div { flex: 1; padding: 12px 14px 11px; border-left: 1px solid var(--t-line2); }
+    .tour-stats div:first-child { border-left: none; }
+    .tour-stats b { display: block; font: 600 20px/1 var(--t-sans); letter-spacing: -.04em; color: var(--t-ink); }
+    .tour-stats b span { font: 500 11px var(--t-mono); color: var(--t-mute); margin-left: 2px; letter-spacing: 0; }
+    .tour-stats em { display: block; margin-top: 6px; font: 400 11px var(--t-mono); font-style: normal; color: var(--t-mute); }
+    .tour-card.hero .tour-foot { margin-top: 22px; }
+    .tour-card.hero .tour-foot .tour-btn2 { margin-left: auto; }
+    .tour-hint { margin-top: 14px; font: 400 11px var(--t-mono); color: var(--t-mute); }
+    .tour-hint kbd { font-size: 10.5px; padding: 0 4px; }
+    @media (pointer: coarse) { .tour-hint.keys { display: none; } }
+    .tour-done-check { width: 44px; height: 44px; margin-bottom: 16px; }
+    .tour-done-check .arc { stroke-dasharray: 140; stroke-dashoffset: 140; transform: rotate(-90deg); transform-origin: center; animation: tour-draw .8s cubic-bezier(.2,.7,.2,1) forwards; }
+    .tour-done-check path { stroke-dasharray: 30; stroke-dashoffset: 30; animation: tour-draw .4s .6s ease forwards; }
+    @keyframes tour-draw { to { stroke-dashoffset: 0; } }
+    .tour-confetti { position: fixed; inset: 0; z-index: 9004; pointer-events: none; }
+
+    /* Example panels: what a menu looks like once it has things in it,
+       standing in for the real one, which a new user has nothing in yet.
+       Drawn in the app's own dropdown style so they read as the real menu. */
+    .tour-mock {
+      position: fixed; z-index: 9001; pointer-events: none;
+      background: #161b22; border: 1px solid #30363d; border-radius: 6px; box-shadow: 0 6px 20px rgba(0, 0, 0, 0.5);
+      padding: 8px; font-size: 13px; color: #e6edf3; transition: opacity .2s ease;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    .tour-mock svg { width: 14px; height: 14px; flex: none; }
+    .tm-tag { position: absolute; top: -11px; right: 10px; background: #0a0a0a; }
+    .tm-bar { display: flex; gap: 6px; margin-bottom: 6px; }
+    .tm-search {
+      flex: 1; display: flex; align-items: center; gap: 7px; padding: 6px 9px; border-radius: 6px;
+      background: #0d1117; border: 1px solid #30363d; color: #6e7681;
+    }
+    .tm-bell { width: 32px; display: grid; place-items: center; border: 1px solid #30363d; border-radius: 6px; background: #0d1117; color: #c9d1d9; }
+    .tm-mach { display: flex; align-items: center; gap: 8px; padding: 8px 6px 4px; }
+    .tm-mach b { font-weight: 600; }
+    .tm-mach.off { color: #8b949e; }
+    .tm-sub { color: #8b949e; font-size: 11px; font-family: Menlo, Monaco, monospace; }
+    .tm-dot { width: 8px; height: 8px; border-radius: 50%; background: #484f58; flex: none; }
+    .tm-dot.on { background: #3fb950; }
+    .tm-acts { margin-left: auto; display: flex; gap: 10px; color: #8b949e; }
+    .tm-acts svg { width: 13px; height: 13px; }
+    .tm-sess { display: flex; align-items: center; gap: 8px; padding: 6px 8px 6px 22px; border-radius: 6px; }
+    .tm-sess.cur, .tm-win.cur { background: rgba(56, 139, 253, 0.1); }
+    .tm-sess.cur .tm-name { color: #58a6ff; }
+    .tm-sess > div { min-width: 0; flex: 1; }
+    .tm-name { font-weight: 500; }
+    .tm-meta { color: #8b949e; font-size: 11px; font-family: Menlo, Monaco, monospace; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .tm-state { font-size: 10.5px; font-weight: 500; padding: 1px 7px; border-radius: 999px; white-space: nowrap; border: 1px solid; }
+    .tm-state.work { color: #58a6ff; border-color: rgba(88,166,255,.4); }
+    .tm-state.ask { color: #d29922; border-color: rgba(210,153,34,.4); }
+    .tm-state.done { color: #3fb950; border-color: rgba(63,185,80,.4); }
+    .tm-win { display: flex; align-items: center; gap: 10px; padding: 6px; border-radius: 6px; }
+    .tm-app {
+      flex: none; width: 28px; height: 28px; display: grid; place-items: center; color: #c9d1d9;
+      background: #21262d; border: 1px solid #30363d; border-radius: 7px;
+    }
+    .tour-mock .tm-app svg { width: 15px; height: 15px; }
+    .tm-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 2px; }
+    .tm-cell { display: grid; justify-items: center; gap: 6px; padding: 10px 2px 8px; font-size: 11px; color: #c9d1d9; }
+    .tm-cell .tm-app { width: 38px; height: 38px; border-radius: 9px; }
+    .tour-mock .tm-cell .tm-app svg { width: 18px; height: 18px; }
+    .tm-hosthead { padding: 2px 2px 8px; }
+    .tm-meter { padding: 3px 2px; }
+    .tm-meter > div { display: flex; justify-content: space-between; font-size: 11px; color: #8b949e; }
+    .tm-meter b { color: #e6edf3; font-weight: 600; }
+    .tm-meter i { display: block; height: 3px; margin-top: 3px; border-radius: 2px; background: linear-gradient(90deg, #3fb950 var(--v), #21262d var(--v)); }
+    .tm-btn {
+      display: flex; align-items: center; justify-content: center; gap: 6px; margin-top: 8px; padding: 6px;
+      background: #21262d; border: 1px solid #30363d; border-radius: 6px; font-size: 12px;
+    }
+    .tm-own { display: flex; align-items: center; justify-content: center; gap: 6px; margin-top: 10px; color: #3fb950; font-size: 12px; }
+
+    /* Phones: the card is a sheet pinned to whichever edge the target is not
+       near, so it never covers what it is pointing at. */
+    @media (max-width: 560px) {
+      .tour-card, .tour-card.hero { width: auto; left: 12px !important; right: 12px; }
+      .tour-card.hero .tour-in { padding: 24px 20px 20px; }
+      .tour-card.hero .tour-title { font-size: 26px; }
+      .tour-arrow { display: none; }
+      .tm-sess, .tm-win { padding-top: 5px; padding-bottom: 5px; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .tour-ring, .tour-card, .tour-arrow, .tour-card .tour-bar i { transition: none; }
+      .tour-figbody *, .tour-done-check * { animation: none !important; }
+      .tour-figbody .typed { width: 11ch; }
+      .tour-figbody .out { opacity: 1; }
+      .tour-done-check .arc, .tour-done-check path { stroke-dashoffset: 0; }
+    }
   </style>
 </head>
 <body>
@@ -2478,7 +2710,8 @@
       // The count is releases you do not have yet, so it agrees with the
       // status beside it by construction: a count means "update available".
       const behind = changelog && changelog.releases ? changelog.releases.filter(r => !r.current).length : 0;
-      return '<i class="host-br"></i><button class="host-whatsnew">What\u2019s new' + (behind > 0 ? ' \u00b7 ' + behind : '') + '</button>';
+      return '<i class="host-br"></i><button class="host-whatsnew">What\u2019s new' + (behind > 0 ? ' \u00b7 ' + behind : '') + '</button>' +
+        '<button class="host-whatsnew host-tour">Take the tour</button>';
     }
 
     // Version, the control that changes it, and the notes for it — one block,
@@ -7571,6 +7804,16 @@
           render();
         });
         dock.appendChild(row);
+        const tour = document.createElement('button');
+        tour.type = 'button';
+        tour.className = 'sett-row';
+        tour.innerHTML = '<span>Take the tour</span><span class="sett-sw"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"/></svg></span>';
+        tour.addEventListener('click', (e) => {
+          e.stopPropagation();
+          close();
+          if (window.reminalTour) window.reminalTour.start();
+        });
+        dock.appendChild(tour);
       }
       function position() {
         if (!dock.classList.contains('open')) return;
@@ -10395,6 +10638,7 @@
         sendOwnerAction('upgrade', 'upgrade');
         return;
       }
+      if (e.target.closest('.host-tour')) { document.getElementById('host').open = false; if (window.reminalTour) window.reminalTour.start(); return; }
       if (e.target.closest('.host-whatsnew')) { openChangelog(); return; }
       // Every branch below re-renders the panel (renderHost), which detaches the
       // clicked element. The document-level outside-click closer then sees
@@ -12968,6 +13212,614 @@
       manualClose = true;
       if (ws) try { ws.close(); } catch (_) {}
     });
+
+    // ── Guided tour ─────────────────────────────────────────────────────────
+    // A first-visit walk through every part of the UI: a spotlight that glides
+    // between controls, a card that follows it, Back / Next / Skip, arrow keys
+    // and swipes. Steps describe what they point at rather than where it is,
+    // and each one is skipped when its target is not on screen, so the same
+    // list serves a phone (key bar, ⚙ replay) and a desktop (Host panel
+    // replay), connected or not.
+    //
+    // Menus are never opened for real. Someone taking the tour usually has
+    // nothing in them yet, so each menu step drops an example panel, filled
+    // with made-up machines and windows and labelled as an example, under the
+    // control it describes.
+    (function initTour() {
+      const DONE_KEY = 'reminal-tour-v1';
+      const $ = (id) => document.getElementById(id);
+      const svg = (body, extra) => '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"' + (extra || '') + '>' + body + '</svg>';
+      // One line weight, no fills, no colour: the same drawing language as
+      // reminal.app and the header icons above.
+      const I = {
+        term: svg('<rect x="3" y="4.5" width="18" height="15" rx="2"/><path d="m7.5 9.5 3 2.5-3 2.5M12.5 14.5h4"/>'),
+        pulse: svg('<path d="M3 12h4l2.5-6 5 12L17 12h4"/>'),
+        mach: svg('<rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/>'),
+        bell: svg('<path d="M6 9a6 6 0 0 1 12 0c0 6.5 2.5 8 2.5 8h-17S6 15.5 6 9z"/><path d="M10.3 20.5a2 2 0 0 0 3.4 0"/>'),
+        win: svg('<rect x="3" y="3" width="7.5" height="7.5" rx="1.5"/><rect x="13.5" y="3" width="7.5" height="7.5" rx="1.5"/><rect x="3" y="13.5" width="7.5" height="7.5" rx="1.5"/><rect x="13.5" y="13.5" width="7.5" height="7.5" rx="1.5"/>'),
+        app: svg('<path d="M4.5 16.5c-1.5 1.26-2 5-2 5s3.74-.5 5-2c.71-.84.7-2.13-.09-2.91a2.18 2.18 0 0 0-2.91-.09z"/><path d="m12 15-3-3a22 22 0 0 1 2-3.95A12.88 12.88 0 0 1 22 2c0 2.72-.78 7.5-6 11a22.35 22.35 0 0 1-4 2z"/><path d="M9 12H4s.55-3.03 2-4c1.62-1.08 5 0 5 0M12 15v5s3.03-.55 4-2c1.08-1.62 0-5 0-5"/>'),
+        host: svg('<path d="M3 3v18h18"/><path d="m7 15 4-4 3 3 6-6"/>'),
+        share: svg('<circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><path d="m8.6 10.5 6.8-4M8.6 13.5l6.8 4"/>'),
+        exit: svg('<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="m16 17 5-5-5-5M21 12H9"/>'),
+        plug: svg('<path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/><path d="m10 17 5-5-5-5M15 12H3"/>'),
+        key: svg('<rect x="2" y="5" width="20" height="14" rx="2"/><path d="M6 9h.01M10 9h.01M14 9h.01M18 9h.01M6 13h.01M18 13h.01M8 16h8"/>'),
+        tools: svg('<path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/>'),
+        snip: svg('<circle cx="6" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M20 4 8.12 15.88M14.47 14.48 20 20M8.12 8.12 12 12"/>'),
+        dock: svg('<path d="m7 15 5-5 5 5"/><path d="M4 20h16"/><path d="M12 10V3"/>'),
+        arrowR: svg('<path d="M5 12h14M13 6l6 6-6 6"/>'),
+        info: svg('<circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/>'),
+        search: svg('<circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/>'),
+        check: svg('<path d="m5 12.5 4.5 4.5L19 7.5"/>'),
+      };
+      // Small inline glyphs for naming controls inside a sentence, drawn as
+      // key caps instead of emoji so they match the rest of the UI.
+      const G = {
+        plus: svg('<path d="M12 5v14M5 12h14"/>'),
+        pen: svg('<path d="M4 20h4L19 9l-4-4L4 16z"/>'),
+        x: svg('<path d="M6 6l12 12M18 6 6 18"/>'),
+        bksp: svg('<path d="M9 5h12v14H9l-6-7z"/><path d="m12 9 6 6M18 9l-6 6"/>'),
+        gear: svg('<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>'),
+        snip: svg('<circle cx="6" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M20 4 8.1 15.9M14.5 14.5 20 20M8.1 8.1 12 12"/>'),
+        menu: svg('<path d="M4 7h16M4 12h16M4 17h16"/>'),
+        bell: svg('<path d="M6 9a6 6 0 0 1 12 0c0 6.5 2.5 8 2.5 8h-17S6 15.5 6 9z"/><path d="M10.3 20.5a2 2 0 0 0 3.4 0"/>'),
+      };
+      const k = (name) => '<span class="tour-k">' + G[name] + '</span>';
+
+      const connected = () => document.body.classList.contains('connected');
+      const touchUI = () => {
+        const kb = $('keybar');
+        return !!kb && getComputedStyle(kb).display !== 'none';
+      };
+      function shown(el) {
+        if (!el) return false;
+        const r = el.getBoundingClientRect();
+        if (r.width < 2 || r.height < 2) return false;
+        const cs = getComputedStyle(el);
+        return cs.visibility !== 'hidden' && cs.display !== 'none';
+      }
+      const closeMenus = () => ['recents', 'windows', 'apps', 'host'].forEach((m) => { const d = $(m); if (d && d.open) d.open = false; });
+      const summary = (id) => { const d = $(id); return d && d.querySelector('summary'); };
+      // The key bar scrolls sideways under the pinned ✂ and ≡, so a group
+      // of keys is only the ones actually in view: not scrolled off the left,
+      // not tucked under the pinned pair on the right.
+      const keys = (from, to) => {
+        const kb = $('keybar'), snip = $('snip-btn');
+        const lo = kb.getBoundingClientRect().left, hi = snip ? snip.getBoundingClientRect().left : innerWidth;
+        const out = [];
+        let on = false;
+        for (const b of kb.children) {
+          if (b === from) on = true;
+          if (on && shown(b)) {
+            const r = b.getBoundingClientRect();
+            if (r.left >= lo - 1 && r.right <= hi + 1) out.push(b);
+          }
+          if (b === to) break;
+        }
+        return out;
+      };
+      const scrollKeybar = (end) => { const kb = $('keybar'); if (kb) kb.scrollLeft = end ? kb.scrollWidth : 0; };
+      const mod = /Mac|iPhone|iPad/.test(navigator.platform || '') ? '⌘' : 'Ctrl';
+
+      // ── example panels ──
+      const tile = (c, glyph) => '<span class="tm-app" style="--c:' + c + '">' + glyph + '</span>';
+      const A = {
+        code: svg('<path d="m8 8-4 4 4 4M16 8l4 4-4 4M13.5 5l-3 14"/>'),
+        web: svg('<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c2.5 2.5 3.5 5.5 3.5 9s-1 6.5-3.5 9c-2.5-2.5-3.5-5.5-3.5-9s1-6.5 3.5-9z"/>'),
+        pen: svg('<path d="M12 19l7-7-3-3-7 7v3z"/><path d="M18 13l-1.5-7.5L2 2l3.5 14.5L13 18z"/>'),
+        term: svg('<path d="m5 8 4 4-4 4M12 16h7"/>'),
+        note: svg('<path d="M14 3H6a1 1 0 0 0-1 1v16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V8z"/><path d="M14 3v5h5"/><path d="M9 11h6M9 15h6"/>'),
+        music: svg('<path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/>'),
+        mail: svg('<rect x="3" y="5" width="18" height="14" rx="2"/><path d="m3 7 9 6 9-6"/>'),
+        cal: svg('<rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18M8 3v4M16 3v4"/>'),
+        files: svg('<path d="M20 19a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1h5l2 2h7a1 1 0 0 1 1 1z"/>'),
+        photo: svg('<rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="9" cy="10" r="2"/><path d="m21 17-5-5-9 8"/>'),
+      };
+      const tag = '<div class="tm-tag">Example</div>';
+      const acts = '<span class="tm-acts">' + G.plus + G.pen + G.x + '</span>';
+      const sess = (name, meta, state, cur) => '<div class="tm-sess' + (cur ? ' cur' : '') + '"><div><div class="tm-name">' + name + '</div><div class="tm-meta">' + meta + '</div></div>' +
+        (state ? '<span class="tm-state ' + state[0] + '">' + state[1] + '</span>' : '') + '</div>';
+      const MOCK = {
+        machines: () => tag +
+          '<div class="tm-bar"><div class="tm-search">' + I.search + 'Search machines &amp; sessions…</div><div class="tm-bell" data-mock="bell">' + G.bell + '</div></div>' +
+          '<div class="tm-mach"><span class="tm-dot on"></span><b>MacBook Pro</b><span class="tm-sub">18% · 3</span>' + acts + '</div>' +
+          sess('claude', '~/projects/webapp', ['work', 'Working'], true) +
+          sess('dev-server', 'npm run dev · idle 2m') +
+          sess('codex', '~/projects/api', ['ask', 'Needs you']) +
+          '<div class="tm-mach"><span class="tm-dot on"></span><b>home-server</b><span class="tm-sub">4% · 2</span>' + acts + '</div>' +
+          sess('backups', 'restic · idle 1h', ['done', 'Done']) +
+          '<div class="tm-mach off"><span class="tm-dot"></span><b>Work laptop</b><span class="tm-sub">offline · 2h ago</span></div>',
+        windows: () => tag +
+          '<div class="tm-bar"><div class="tm-search">' + I.search + 'Search windows…</div></div>' +
+          [['#3b82f6', A.code, 'Code', 'main.go · webapp'], ['#f59e0b', A.web, 'Browser', 'localhost:3000'],
+           ['#a855f7', A.pen, 'Design', 'Onboarding flow'], ['#22c55e', A.term, 'Terminal', '~/projects/webapp'],
+           ['#ec4899', A.photo, 'Preview', 'screenshot.png']]
+            .map((w, i) => '<div class="tm-win' + (i ? '' : ' cur') + '">' + tile(w[0], w[1]) + '<div><div class="tm-name">' + w[2] + '</div><div class="tm-meta">' + w[3] + '</div></div></div>').join(''),
+        apps: () => tag +
+          '<div class="tm-grid">' +
+          [['#f59e0b', A.web, 'Browser'], ['#3b82f6', A.code, 'Code'], ['#22c55e', A.term, 'Terminal'], ['#eab308', A.note, 'Notes'],
+           ['#ec4899', A.music, 'Music'], ['#0ea5e9', A.mail, 'Mail'], ['#ef4444', A.cal, 'Calendar'], ['#6366f1', A.files, 'Files']]
+            .map((a) => '<div class="tm-cell">' + tile(a[0], a[1]) + '<span>' + a[2] + '</span></div>').join('') + '</div>',
+        host: () => tag +
+          '<div class="tm-hosthead"><b>MacBook Pro</b><div class="tm-meta">macOS · arm64 · 10 cores</div></div>' +
+          '<div class="tm-meter"><div><span>Memory</span><b>9.6 GB / 16 GB</b></div><i style="--v:60%"></i></div>' +
+          '<div class="tm-meter"><div><span>CPU</span><b>23%</b></div><i style="--v:23%"></i></div>' +
+          '<div class="tm-meter"><div><span>Battery</span><b>82% · 4h 10m left</b></div><i style="--v:82%"></i></div>' +
+          '<div class="tm-btn">' + G.plus + 'New session on this host</div><div class="tm-btn">View full desktop</div>' +
+          '<div class="tm-own">' + I.check + 'You own this machine</div>',
+      };
+      const MOCK_W = { machines: 340, windows: 320, apps: 312, host: 290 };
+      const NOTE = {
+        machines: 'Placeholder data. Yours will list your own machines and sessions.',
+        windows: 'Placeholder data. Yours will list the windows open on your computer.',
+        apps: 'Placeholder data. Yours will list the apps on your computer.',
+        host: 'Placeholder numbers. Yours are live from your computer.',
+      };
+      const exampleNote = (name) => '<div class="tour-note"><span class="tour-chip">Example</span><span>' + NOTE[name] + '</span></div>';
+
+      const STEPS = [
+        { id: 'welcome', hero: true },
+        {
+          id: 'connect', icon: I.plug, when: () => !connected(),
+          target: () => [$('session-input'), $('pin-input'), $('connect-btn')],
+          title: 'Join a session',
+          body: () => 'Run <code>reminal</code> on your computer. It prints a <b>session code</b> and a <b>PIN</b>: type them here, or just scan the QR code it shows and skip the typing.',
+        },
+        {
+          id: 'terminal', icon: I.term, when: connected, target: () => $('terminal-wrap'), place: 'inside',
+          title: 'This is your computer’s terminal',
+          body: () => 'Not a copy, the real shell, live. Whatever you type runs there, and everyone watching sees the same screen. It is end-to-end encrypted, so the relay in between only ever sees noise.',
+          tips: () => touchUI()
+            ? ['Swipe to scroll back through history', 'Long-press to select and copy text', 'Tap a link to open it']
+            : ['Drop a file here to upload it to the computer', '<kbd>' + mod + '</kbd> <kbd>F</kbd> searches the scrollback', 'Paste a screenshot and it lands on the computer'],
+        },
+        {
+          id: 'status', icon: I.pulse, target: () => $('status'),
+          title: () => connected() ? 'Live, and it stays that way' : 'Connection status',
+          body: () => connected()
+            ? '<b class="ok">Green</b> means live. If your Wi-Fi drops or your laptop sleeps, it turns <b class="warn">amber</b> and reconnects on its own, right where you left off.'
+            : 'This pill tells you what is happening: what reminal is waiting for, when it is connecting, and green once you are live.',
+        },
+        {
+          id: 'machines', icon: I.mach, anchor: () => summary('recents'), mock: 'machines',
+          title: 'All your machines, one list',
+          body: () => 'Every computer you own and every terminal running on it, with what each one is doing. Pick one to jump straight in. Your own machines never ask for a PIN.',
+          tips: () => [k('plus') + ' starts a new terminal on that machine', k('pen') + ' renames it, ' + k('x') + ' ends a session', 'Search finds a session by name, folder or what is on its screen'],
+        },
+        {
+          id: 'alerts', icon: I.bell, anchor: () => summary('recents'), mock: 'machines', focus: '[data-mock="bell"]',
+          title: 'Alerts',
+          body: () => 'Get a notification when a machine’s CPU runs hot, its battery gets low, or the charger is unplugged, even with this page closed.',
+        },
+        {
+          id: 'windows', icon: I.win, when: connected, anchor: () => summary('windows'), mock: 'windows',
+          title: 'Any window, right here',
+          body: () => 'Every app window on the computer. Pick one and it opens as a live pane you can click, type into, drag and resize, like it was running here.',
+        },
+        {
+          id: 'apps', icon: I.app, when: connected, anchor: () => summary('apps'), mock: 'apps',
+          title: 'Launch apps',
+          body: () => 'Start any app on the computer from here. Its window shows up ready to use.',
+        },
+        {
+          id: 'host', icon: I.host, when: connected, anchor: () => summary('host'), mock: 'host',
+          title: 'The computer at a glance',
+          body: () => 'Live CPU, memory and battery, a button for another terminal, and one for the whole desktop. Updates and <b>What’s new</b> live here too.',
+        },
+        {
+          id: 'share', icon: I.share, when: connected, target: () => $('share-btn'),
+          title: 'Bring someone in',
+          body: () => 'A link and a QR code for this exact terminal. <b>Copy for an AI agent</b> gives an agent everything it needs to join and work alongside you.',
+        },
+        {
+          id: 'leave', icon: I.exit, when: connected, target: () => $('connect-btn'),
+          title: 'Leave any time',
+          body: () => 'Disconnecting only closes this view. The terminal keeps running on your computer, so you can come back to it from any device.',
+        },
+        {
+          id: 'keys', icon: I.key, when: touchUI,
+          target: () => keys($('keybar').querySelector('[data-key="up"]'), $('keybar').querySelector('[data-key="tilde"]')),
+          enter: () => scrollKeybar(false),
+          title: 'Keys your phone forgot',
+          body: () => 'Arrows, <b>Tab</b>, <b>Esc</b> and the Ctrl shortcuts a shell needs. Hold an arrow or ' + k('bksp') + ' and it repeats. Swipe the bar for more.',
+        },
+        {
+          id: 'tools', icon: I.tools, when: touchUI,
+          target: () => keys($('kb-focus-btn'), $('upload-btn')),
+          enter: () => scrollKeybar(true),
+          title: 'Handy tools',
+          body: () => 'Bring up the keyboard, make text bigger or smaller, copy and paste, search the scrollback, and <b>upload</b> a photo or file straight to the computer.',
+        },
+        {
+          id: 'snips', icon: I.snip, when: touchUI, target: () => $('snip-btn'),
+          title: 'Snippets',
+          body: () => 'Save the commands you type all the time. <b>Drag up</b> from ' + k('snip') + ' and let go on one to paste it. Tap it to manage them.',
+        },
+        {
+          id: 'dock', icon: I.dock, when: touchUI, target: () => $('keybar-toggle'),
+          title: 'Switch sessions in one move',
+          body: () => '<b>Tap</b> ' + k('menu') + ' to hide the key bar. <b>Drag up</b> and slide onto a session to switch to it, across all your machines.',
+        },
+        // The finale lands the spotlight on where the tour lives from now on.
+        { id: 'done', hero: true, done: true, spot: () => touchUI() ? $('settings-btn') : summary('host'), enter: () => scrollKeybar(true) },
+      ];
+
+      let active = false, list = [], idx = 0, seen = new Set();
+      let blockEl, ringEl, cardEl, mockEl = null, mockName = '', tick = null, lastKey = '', swipeX = null;
+
+      // The welcome and the finale borrow reminal.app's hero: a faint grid,
+      // a mono eyebrow, a headline that is mostly grey with the point in
+      // white, an always-dark terminal figure and a row of figures.
+      function heroHTML(done) {
+        if (done) {
+          return '<div class="tour-grid"></div>' +
+            '<svg class="tour-done-check" viewBox="0 0 48 48" fill="none" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">' +
+            '<circle cx="24" cy="24" r="22" stroke="#2e2e2e"/><circle class="arc" cx="24" cy="24" r="22" stroke="#ededed"/><path d="m15.5 24.5 6 6 11-12" stroke="#ededed"/></svg>' +
+            '<div class="tour-eyebrow">Tour complete</div>' +
+            '<div class="tour-title">That’s the whole app. <span class="em">Your computer is a tap away.</span></div>' +
+            '<div class="tour-body">Replay this tour any time from ' +
+            (touchUI() ? k('gear') + ' on the key bar.' : 'the <b>Host</b> menu, next to What’s new.') + '</div>';
+        }
+        return '<div class="tour-grid"></div>' +
+          '<div class="tour-eyebrow">Welcome to reminal</div>' +
+          '<div class="tour-title">Your computer’s terminal, windows and apps, <span class="em">live on this screen.</span></div>' +
+          '<div class="tour-body">A one-minute look at where everything is. Nothing here changes your computer.</div>' +
+          '<div class="tour-fig" aria-hidden="true"><div class="tour-figbar"><i></i><i></i><i></i><span>~/projects/webapp</span></div>' +
+          '<div class="tour-figbody"><div><span class="p">$</span> <span class="typed">npm run dev</span><span class="cur"></span></div>' +
+          '<div class="out o1">  ready on <span class="ok">http://localhost:3000</span></div>' +
+          '<div class="out o2">  compiled in 412 ms</div></div></div>' +
+          '<div class="tour-stats"><div><b>E2E</b><em>encrypted</em></div><div><b>0</b><em>open ports</em></div><div><b>60<span>fps</span></b><em>live windows</em></div></div>';
+      }
+
+      function build() {
+        blockEl = document.createElement('div');
+        blockEl.className = 'tour-block';
+        ringEl = document.createElement('div');
+        ringEl.className = 'tour-ring empty intro';
+        cardEl = document.createElement('div');
+        cardEl.className = 'tour-card';
+        cardEl.setAttribute('role', 'dialog');
+        cardEl.setAttribute('aria-modal', 'true');
+        cardEl.setAttribute('aria-live', 'polite');
+        cardEl.addEventListener('touchstart', (e) => { swipeX = e.touches[0].clientX; }, { passive: true });
+        cardEl.addEventListener('touchend', (e) => {
+          if (swipeX === null) return;
+          const dx = e.changedTouches[0].clientX - swipeX;
+          swipeX = null;
+          if (dx < -50) next(); else if (dx > 50) back();
+        }, { passive: true });
+        document.body.append(blockEl, ringEl, cardEl);
+      }
+
+      function setMock(name) {
+        if (name === mockName) return;
+        if (mockEl) {
+          const old = mockEl;
+          old.style.opacity = '0';
+          setTimeout(() => old.remove(), 200);
+          mockEl = null;
+        }
+        mockName = name || '';
+        if (!name) return;
+        mockEl = document.createElement('div');
+        mockEl.className = 'tour-mock tm-' + name;
+        mockEl.setAttribute('aria-hidden', 'true');
+        mockEl.innerHTML = MOCK[name]();
+        document.body.appendChild(mockEl);
+        if (!matchMedia('(prefers-reduced-motion: reduce)').matches) {
+          mockEl.animate([{ opacity: 0, transform: 'translateY(-6px)' }, { opacity: 1, transform: 'none' }], { duration: 260, easing: 'cubic-bezier(.2,.85,.25,1)' });
+        }
+      }
+
+      // Drop the example panel under its header control, where the real menu
+      // would open.
+      function placeMock(step) {
+        if (!mockEl || !step.anchor) return;
+        const a = step.anchor();
+        if (!a) return;
+        const ar = a.getBoundingClientRect();
+        const vw = innerWidth;
+        const w = Math.min(MOCK_W[mockName] || 320, vw - 16);
+        const left = Math.min(vw - w - 8, Math.max(8, ar.left + ar.width / 2 - w / 2));
+        mockEl.style.width = w + 'px';
+        mockEl.style.left = Math.round(left) + 'px';
+        mockEl.style.top = Math.round(ar.bottom + 10) + 'px';
+      }
+
+      function nudge() {
+        if (!cardEl || matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+        cardEl.animate([{ transform: 'none' }, { transform: 'scale(1.03)' }, { transform: 'none' }], { duration: 260, easing: 'ease-out' });
+      }
+
+      function targetsOf(step) {
+        let t;
+        if (step.mock) {
+          if (step.focus) t = mockEl ? [mockEl.querySelector(step.focus)] : [];
+          else t = [step.anchor(), mockEl];
+        } else if (step.target) t = step.target();
+        else return [];
+        if (!Array.isArray(t)) t = [t];
+        return t.filter(shown);
+      }
+
+      function unionRect(els) {
+        let l = Infinity, t = Infinity, r = -Infinity, b = -Infinity;
+        for (const el of els) {
+          const x = el.getBoundingClientRect();
+          l = Math.min(l, x.left); t = Math.min(t, x.top); r = Math.max(r, x.right); b = Math.max(b, x.bottom);
+        }
+        return { left: l, top: t, right: r, bottom: b, width: r - l, height: b - t };
+      }
+
+      function render(dir) {
+        const step = list[idx];
+        seen.add(idx);
+        const n = list.length;
+        const mid = list.filter((s) => !s.hero).length;
+        const pos = list.slice(0, idx + 1).filter((s) => !s.hero).length;
+        const pct = step.hero ? (step.done ? 100 : 0) : Math.round(pos / mid * 100);
+        const dots = list.map((s, i) => s.hero ? '' : '<button type="button" data-t="go" data-i="' + i + '" class="' + (i === idx ? 'on' : seen.has(i) ? 'seen' : '') + '" aria-label="Step ' + (i + 1) + '"></button>').join('');
+        let inner;
+        if (step.hero) {
+          inner = heroHTML(step.done) +
+            '<div class="tour-foot">' + (step.done
+              ? '<button type="button" class="tour-btn2" data-t="back">Back</button><button type="button" class="tour-btn1" data-t="next">Start using reminal</button>'
+              : '<button type="button" class="tour-btn2" data-t="skip">Skip</button><button type="button" class="tour-btn1" data-t="next">Show me around' + I.arrowR + '</button>') +
+            '</div>' + (step.done ? '' : '<div class="tour-hint keys">Use <kbd>←</kbd> <kbd>→</kbd> to move, <kbd>Esc</kbd> to skip</div>');
+        } else {
+          const title = typeof step.title === 'function' ? step.title() : step.title;
+          const tips = step.tips ? step.tips() : null;
+          inner = '<div class="tour-top"><div class="tour-ico">' + (step.icon || '') + '</div>' +
+            '<div class="tour-count">' + String(pos).padStart(2, '0') + '<span> / ' + String(mid).padStart(2, '0') + '</span></div>' +
+            '<button type="button" class="tour-x" data-t="skip">Skip tour</button></div>' +
+            '<div class="tour-title">' + title + '</div>' +
+            '<div class="tour-body">' + step.body() + '</div>' +
+            (tips ? '<ul class="tour-tips">' + tips.map((t) => '<li>' + t + '</li>').join('') + '</ul>' : '') +
+            (step.mock ? exampleNote(step.mock) : '') +
+            '<div class="tour-foot"><div class="tour-dots">' + dots + '</div>' +
+            '<button type="button" class="tour-btn2" data-t="back">Back</button>' +
+            '<button type="button" class="tour-btn1" data-t="next">' + (idx === n - 2 ? 'Finish' : 'Next') + '</button></div>';
+        }
+        cardEl.className = 'tour-card' + (step.hero ? ' hero' : '');
+        cardEl.innerHTML = '<div class="tour-bar"><i></i></div><div class="tour-arrow none"></div><div class="tour-in">' + inner + '</div>';
+        // Let the bar animate from where it was rather than snap.
+        const bar = cardEl.querySelector('.tour-bar i');
+        bar.style.width = (cardEl._pct || 0) + '%';
+        requestAnimationFrame(() => { bar.style.width = pct + '%'; cardEl._pct = pct; });
+        if (!matchMedia('(prefers-reduced-motion: reduce)').matches) {
+          cardEl.querySelector('.tour-in').animate(
+            [{ opacity: 0, transform: 'translateX(' + (dir * 18) + 'px)' }, { opacity: 1, transform: 'none' }],
+            { duration: 320, easing: 'cubic-bezier(.2,.85,.25,1)' });
+        }
+        const primary = cardEl.querySelector('.tour-btn1');
+        // Focused for Enter and screen readers, without painting a focus
+        // ring nobody asked for (focusVisible is ignored where unsupported).
+        if (primary) primary.focus({ preventScroll: true, focusVisible: false });
+        lastKey = '';
+        layout();
+      }
+
+      function layout() {
+        if (!active) return;
+        const step = list[idx];
+        const vw = innerWidth, vh = innerHeight;
+        placeMock(step);
+        const els = step.hero ? (step.spot ? [step.spot()].filter(shown) : []) : targetsOf(step);
+        const narrow = vw <= 560;
+        let r = null;
+        if (els.length) {
+          r = unionRect(els);
+          const pad = step.place === 'inside' ? -6 : 6;
+          const l = Math.max(2, r.left - pad), t = Math.max(2, r.top - pad);
+          const rr = Math.min(vw - 2, r.right + pad), bb = Math.min(vh - 2, r.bottom + pad);
+          r = { left: l, top: t, right: rr, bottom: bb, width: rr - l, height: bb - t };
+          if (r.width < 4 || r.height < 4) r = null;
+        }
+        // A spotlit control inside an example panel still wants the card
+        // clear of the whole panel, not just of the control.
+        let avoid = r;
+        if (r && step.focus && mockEl) {
+          const m = unionRect([step.anchor(), mockEl]);
+          avoid = { left: Math.min(r.left, m.left), top: Math.min(r.top, m.top), right: Math.max(r.right, m.right), bottom: Math.max(r.bottom, m.bottom) };
+          avoid.width = avoid.right - avoid.left; avoid.height = avoid.bottom - avoid.top;
+        }
+        const key = r ? [r.left, r.top, r.width, r.height].map(Math.round).join(',') + ',' + vw + ',' + vh : 'c' + vw + ',' + vh;
+        if (key === lastKey) return;
+        lastKey = key;
+
+        if (r) {
+          ringEl.classList.remove('empty');
+          Object.assign(ringEl.style, { left: r.left + 'px', top: r.top + 'px', width: r.width + 'px', height: r.height + 'px' });
+        } else {
+          // No target: the hole shrinks to a point in the middle and the
+          // whole page dims, which is the hero's backdrop.
+          ringEl.classList.add('empty');
+          Object.assign(ringEl.style, { left: vw / 2 + 'px', top: vh / 2 + 'px', width: '0px', height: '0px' });
+        }
+
+        const cw = cardEl.offsetWidth, ch = cardEl.offsetHeight;
+        const arrow = cardEl.querySelector('.tour-arrow');
+        let x, y, side = 'none';
+        if (!r || step.hero) {
+          x = (vw - cw) / 2; y = Math.max(12, (vh - ch) / 2);
+        } else if (step.place === 'inside') {
+          x = narrow ? 12 : Math.min(vw - cw - 16, Math.max(16, r.left + r.width - cw - 24));
+          y = narrow ? vh - ch - 16 - (touchUI() ? ($('keybar').offsetHeight || 0) : 0) : Math.max(r.top + 24, (vh - ch) / 2);
+        } else {
+          const gap = 16;
+          const below = avoid.bottom + gap, above = avoid.top - gap - ch;
+          if (below + ch <= vh - 8) { y = below; side = 'up'; }
+          else if (above >= 8) { y = above; side = 'down'; }
+          else if (!narrow && avoid.right + gap + cw <= vw - 8) {
+            // No room above or below: sit beside it.
+            y = Math.min(vh - ch - 8, Math.max(8, avoid.top)); x = avoid.right + gap;
+          } else { y = Math.max(8, vh - ch - 8); }
+          const cx = r.left + r.width / 2;
+          if (x === undefined) x = narrow ? 12 : Math.min(vw - cw - 12, Math.max(12, cx - cw / 2));
+          if (side !== 'none' && avoid === r) {
+            arrow.className = 'tour-arrow ' + side;
+            arrow.style.left = Math.min(cw - 26, Math.max(12, cx - x - 7)) + 'px';
+          } else side = 'none';
+        }
+        if (side === 'none') arrow.className = 'tour-arrow none';
+        cardEl.style.left = Math.round(x) + 'px';
+        cardEl.style.top = Math.round(y) + 'px';
+      }
+
+      function go(i, dir) {
+        if (i < 0 || i >= list.length) return;
+        idx = i;
+        const step = list[idx];
+        setMock(step.mock);
+        if (step.enter) step.enter();
+        render(dir);
+        if (step.done) confetti();
+      }
+      function next() {
+        if (idx >= list.length - 1) { finish(true); return; }
+        go(idx + 1, 1);
+      }
+      function back() { if (idx > 0) go(idx - 1, -1); }
+
+      // Clicks are taken at the window's capture phase, before the app's own
+      // capture-phase "click outside closes the menu" handler and anything
+      // under the blocker can see them.
+      function onClick(e) {
+        if (!active) return;
+        const inCard = cardEl.contains(e.target);
+        if (!inCard && e.target !== blockEl) return;
+        e.stopPropagation();
+        if (!inCard) { e.preventDefault(); nudge(); return; }
+        const b = e.target.closest('[data-t]');
+        if (!b) return;
+        const t = b.getAttribute('data-t');
+        if (t === 'next') next();
+        else if (t === 'back') back();
+        else if (t === 'skip') finish(false);
+        else if (t === 'go') { const i = +b.getAttribute('data-i'); go(i, i > idx ? 1 : -1); }
+      }
+
+      function onKey(e) {
+        if (!active) return;
+        const k = e.key;
+        const onBtn = e.target && e.target.closest && e.target.closest('.tour-card button');
+        if ((k === 'Enter' || k === ' ') && onBtn) { e.stopPropagation(); return; } // the focused button's own click
+        if (k === 'ArrowRight' || k === 'Enter' || k === ' ') next();
+        else if (k === 'ArrowLeft') back();
+        else if (k === 'Escape') finish(false);
+        else if (k === 'Tab') { /* keep focus inside the card */ }
+        else return;
+        e.preventDefault();
+        e.stopPropagation();
+        if (k === 'Tab') {
+          const bs = Array.from(cardEl.querySelectorAll('button'));
+          const at = bs.indexOf(document.activeElement);
+          const nx = bs[(at + (e.shiftKey ? -1 : 1) + bs.length) % bs.length];
+          if (nx) nx.focus();
+        }
+      }
+
+      function start() {
+        if (active) return;
+        closeMenus();
+        // Drop steps whose controls are not on this screen (a hidden key bar,
+        // a desktop without a Tour button) before the counter is computed.
+        list = STEPS.filter((s) => {
+          if (s.when && !s.when()) return false;
+          if (s.hero) return true;
+          if (s.mock) return shown(s.anchor());
+          if (s.enter) s.enter();
+          return targetsOf(s).length > 0;
+        });
+        scrollKeybar(false);
+        active = true;
+        idx = 0;
+        seen = new Set();
+        if (document.activeElement && document.activeElement.blur) document.activeElement.blur();
+        build();
+        // Fade the dim in instead of slamming it down.
+        requestAnimationFrame(() => requestAnimationFrame(() => ringEl.classList.remove('intro')));
+        window.addEventListener('keydown', onKey, true);
+        window.addEventListener('click', onClick, true);
+        window.addEventListener('resize', layout);
+        if (window.visualViewport) visualViewport.addEventListener('resize', layout);
+        tick = setInterval(layout, 200);
+        go(0, 1);
+      }
+
+      function finish(completed) {
+        if (!active) return;
+        active = false;
+        try { localStorage.setItem(DONE_KEY, completed ? 'done' : 'skipped'); } catch (_) {}
+        setMock(null);
+        scrollKeybar(false);
+        clearInterval(tick);
+        window.removeEventListener('keydown', onKey, true);
+        window.removeEventListener('click', onClick, true);
+        window.removeEventListener('resize', layout);
+        if (window.visualViewport) visualViewport.removeEventListener('resize', layout);
+        const els = [blockEl, ringEl, cardEl];
+        ringEl.classList.add('intro', 'empty');
+        cardEl.style.opacity = '0';
+        setTimeout(() => els.forEach((el) => el.remove()), 380);
+        try { if (connected() && !touchUI()) term.focus(); } catch (_) {}
+      }
+
+      function confetti() {
+        if (matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+        const c = document.createElement('canvas');
+        c.className = 'tour-confetti';
+        const dpr = window.devicePixelRatio || 1;
+        c.width = innerWidth * dpr; c.height = innerHeight * dpr;
+        document.body.appendChild(c);
+        const g = c.getContext('2d');
+        g.scale(dpr, dpr);
+        const colors = ['#ededed', '#a1a1a1', '#7d7d7d', '#ffffff', '#62c073'];
+        const cx = innerWidth / 2, cy = innerHeight / 2;
+        const bits = Array.from({ length: 160 }, () => {
+          const a = Math.random() * Math.PI * 2, v = 5 + Math.random() * 9;
+          return { x: cx, y: cy, vx: Math.cos(a) * v, vy: Math.sin(a) * v - 5, w: 5 + Math.random() * 5, h: 8 + Math.random() * 6,
+            r: Math.random() * 6, vr: (Math.random() - .5) * .4, c: colors[(Math.random() * colors.length) | 0] };
+        });
+        const t0 = performance.now();
+        (function frame(t) {
+          const life = (t - t0) / 2200;
+          g.clearRect(0, 0, innerWidth, innerHeight);
+          for (const b of bits) {
+            b.vx *= 0.985; b.vy = b.vy * 0.985 + 0.32; b.x += b.vx; b.y += b.vy; b.r += b.vr;
+            g.save(); g.translate(b.x, b.y); g.rotate(b.r);
+            g.globalAlpha = Math.max(0, 1 - life * life);
+            g.fillStyle = b.c; g.fillRect(-b.w / 2, -b.h / 2, b.w, b.h * Math.abs(Math.cos(b.r * 2)));
+            g.restore();
+          }
+          if (life < 1) requestAnimationFrame(frame); else c.remove();
+        })(t0);
+      }
+
+      window.reminalTour = { start };
+
+      // First visit: show it once. A join link waits for the session to come
+      // up (or give up) so the tour can show the connected UI; a bare visit
+      // starts on the join form. ?tour forces it, for demos and support.
+      const params = new URLSearchParams(location.search);
+      let seenBefore = false;
+      try { seenBefore = !!localStorage.getItem(DONE_KEY); } catch (_) {}
+      if (params.has('tour')) seenBefore = false;
+      if (seenBefore || document.body.classList.contains('pane-only') || params.has('pane')) return;
+      const t0 = Date.now();
+      const waitForSession = !!params.get('s');
+      (function poll() {
+        const busy = document.querySelector('details[open]') ||
+          ($('share-modal') && getComputedStyle($('share-modal')).display !== 'none');
+        const ready = !waitForSession || connected() || Date.now() - t0 > 6000;
+        if (ready && !busy && Date.now() - t0 > 900) {
+          // Connected: give the terminal a moment to paint its first screen
+          // so the spotlight lands on something real.
+          setTimeout(start, connected() ? 500 : 0);
+        } else {
+          setTimeout(poll, 250);
+        }
+      })();
+    })();
   </script>
 </body>
 </html>
