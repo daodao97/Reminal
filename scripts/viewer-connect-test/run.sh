@@ -3,7 +3,7 @@
 # a container — the three things that made a connect hang or hand out a PIN
 # that cannot work:
 #
-#   1. one kex_init per connect, not two (two spent the agent's PIN allowance
+#   1. one PIN handshake per connect, not two (two spent the agent's PIN allowance
 #      twice per connect, and it refills one per 10s)
 #   2. a wrong PIN keeps saying "PIN mismatch" instead of being overwritten by
 #      its own watchdog with "Handshake timed out" nine seconds later

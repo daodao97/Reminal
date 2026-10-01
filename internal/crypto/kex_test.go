@@ -8,155 +8,35 @@ import (
 	"testing"
 )
 
-// TestEKERoundTrip exercises the full handshake the way the wire
-// protocol does it: viewer generates ephemeral key + ex_id, both
-// sides blind/unblind with the PIN, ECDH, the agent wraps a session
-// key, the viewer unwraps. A successful round-trip is the spec.
-func TestEKERoundTrip(t *testing.T) {
-	const pin = "483920"
-
-	viewerEph, err := NewEphemeralKey()
-	if err != nil {
-		t.Fatalf("viewer keygen: %v", err)
-	}
-	agentEph, err := NewEphemeralKey()
-	if err != nil {
-		t.Fatalf("agent keygen: %v", err)
-	}
-
+// The wrap layer on its own: a session key wrapped under a handshake key and
+// exchange id opens only under the same pair. The handshake that produces the
+// key is tested in cpace_test.go.
+func TestWrapSessionKeyRoundTrip(t *testing.T) {
+	key := bytes.Repeat([]byte{7}, 32)
+	sk := bytes.Repeat([]byte{9}, 32)
 	_, exID, err := NewExID()
 	if err != nil {
-		t.Fatalf("ex_id: %v", err)
+		t.Fatal(err)
 	}
-
-	// Viewer → agent: blinded viewer pubkey
-	viewerBlinded, err := BlindPub(viewerEph.PublicKey().Bytes(), pin)
+	wrapped, err := WrapSessionKey(key, exID, sk)
 	if err != nil {
-		t.Fatalf("blind viewer: %v", err)
+		t.Fatal(err)
 	}
-	if bytes.Equal(viewerBlinded, viewerEph.PublicKey().Bytes()) {
-		t.Fatalf("blinded pubkey should not equal original")
+	got, err := UnwrapSessionKey(key, exID, wrapped)
+	if err != nil || !bytes.Equal(got, sk) {
+		t.Fatalf("round trip failed: %v", err)
 	}
-
-	// Agent receives, unblinds, computes shared.
-	viewerPubFromAgent, err := UnblindPub(viewerBlinded, pin)
-	if err != nil {
-		t.Fatalf("unblind viewer: %v", err)
+	other := bytes.Repeat([]byte{8}, 32)
+	if _, err := UnwrapSessionKey(other, exID, wrapped); err == nil {
+		t.Fatal("unwrapped under a different key")
 	}
-	viewerPubObj, err := PeerPublicKey(viewerPubFromAgent)
-	if err != nil {
-		t.Fatalf("decode viewer key: %v", err)
+	_, exID2, _ := NewExID()
+	if _, err := UnwrapSessionKey(key, exID2, wrapped); err == nil {
+		t.Fatal("unwrapped under a different exchange id")
 	}
-	if !bytes.Equal(viewerPubObj.Bytes(), viewerEph.PublicKey().Bytes()) {
-		t.Fatalf("agent's decoded viewer pubkey diverges from viewer's actual")
-	}
-	sharedAgent, err := agentEph.ECDH(viewerPubObj)
-	if err != nil {
-		t.Fatalf("agent ECDH: %v", err)
-	}
-
-	// Agent wraps the session key.
-	sessionKey, err := NewSessionKey()
-	if err != nil {
-		t.Fatalf("session key: %v", err)
-	}
-	wrapped, err := WrapSessionKey(sharedAgent, exID, sessionKey)
-	if err != nil {
-		t.Fatalf("wrap: %v", err)
-	}
-	// Agent → viewer: blinded agent pubkey
-	agentBlinded, err := BlindPub(agentEph.PublicKey().Bytes(), pin)
-	if err != nil {
-		t.Fatalf("blind agent: %v", err)
-	}
-
-	// Viewer receives, unblinds, computes shared, unwraps.
-	agentPubFromViewer, err := UnblindPub(agentBlinded, pin)
-	if err != nil {
-		t.Fatalf("unblind agent: %v", err)
-	}
-	agentPubObj, err := PeerPublicKey(agentPubFromViewer)
-	if err != nil {
-		t.Fatalf("decode agent key: %v", err)
-	}
-	sharedViewer, err := viewerEph.ECDH(agentPubObj)
-	if err != nil {
-		t.Fatalf("viewer ECDH: %v", err)
-	}
-	if !bytes.Equal(sharedAgent, sharedViewer) {
-		t.Fatalf("ECDH shared secrets diverge")
-	}
-	recovered, err := UnwrapSessionKey(sharedViewer, exID, wrapped)
-	if err != nil {
-		t.Fatalf("unwrap: %v", err)
-	}
-	if !bytes.Equal(recovered, sessionKey) {
-		t.Fatalf("recovered session key differs from sent")
-	}
-}
-
-// TestEKEWrongPIN proves that a viewer with the wrong PIN can't
-// unwrap the session key. This is exactly the property the v1 design
-// lacked — a relay that recorded the v1 ciphertext could iterate the
-// 10^6 PIN candidates against the AES-GCM tag and recover the key.
-// In v2 the wrap key depends on the ECDH shared, which the relay
-// can't compute without one of the ephemeral private keys.
-func TestEKEWrongPIN(t *testing.T) {
-	const realPIN = "483920"
-	const wrongPIN = "111111"
-
-	viewerEph, _ := NewEphemeralKey()
-	agentEph, _ := NewEphemeralKey()
-	_, exID, _ := NewExID()
-
-	// Agent unblinds with the real PIN (it knows the PIN).
-	viewerBlinded, _ := BlindPub(viewerEph.PublicKey().Bytes(), realPIN)
-	viewerPubFromAgent, _ := UnblindPub(viewerBlinded, realPIN)
-	viewerPubObj, _ := PeerPublicKey(viewerPubFromAgent)
-	sharedAgent, _ := agentEph.ECDH(viewerPubObj)
-	sessionKey, _ := NewSessionKey()
-	wrapped, err := WrapSessionKey(sharedAgent, exID, sessionKey)
-	if err != nil {
-		t.Fatalf("wrap: %v", err)
-	}
-	agentBlinded, _ := BlindPub(agentEph.PublicKey().Bytes(), realPIN)
-
-	// Viewer (or relay-MITM) tries to unwrap using the WRONG PIN.
-	// The blinded agent pubkey unmasks to a different point, the
-	// resulting ECDH diverges, the AES-GCM tag fails.
-	agentPubFromViewer, _ := UnblindPub(agentBlinded, wrongPIN)
-	agentPubObj, err := PeerPublicKey(agentPubFromViewer)
-	if err != nil {
-		// The mismatched mask might land on a low-order point and
-		// PeerPublicKey rejects it — also a failure path, which is
-		// fine for this test's intent.
-		return
-	}
-	sharedViewer, err := viewerEph.ECDH(agentPubObj)
-	if err != nil {
-		// ECDH itself can fail on certain inputs — also a failure
-		// path the attacker doesn't get past.
-		return
-	}
-	if _, err := UnwrapSessionKey(sharedViewer, exID, wrapped); err == nil {
-		t.Fatalf("unwrap with wrong PIN must fail, but succeeded")
-	}
-}
-
-// TestBlindPubMaskShape: a passive attacker who only sees the
-// blinded pubkey shouldn't learn anything. We check the trivial
-// shape property — same input, different PIN → different blinded
-// output. (A real distinguishing attack would need cryptanalysis;
-// this just guards against an HKDF wiring bug that made the mask
-// constant.)
-func TestBlindPubVariesByPIN(t *testing.T) {
-	priv, _ := NewEphemeralKey()
-	pub := priv.PublicKey().Bytes()
-
-	a, _ := BlindPub(pub, "000000")
-	b, _ := BlindPub(pub, "999999")
-	if bytes.Equal(a, b) {
-		t.Fatalf("blinded pubkey under two distinct PINs collided")
+	wrapped[len(wrapped)-1] ^= 1
+	if _, err := UnwrapSessionKey(key, exID, wrapped); err == nil {
+		t.Fatal("unwrapped a tampered wrap")
 	}
 }
 

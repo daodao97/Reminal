@@ -4,19 +4,19 @@ const [A, APIN, B, BPIN] = process.argv.slice(2);
 const b = await chromium.launch();
 const out = [];
 
-// ---- TEST 1: one kex_init per connect (was two) ----
+// ---- TEST 1: one PIN handshake per connect (was two) ----
 {
   const ctx = await b.newContext({ ...devices['Pixel 7'] });
   const p = await ctx.newPage();
   let sends = 0;
-  p.on('console', m => { if (/kex_init sent/.test(m.text())) sends++; });
+  p.on('console', m => { if (/pake_init sent/.test(m.text())) sends++; });
   await p.goto(`${BASE}/?s=${A}&debug=true#p=${APIN}`, { waitUntil: 'domcontentloaded' });
   await p.waitForFunction(() => {
     const r = document.querySelector('.xterm-rows');
     return r && r.innerText.replace(/\s/g, '').length > 0;
   }, { timeout: 30000 }).catch(() => {});
   await p.waitForTimeout(2000);
-  out.push(`TEST 1  kex_init sent per connect: ${sends}   ${sends === 1 ? 'PASS (was 2)' : 'FAIL'}`);
+  out.push(`TEST 1  pake_init sent per connect: ${sends}   ${sends === 1 ? 'PASS (was 2)' : 'FAIL'}`);
   await ctx.close();
 }
 

@@ -78,6 +78,9 @@ type Agent struct {
 	// across hot-restart) so we can prove control of a pre-existing session while
 	// migrating it, but it is only sent to the relay when sendPinHash is set.
 	pinHash string
+	// nextPIN / nextPinHash are set only by `reminal repin`, just before the
+	// hot-restart that puts them into effect (see carriedPIN).
+	nextPIN, nextPinHash string
 	// token is the high-entropy reattach credential (Level B). It replaces
 	// pinHash so the relay never holds any PIN-derived, offline-crackable value.
 	// Always sent on auth for new-format sessions.
@@ -184,9 +187,10 @@ type Agent struct {
 	// relay's brute-force of the 6-digit PIN. This replaces the relay's old
 	// 5-strike lockout, which we removed because the relay no longer sees the
 	// PIN at all (it can't, without becoming able to MITM the EKE).
-	kexMu     sync.Mutex
-	kexTokens float64
-	kexLast   time.Time
+	kexMu         sync.Mutex
+	kexTokens     float64
+	kexLongTokens float64 // the long-term allowance; see kexLongBurst
+	kexLast       time.Time
 
 	// Owner handshakes get their own allowance. An own_init is not a PIN
 	// guess: it carries an Ed25519 signature over a transcript bound to this
@@ -3020,13 +3024,11 @@ func (a *Agent) runReader(conn *websocket.Conn, cursorCh chan uint64) error {
 			}
 			a.viewerSizeMu.Unlock()
 			pushCursor(cursorCh, cursor)
+		case protocol.TypePakeInit:
+			a.handlePakeInit(conn, msg.ExID, msg.Data)
 		case protocol.TypeKexInit:
-			// A viewer is asking us to run the PIN-authenticated EKE.
-			// handleKexInit broadcasts a TypeKexResp tagged with the
-			// same ex_id; only the originating viewer matches it (and
-			// only that viewer's ephemeral private key can unwrap the
-			// session key inside).
-			a.handleKexInit(conn, msg.ExID, msg.Data)
+			// Superseded by pake_init and no longer answered. A viewer that
+			// only sends this needs updating to connect with a PIN.
 		case protocol.TypeOwnerInit:
 			// An enrolled device is connecting PIN-free. handleOwnerInit
 			// verifies its owner signature, checks it's in owners.json, and
@@ -3272,41 +3274,55 @@ func (a *Agent) runSender(conn *websocket.Conn, cursorCh <-chan uint64, stop <-c
 	}
 }
 
-// handleKexInit completes one EKE handshake on behalf of a viewer.
-// Silent on every failure mode (malformed input, low-order point,
-// bad encoding): a malicious or buggy peer can't probe us for
-// distinguishable error replies, and a legitimate viewer that
-// gets no kex_resp will time out and reconnect via the normal path.
-// kexBurst is how many kex handshakes we answer back-to-back before the
+// kexBurst is how many PIN handshakes we answer back-to-back before the
 // throttle bites — comfortably covers several viewers connecting at once plus
 // a legit user fat-fingering the PIN a few times.
 const kexBurst = 8
 
-// kexRefill is how long it takes to earn back one kex token. At steady state
-// an attacker gets ~6 guesses/min, so the 10^6 PIN space takes ~115 days of
-// continuous, conspicuous handshake spam — while a real viewer reconnecting
-// occasionally never notices.
+// kexRefill is how long it takes to earn back one kex token: the short-term
+// pace, which keeps a burst of connects from being a burst of PIN attempts.
 const kexRefill = 10 * time.Second
 
-// allowKex reports whether we should answer another kex_init right now,
-// draining one token from the bucket if so. A refused attempt is dropped
-// silently (the viewer just sees a handshake timeout and can retry later).
+// kexLongBurst and kexLongRefill are the long-term allowance. Every PIN
+// handshake we answer is one attempt at the PIN, and the short-term pace alone
+// still allowed about 8,600 a day — close to one chance in a hundred, every
+// day, against a six-digit PIN, on sessions that stay up for weeks. Real use
+// is nowhere near this: thirty PIN connects in a row, then one every three
+// minutes. Anything sustained beyond that is held to about 480 a day.
+//
+// It cannot be told apart from a person at handshake time, so it is a budget
+// rather than a judgement. Owners connect without a PIN and never spend it.
+const (
+	kexLongBurst  = 30
+	kexLongRefill = 3 * time.Minute
+)
+
+// allowKex reports whether we should answer another PIN handshake right now,
+// taking one token from each allowance if so. A refused attempt is dropped
+// silently (the viewer sees a handshake timeout and can retry later).
 func (a *Agent) allowKex(now time.Time) bool {
 	a.kexMu.Lock()
 	defer a.kexMu.Unlock()
 	if a.kexLast.IsZero() {
 		a.kexTokens = kexBurst
+		a.kexLongTokens = kexLongBurst
 	} else {
-		a.kexTokens += now.Sub(a.kexLast).Seconds() / kexRefill.Seconds()
+		elapsed := now.Sub(a.kexLast).Seconds()
+		a.kexTokens += elapsed / kexRefill.Seconds()
 		if a.kexTokens > kexBurst {
 			a.kexTokens = kexBurst
 		}
+		a.kexLongTokens += elapsed / kexLongRefill.Seconds()
+		if a.kexLongTokens > kexLongBurst {
+			a.kexLongTokens = kexLongBurst
+		}
 	}
 	a.kexLast = now
-	if a.kexTokens < 1 {
+	if a.kexTokens < 1 || a.kexLongTokens < 1 {
 		return false
 	}
 	a.kexTokens--
+	a.kexLongTokens--
 	return true
 }
 
@@ -3358,7 +3374,20 @@ func (a *Agent) refundOwnerVerify() {
 	}
 }
 
-func (a *Agent) handleKexInit(conn *websocket.Conn, exIDHex, dataB64 string) {
+// pakeChannel separates the session handshake from every other use of CPace,
+// so a session PIN and a copy/paste code can never be confused for each other.
+const pakeChannel = "reminal-session-v3"
+
+// pakeSID binds a handshake to this session and to this exchange, so an element
+// from one handshake is no use in any other.
+func pakeSID(sessionID string, exID []byte) []byte {
+	return append([]byte(sessionID+"|"), exID...)
+}
+
+// handlePakeInit answers a viewer's PIN handshake with our CPace element and the
+// session key, wrapped under the key we both derive. Silent on every failure,
+// like the owner handshake: no reply, and the viewer times out.
+func (a *Agent) handlePakeInit(conn *websocket.Conn, exIDHex, dataB64 string) {
 	if !a.allowKex(time.Now()) {
 		return
 	}
@@ -3366,47 +3395,32 @@ func (a *Agent) handleKexInit(conn *websocket.Conn, exIDHex, dataB64 string) {
 	if err != nil {
 		return
 	}
-	blindedViewer, err := base64.StdEncoding.DecodeString(dataB64)
-	if err != nil || len(blindedViewer) != crypto.PubKeyBytes {
+	viewerElem, err := base64.StdEncoding.DecodeString(dataB64)
+	if err != nil || len(viewerElem) != crypto.CPaceElementBytes {
 		return
 	}
-	viewerPub, err := crypto.UnblindPub(blindedViewer, a.pin)
+	st, mine, err := crypto.NewCPace([]byte(a.pin), []byte(pakeChannel), pakeSID(a.sessionID, exID), false)
 	if err != nil {
 		return
 	}
-	peerKey, err := crypto.PeerPublicKey(viewerPub)
-	if err != nil {
-		// Low-order or otherwise invalid; could be a wrong PIN on the
-		// peer's side (their mask landed on a bad point) or just a
-		// junk message. Either way, refuse silently.
-		return
-	}
-	eph, err := crypto.NewEphemeralKey()
+	key, err := st.Finish(viewerElem)
 	if err != nil {
 		return
 	}
-	shared, err := eph.ECDH(peerKey)
-	if err != nil {
-		return
-	}
-	wrapped, err := crypto.WrapSessionKey(shared, exID, a.sessionKey)
-	if err != nil {
-		return
-	}
-	blindedAgent, err := crypto.BlindPub(eph.PublicKey().Bytes(), a.pin)
+	wrapped, err := crypto.WrapSessionKey(key, exID, a.sessionKey)
 	if err != nil {
 		return
 	}
 	_ = a.writeMsg(conn, protocol.Message{
-		Type: protocol.TypeKexResp,
+		Type: protocol.TypePakeResp,
 		ExID: exIDHex,
-		Data: base64.StdEncoding.EncodeToString(blindedAgent),
+		Data: base64.StdEncoding.EncodeToString(mine),
 		Wrap: base64.StdEncoding.EncodeToString(wrapped),
 	})
 }
 
 // handleOwnerInit completes one PIN-free (owner) handshake for an enrolled
-// device. Like handleKexInit it's silent on every failure — a device that isn't
+// device. Like handlePakeInit it's silent on every failure — a device that isn't
 // enrolled, or a forged signature, simply gets no reply and times out. The
 // session key is wrapped and sent ONLY after the device signature verifies and
 // the device is confirmed in owners.json.

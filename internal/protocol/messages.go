@@ -46,6 +46,12 @@ const (
 	// agent's blinded ephemeral public key plus the wrapped session key
 	// (AES-256-GCM under HKDF(ECDH-shared, salt=ex_id)).
 	TypeKexResp MessageType = "kex_resp"
+	// TypePakeInit starts a PIN-authenticated handshake: the viewer's CPace
+	// element (Data) and a fresh exchange id (ExID). See internal/crypto/cpace.go.
+	TypePakeInit MessageType = "pake_init"
+	// TypePakeResp answers it: the agent's element (Data) and the session key
+	// wrapped under the key both sides derive (Wrap).
+	TypePakeResp MessageType = "pake_resp"
 	// TypeOwnerInit is an enrolled device's opening message of a PIN-free
 	// (owner) connect: its raw ephemeral X25519 key (Data), its owner public
 	// key (DevicePub), and a signature (DeviceSig) proving it controls that key

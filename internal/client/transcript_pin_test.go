@@ -114,28 +114,27 @@ func runFakeAgent(t *testing.T, sessionID, pin string, sessionKey []byte, snapsh
 			return
 		}
 		switch m.Type {
-		case protocol.TypeKexInit:
+		case protocol.TypePakeInit:
+			// Answer the way a real agent does: our CPace element, and the
+			// session key wrapped under the key we both derive.
 			exID, err := crypto.ParseExID(m.ExID)
 			if err != nil {
 				continue
 			}
-			blinded, _ := base64.StdEncoding.DecodeString(m.Data)
-			viewerPub, err := crypto.UnblindPub(blinded, pin)
+			viewerElem, _ := base64.StdEncoding.DecodeString(m.Data)
+			st, mine, err := crypto.NewCPace([]byte(pin), []byte(pakeChannel), pakeSID(sessionID, exID), false)
 			if err != nil {
 				continue
 			}
-			peer, err := crypto.PeerPublicKey(viewerPub)
+			key, err := st.Finish(viewerElem)
 			if err != nil {
 				continue
 			}
-			eph, _ := crypto.NewEphemeralKey()
-			shared, _ := eph.ECDH(peer)
-			wrapped, _ := crypto.WrapSessionKey(shared, exID, sessionKey)
-			blindedAgent, _ := crypto.BlindPub(eph.PublicKey().Bytes(), pin)
+			wrapped, _ := crypto.WrapSessionKey(key, exID, sessionKey)
 			_ = conn.WriteJSON(protocol.Message{
-				Type: protocol.TypeKexResp,
+				Type: protocol.TypePakeResp,
 				ExID: m.ExID,
-				Data: base64.StdEncoding.EncodeToString(blindedAgent),
+				Data: base64.StdEncoding.EncodeToString(mine),
 				Wrap: base64.StdEncoding.EncodeToString(wrapped),
 			})
 		case protocol.TypeResize:

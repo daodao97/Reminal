@@ -235,7 +235,7 @@ A full xterm.js terminal is built into the relay. Any browser is the client — 
 
 #### Secure by construction
 
-No open ports, ephemeral session ID + PIN, AES-256-GCM end-to-end with a PIN-authenticated X25519 handshake the relay can't crack offline. Ctrl+C and the credentials are gone. [Details below](#security).
+No open ports, ephemeral session ID + PIN, AES-256-GCM end-to-end with a PIN-authenticated handshake the relay can't crack offline. Ctrl+C and the credentials are gone. [Details below](#security).
 
 </td>
 </tr>
@@ -272,8 +272,8 @@ SSH leaves port 22 open, stores long-lived keys on disk, and trusts you to confi
 | **Owner devices, revocable** | A device you enroll as an owner connects without the PIN using its own key — a separate trust path from the ephemeral PIN, gated behind `sudo` to enroll and revocable per-device (or self-revoked from any browser). The relay still only routes ciphertext. |
 | **Dual-factor by design** | An attacker needs both the session ID (~1 trillion combinations) and the 6-digit PIN. Knowing one is useless. |
 | **Rate-limited by the agent** | Every PIN guess costs a full online handshake with your machine, and the agent answers at most ~6 per minute (burst of 8, one token per 10s). Exhausting a 6-digit PIN at that rate takes months — far longer than a session lives. |
-| **End-to-end encryption** | AES-256-GCM with a fresh random 256-bit session key per agent run. Distributed to each viewer via a PIN-authenticated X25519 handshake (EKE-style) — the relay never sees the key or anything offline-brute-forceable from it. |
-| **Forward-secret handshake** | Each WebSocket connection runs its own ephemeral X25519 exchange. Even if a future attacker recovers the PIN, recorded ciphertext stays unreadable. |
+| **End-to-end encryption** | AES-256-GCM with a fresh random 256-bit session key per agent run. Distributed to each viewer via a PIN-authenticated handshake (CPace, a standard PAKE) — the relay never sees the key or anything offline-brute-forceable from it. |
+| **Forward-secret handshake** | Each WebSocket connection runs its own exchange with fresh keys. Even if a future attacker recovers the PIN, recorded ciphertext stays unreadable. |
 | **Relay-blind** | Cloudflare Workers route ciphertext. A relay that records traffic cannot recover the session key offline — wrong PIN guesses are detectable only by attempting a full handshake online (one shot each, bounded by the agent's kex throttle). |
 | **P2P you can trust** | WebRTC signaling (SDP, ICE) rides inside the already-encrypted session channel, so the relay can't tamper with DTLS fingerprints — no man-in-the-middle window. Frames on the DataChannel are DTLS-protected end-to-end. |
 | **TLS in transit** | WSS / TLS on every hop in production. |
@@ -391,6 +391,7 @@ The mirroring you see above isn't macOS-only — window capture **and** full con
 | `reminal kill [id\|name]` | Fully terminate a session (kills the shell — irreversible) |
 | `reminal prune [dur] [-y]` | Kill idle, unwatched sessions in one go (default idle ≥ 30m) |
 | `reminal restart [--all]` | Hot-swap the running agent(s) onto the latest binary — the shell stays alive |
+| `reminal repin [id\|name] [--all]` | Give session(s) a new PIN — the old PIN and links stop working, the shell stays alive, owner devices are unaffected |
 | `reminal integrate [--remove]` | Register reminal's MCP server with your agent CLIs (Claude Code, Codex, Cursor, Gemini, Qwen, OpenCode, Antigravity, Amp, pi) |
 | `reminal mcp` | Run the MCP server on stdio — list, search, read and type into sessions across your machines |
 | `reminal expose <port> [--public] [--name <name>]` | Forward a local HTTP port to a public URL (PIN-protected by default) |

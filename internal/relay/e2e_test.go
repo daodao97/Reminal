@@ -17,10 +17,17 @@ import (
 )
 
 // TestEndToEndHandshakeNoPIN drives the REAL relay handler with a fake agent
-// and viewer performing the genuine EKE. It proves the Level A change end to
+// and viewer performing the genuine PIN handshake (CPace). It proves the Level A change end to
 // end: the viewer authenticates WITHOUT sending a PIN, yet a correct PIN still
 // unwraps the session key over the wire (and a wrong PIN does not), because the
 // PIN is verified entirely by the EKE — the relay never sees it.
+// Restated from internal/client: this test lives in the relay package.
+const pakeChannel = "reminal-session-v3"
+
+func pakeSID(sessionID string, exID []byte) []byte {
+	return append([]byte(sessionID+"|"), exID...)
+}
+
 func TestEndToEndHandshakeNoPIN(t *testing.T) {
 	const (
 		sessionID = "TESTSESS"
@@ -60,7 +67,7 @@ func TestEndToEndHandshakeNoPIN(t *testing.T) {
 		return m
 	}
 
-	// ---- Agent: authenticate with a token (no pin_hash), then answer kex_init.
+	// ---- Agent: authenticate with a token (no pin_hash), then answer pake_init.
 	agent := dial("agent")
 	defer agent.Close()
 	if err := agent.WriteJSON(protocol.Message{Type: protocol.TypeAuth, Token: "AGENT-TOKEN"}); err != nil {
@@ -76,7 +83,7 @@ func TestEndToEndHandshakeNoPIN(t *testing.T) {
 			if err := agent.ReadJSON(&m); err != nil {
 				return
 			}
-			if m.Type != protocol.TypeKexInit {
+			if m.Type != protocol.TypePakeInit {
 				continue
 			}
 			exID, err := crypto.ParseExID(m.ExID)
@@ -84,25 +91,21 @@ func TestEndToEndHandshakeNoPIN(t *testing.T) {
 				agentErr <- err
 				return
 			}
-			blinded, _ := base64.StdEncoding.DecodeString(m.Data)
-			viewerPub, err := crypto.UnblindPub(blinded, pin)
+			viewerElem, _ := base64.StdEncoding.DecodeString(m.Data)
+			st, mine, err := crypto.NewCPace([]byte(pin), []byte(pakeChannel), pakeSID(sessionID, exID), false)
 			if err != nil {
 				agentErr <- err
 				return
 			}
-			peer, err := crypto.PeerPublicKey(viewerPub)
+			key, err := st.Finish(viewerElem)
 			if err != nil {
-				agentErr <- err
-				return
+				continue // a malformed element gets no reply, as from the real agent
 			}
-			eph, _ := crypto.NewEphemeralKey()
-			shared, _ := eph.ECDH(peer)
-			wrapped, _ := crypto.WrapSessionKey(shared, exID, sessionKey)
-			blindedAgent, _ := crypto.BlindPub(eph.PublicKey().Bytes(), pin)
+			wrapped, _ := crypto.WrapSessionKey(key, exID, sessionKey)
 			_ = agent.WriteJSON(protocol.Message{
-				Type: protocol.TypeKexResp,
+				Type: protocol.TypePakeResp,
 				ExID: m.ExID,
-				Data: base64.StdEncoding.EncodeToString(blindedAgent),
+				Data: base64.StdEncoding.EncodeToString(mine),
 				Wrap: base64.StdEncoding.EncodeToString(wrapped),
 			})
 		}
@@ -117,7 +120,7 @@ func TestEndToEndHandshakeNoPIN(t *testing.T) {
 		if err := v.WriteJSON(protocol.Message{Type: protocol.TypeAuth}); err != nil {
 			return nil, err
 		}
-		// Drain until auth_ok / connected, then send kex_init.
+		// Drain until auth_ok / connected, then send pake_init.
 		for {
 			m := readMsg(v)
 			if m.Type == protocol.TypeError {
@@ -128,32 +131,29 @@ func TestEndToEndHandshakeNoPIN(t *testing.T) {
 			}
 		}
 		exIDHex, exID, _ := crypto.NewExID()
-		veph, _ := crypto.NewEphemeralKey()
-		blindedViewer, _ := crypto.BlindPub(veph.PublicKey().Bytes(), guess)
+		st, mine, err := crypto.NewCPace([]byte(guess), []byte(pakeChannel), pakeSID(sessionID, exID), true)
+		if err != nil {
+			return nil, err
+		}
 		if err := v.WriteJSON(protocol.Message{
-			Type: protocol.TypeKexInit,
+			Type: protocol.TypePakeInit,
 			ExID: exIDHex,
-			Data: base64.StdEncoding.EncodeToString(blindedViewer),
+			Data: base64.StdEncoding.EncodeToString(mine),
 		}); err != nil {
 			return nil, err
 		}
 		for {
 			m := readMsg(v)
-			if m.Type != protocol.TypeKexResp {
+			if m.Type != protocol.TypePakeResp {
 				continue
 			}
-			blindedAgent, _ := base64.StdEncoding.DecodeString(m.Data)
-			agentPub, err := crypto.UnblindPub(blindedAgent, guess)
+			agentElem, _ := base64.StdEncoding.DecodeString(m.Data)
+			key, err := st.Finish(agentElem)
 			if err != nil {
 				return nil, err
 			}
-			peer, err := crypto.PeerPublicKey(agentPub)
-			if err != nil {
-				return nil, err
-			}
-			shared, _ := veph.ECDH(peer)
 			wrapped, _ := base64.StdEncoding.DecodeString(m.Wrap)
-			return crypto.UnwrapSessionKey(shared, exID, wrapped)
+			return crypto.UnwrapSessionKey(key, exID, wrapped)
 		}
 	}
 
@@ -166,7 +166,7 @@ func TestEndToEndHandshakeNoPIN(t *testing.T) {
 		t.Fatalf("recovered key mismatch: got %x want %x", got, sessionKey)
 	}
 
-	// Wrong PIN → the EKE unwrap fails (this is the "PIN mismatch" the viewers
+	// Wrong PIN → the unwrap fails (this is the "PIN mismatch" the viewers
 	// surface), even though the relay happily admitted the viewer.
 	if _, err := viewerHandshake("000000"); err == nil {
 		t.Fatalf("wrong-PIN handshake should fail the unwrap")

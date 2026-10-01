@@ -31,9 +31,22 @@ import (
 const DefaultCopyTTL = time.Hour
 
 // codeAlphabet excludes visually ambiguous characters (0/O, 1/I/L, U) so a
-// code is safe to read aloud or retype. 31 symbols × 8 chars ≈ 40 bits.
+// code is safe to read aloud or retype. 31 symbols per character.
 const codeAlphabet = "ABCDEFGHJKLMNPQRSTVWXYZ23456789"
-const codeLen = 8
+
+// A code is two halves. The first routeLen characters are where the two ends
+// meet on the relay, so the relay sees them. The rest never leave the two
+// machines: with the routing half they are the CPace secret that authenticates
+// the transfer (see rendezvous.go). 5 + 5 of 31 symbols: about 25 bits each.
+const codeLen = 10
+const routeLen = 5
+
+// legacyCodeLen is what codes were before they were split. A paste given one
+// is talking to an older `reminal copy`, which this version cannot meet.
+const legacyCodeLen = 8
+
+// routeID is the part of a code the relay is given to pair the two ends.
+func routeID(code string) string { return code[:routeLen] }
 
 // generateCode returns a fresh canonical (uppercase, dash-free) transfer
 // code with unbiased symbol selection.
@@ -62,7 +75,7 @@ func displayCode(code string) string {
 	if len(code) != codeLen {
 		return code
 	}
-	return code[:codeLen/2] + "-" + code[codeLen/2:]
+	return code[:routeLen] + "-" + code[routeLen:]
 }
 
 // normalizeCode canonicalizes user input: uppercase, dashes/spaces stripped.
@@ -146,7 +159,7 @@ func RunCopy(path string, ttl time.Duration) error {
 	if err != nil {
 		return err
 	}
-	url := config.RendezvousWS(code, "source")
+	url := config.RendezvousWS(routeID(code), "source")
 	conn, _, err := websocket.DefaultDialer.Dial(url, nil)
 	if err != nil {
 		return fmt.Errorf("connect to relay: %w", err)
@@ -263,7 +276,7 @@ func RunCopyHold(path string, ttl time.Duration, handshakeFD int, handshakeAddr 
 		report(copyHandshake{Error: "generate code: " + err.Error()})
 		return err
 	}
-	url := config.RendezvousWS(code, "source")
+	url := config.RendezvousWS(routeID(code), "source")
 	conn, _, err := websocket.DefaultDialer.Dial(url, nil)
 	if err != nil {
 		report(copyHandshake{Error: "connect to relay: " + err.Error()})
@@ -297,10 +310,16 @@ func RunPaste(codeInput, dest string) error {
 	if code == "" {
 		return errors.New("usage: reminal paste <code> [destination]")
 	}
+	if len(code) == legacyCodeLen {
+		return errors.New("that code is from an older reminal — update reminal on the machine you copied from, then copy again")
+	}
+	if len(code) != codeLen {
+		return errCodeNotLive
+	}
 	if dest == "" {
 		dest = "."
 	}
-	url := config.RendezvousWS(code, "paste")
+	url := config.RendezvousWS(routeID(code), "paste")
 	conn, _, err := websocket.DefaultDialer.Dial(url, nil)
 	if err != nil {
 		return fmt.Errorf("connect to relay: %w", err)

@@ -14,7 +14,11 @@ import (
 	"reminal/internal/relay"
 )
 
-//go:embed web/index.html web/sw.js web/manifest.webmanifest web/icons
+// viewerCSP must stay the same as the Content-Security-Policy line in
+// cloudflare/public/_headers; a test compares them.
+const viewerCSP = "frame-ancestors 'none'; base-uri 'none'; object-src 'none'; form-action 'self'; script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://cdnjs.cloudflare.com"
+
+//go:embed web/index.html web/sw.js web/manifest.webmanifest web/icons web/vendor
 var webIndex embed.FS
 
 func RunRelay(port string) error {
@@ -60,6 +64,17 @@ func RunRelay(port string) error {
 		w.Header().Set("Content-Type", "application/manifest+json")
 		_, _ = w.Write(data)
 	})
+	// Scripts the viewer loads from its own origin (the CPace handshake's
+	// ristretto255). path.Base keeps a request inside the directory.
+	mux.HandleFunc("GET /vendor/{name}", func(w http.ResponseWriter, r *http.Request) {
+		data, err := webIndex.ReadFile("web/vendor/" + path.Base(r.PathValue("name")))
+		if err != nil {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
+		_, _ = w.Write(data)
+	})
 	mux.HandleFunc("GET /icons/{name}", func(w http.ResponseWriter, r *http.Request) {
 		data, err := webIndex.ReadFile("web/icons/" + path.Base(r.PathValue("name")))
 		if err != nil {
@@ -76,6 +91,15 @@ func RunRelay(port string) error {
 			return
 		}
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		// The same protections the hosted viewer is served with
+		// (cloudflare/public/_headers): not framable, no type sniffing, no
+		// referrer carrying a session id, and scripts only from the places the
+		// page actually loads them. No HSTS: this relay is plain http.
+		h := w.Header()
+		h.Set("X-Content-Type-Options", "nosniff")
+		h.Set("X-Frame-Options", "DENY")
+		h.Set("Referrer-Policy", "no-referrer")
+		h.Set("Content-Security-Policy", viewerCSP)
 		// Dev relay: never let a browser cache the page across rebuilds —
 		// the embedded HTML changes on every `go build`, and a stale cached
 		// copy silently masks fixes during local testing.

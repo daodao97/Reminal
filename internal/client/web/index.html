@@ -20,7 +20,7 @@
        Chrome shortcut, with nowhere to answer a notification prompt. -->
   <link rel="manifest" href="/manifest.webmanifest">
   <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/css/xterm.min.css">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/css/xterm.min.css" integrity="sha384-tStR1zLfWgsiXCF3IgfB3lBa8KmBe/lG287CL9WCeKgQYcp1bjb4/+mwN6oti4Co" crossorigin="anonymous">
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
     /* Layout model: header sits in normal flow at the top of body;
@@ -1827,9 +1827,9 @@
   <div class="cl-back" id="alback" hidden></div>
   <div class="cl-sheet al-sheet" id="alsheet" role="dialog" aria-modal="true" aria-label="Alerts" hidden></div>
 
-  <script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-search@0.15.0/lib/addon-search.min.js"></script>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.min.js" integrity="sha384-J4qzUjBl1FxyLsl/kQPQIOeINsmp17OHYXDOMpMxlKX53ZfYsL+aWHpgArvOuof9" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-search@0.15.0/lib/addon-search.min.js" integrity="sha384-rZV6rh0SoMasxn3Q4xrTEgBKArJ47qXr2bxeT0S4mf6sqQCkvv99FnFKawCQUqUR" crossorigin="anonymous"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js" integrity="sha384-3zSEDfvllQohrq0PHL1fOXJuC/jSOO34H46t6UQfobFOmxE5BpjjaIJY5F2/bMnU" crossorigin="anonymous"></script>
   <script>
     window.__REMINAL_WEB = '3.5.3';
     const statusEl = document.getElementById('status');
@@ -2174,7 +2174,22 @@
     // strand the panel on "Loading" forever; the poll re-render always catches up.
     let hostWaitSince = 0;
     const HOST_WAIT_MS = 4000;
+    // The numeric fields of a host's report, forced to numbers on arrival. A
+    // viewer joins hosts it does not control, and these are interpolated into
+    // the panel's markup as numbers — so a host must not be able to send text
+    // where a number is expected. Strings are escaped where they are used.
+    const HOST_NUMERIC = ['cpus', 'mem_total', 'mem_used', 'cpu_pct', 'load1', 'load5', 'load15', 'uptime', 'sessions'];
+    function cleanHostInfo(info) {
+      if (!info || typeof info !== 'object') return {};
+      for (const k of HOST_NUMERIC) {
+        if (info[k] === undefined || info[k] === null) continue;
+        const n = typeof info[k] === 'number' ? info[k] : NaN;
+        if (Number.isFinite(n)) info[k] = n; else delete info[k];
+      }
+      return info;
+    }
     function onHostInfo(info) {
+      info = cleanHostInfo(info);
       const first = !lastHostInfo;
       lastHostInfo = info;
       // The panel was opened before the host had told us anything; now that it
@@ -3459,7 +3474,7 @@
         // so present load honestly as a saturation bar — load ≠ CPU %.
         const p = i.load1 / i.cpus * 100;
         html += hostMeter('Load',
-          '<b>' + i.load1.toFixed(2) + '</b> <span class="dim">· ' + i.cpus + ' cores</span>', p);
+          '<b>' + i.load1.toFixed(2) + '</b> <span class="dim">· ' + Math.round(i.cpus) + ' cores</span>', p);
       }
       // Load and uptime finish the machine's vitals, so they sit with the
       // meters. They used to land between the version and the button that
@@ -4865,22 +4880,17 @@
     // was just the 6-digit PIN — about 20 bits, offline-brute-forceable
     // by anyone who recorded a ciphertext frame. (See GitHub issue #1.)
     //
-    // v2 replaces that with a per-connection X25519 handshake. Both the
-    // host and the browser generate an ephemeral keypair, XOR-mask their
-    // public key with HKDF(PIN), and exchange the masked bytes. They
-    // unblind with their own copy of the PIN, run ECDH, derive a wrap
-    // key from the shared secret, and the host uses it to AES-GCM-wrap
-    // a random 256-bit session key. Without the PIN, the masked keys
-    // are indistinguishable from random — there's nothing to grind
-    // against offline. See internal/crypto/kex.go for the canonical
-    // construction.
+    // It is now a CPace handshake (cpaceStart / cpaceFinish below, and
+    // internal/crypto/cpace.go): the PIN only chooses the generator both sides
+    // do Diffie-Hellman over, the host wraps a random 256-bit session key under
+    // the key both derive, and nothing derived from the PIN goes over the wire.
     //
     // Per-handshake state. All four are reset by openSocket() on every
     // reconnect; completeKex clears the ephemeral private material as
     // soon as the wrap is decrypted.
-    // All outstanding kex_init attempts, keyed by their hex ex_id →
-    // { eph, mask, exIDBytes }. We can have more than one in flight: the
-    // viewer fires an optimistic kex_init on auth_ok and another on
+    // All outstanding pake_init attempts, keyed by their hex ex_id →
+    // { cp, exIDBytes }. We can have more than one in flight: the
+    // viewer fires an optimistic pake_init on auth_ok and another on
     // connected/agent_online. Whichever the agent answers FIRST completes the
     // handshake — so a dropped/coalesced reply to one attempt no longer strands
     // the connection (the earlier iOS "handshake timed out" bug, where we kept
@@ -4892,24 +4902,8 @@
     // attempt to kexAttempts — that's the resilience; this flag only stops one
     // trigger from double-firing.) Set synchronously at the top of sendKexInit.
     let kexInFlight = false;
+    let pakeTimeouts = 0;       // consecutive unanswered handshakes on this page
 
-    async function derivePinMask(pin) {
-      const enc = new TextEncoder();
-      const ikm = await crypto.subtle.importKey(
-        'raw', enc.encode(pin), 'HKDF', false, ['deriveBits']
-      );
-      const bits = await crypto.subtle.deriveBits(
-        {
-          name: 'HKDF',
-          hash: 'SHA-256',
-          salt: enc.encode('reminal-blind-v2'),
-          info: enc.encode('reminal-kex-v2'),
-        },
-        ikm,
-        256,
-      );
-      return new Uint8Array(bits);
-    }
 
     // u8ToBase64 / base64ToU8 mirror the encrypt/decrypt helpers'
     // chunking so we don't blow the call stack on large keys (here
@@ -4948,6 +4942,80 @@
     const NACL_URL = 'https://cdn.jsdelivr.net/npm/tweetnacl@1.0.3/nacl.min.js';
     const NACL_SRI = 'sha384-LMUiUHpaYNGZFzWFRjsADnCSqae1Mk5llcUOHOLDhCxkyF2cdsWAueTZAzV+swW/';
     let _naclPromise = null;
+    // ---- CPace (PIN handshake) ------------------------------------------------
+    // Mirrors internal/crypto/cpace.go byte for byte: the PIN only chooses the
+    // generator both sides do Diffie-Hellman over, and nothing derived from it
+    // goes over the wire. ristretto255 comes from a pinned @noble/curves build
+    // served from this origin with SRI (scripts/vendor-ristretto/build.sh).
+    const RISTRETTO_URL = '/vendor/ristretto255.js';
+    const RISTRETTO_SRI = 'sha384-WLPjvwtTUQIPQoBW7B5gFQWHWWlAgJCIm1zMvS7MOJAZpawKsB0KUTl020csajQu';
+    const CPACE_DSI = 'CPaceRistretto255';
+    const PAKE_CHANNEL = 'reminal-session-v3';
+    let _ristrettoPromise = null;
+    function loadRistretto() {
+      if (_ristrettoPromise) return _ristrettoPromise;
+      _ristrettoPromise = new Promise((resolve, reject) => {
+        if (window.ReminalRistretto) return resolve(window.ReminalRistretto);
+        const s = document.createElement('script');
+        s.src = RISTRETTO_URL; s.integrity = RISTRETTO_SRI; s.crossOrigin = 'anonymous';
+        s.onload = () => window.ReminalRistretto ? resolve(window.ReminalRistretto) : reject(new Error('handshake library did not load'));
+        s.onerror = () => { _ristrettoPromise = null; reject(new Error('handshake library failed to load')); };
+        document.head.appendChild(s);
+      });
+      return _ristrettoPromise;
+    }
+    const utf8 = (str) => new TextEncoder().encode(str);
+    function concatBytes(...parts) {
+      let n = 0; for (const p of parts) n += p.length;
+      const out = new Uint8Array(n); let o = 0;
+      for (const p of parts) { out.set(p, o); o += p.length; }
+      return out;
+    }
+    // Each field length-prefixed with 8 big-endian bytes, as in Go's lv().
+    function lvBytes(...fields) {
+      const parts = [];
+      for (const f of fields) {
+        const len = new Uint8Array(8);
+        new DataView(len.buffer).setBigUint64(0, BigInt(f.length), false);
+        parts.push(len, f);
+      }
+      return concatBytes(...parts);
+    }
+    async function sha512(bytes) {
+      return new Uint8Array(await crypto.subtle.digest('SHA-512', bytes));
+    }
+    function leToBigInt(b) {
+      let x = 0n;
+      for (let i = b.length - 1; i >= 0; i--) x = (x << 8n) | BigInt(b[i]);
+      return x;
+    }
+    async function cpaceStart(secret, channel, sid, initiator) {
+      if (!secret || !secret.length) throw new Error('handshake: no PIN');
+      const R = await loadRistretto();
+      const G = R.fromUniform(await sha512(lvBytes(utf8(CPACE_DSI), secret, channel, sid)));
+      let y = 0n;
+      while (y === 0n) y = leToBigInt(crypto.getRandomValues(new Uint8Array(64))) % R.order;
+      const mine = R.encode(R.multiply(G, y));
+      return { y, mine, channel, sid, initiator };
+    }
+    // Refuses an element that does not decode, or that is (or yields) the
+    // identity — the same checks as the Go side.
+    async function cpaceFinish(st, peer) {
+      if (!st || st.y === null) throw new Error('handshake already finished');
+      if (!(peer instanceof Uint8Array) || peer.length !== 32) throw new Error('handshake: bad peer element');
+      const R = await loadRistretto();
+      let P;
+      try { P = R.decode(peer); } catch (_) { throw new Error('handshake: bad peer element'); }
+      if (R.isIdentity(P)) throw new Error('handshake: bad peer element');
+      const K = R.multiply(P, st.y);
+      if (R.isIdentity(K)) throw new Error('handshake: bad peer element');
+      st.y = null; // single use
+      const ya = st.initiator ? st.mine : peer;
+      const yb = st.initiator ? peer : st.mine;
+      const isk = await sha512(lvBytes(utf8(CPACE_DSI + '_ISK'), st.channel, st.sid, R.encode(K), ya, yb));
+      return isk.slice(0, 32);
+    }
+
     function loadNacl() {
       if (_naclPromise) return _naclPromise;
       _naclPromise = new Promise((resolve, reject) => {
@@ -5009,32 +5077,25 @@
       const sock = ws;
       kexInFlight = true;
       try {
-      // Generate a fresh ephemeral keypair per connection — the privkey
-      // is destroyed in completeKex once the wrap is decrypted, which
-      // is what gives the handshake forward secrecy against a future
-      // compromise of the agent's long-lived state.
-      const eph = await newEphemeralX25519();
-      dbg('X25519 keypair generated' + (_x25519Native ? '' : ' (JS fallback)'));
-      const myPub = eph.pub;
-      const mask = await derivePinMask(pinValue);
-      const blinded = new Uint8Array(32);
-      for (let i = 0; i < 32; i++) blinded[i] = myPub[i] ^ mask[i];
-
+      // A fresh CPace scalar per attempt; cpaceFinish clears it once used,
+      // which is what keeps each connection's key independent of the next.
       const exIDBytes = crypto.getRandomValues(new Uint8Array(16));
       const exID = Array.from(exIDBytes)
         .map(b => b.toString(16).padStart(2, '0')).join('');
+      const sid = concatBytes(utf8(String(sessionId).toUpperCase() + '|'), exIDBytes);
+      const cp = await cpaceStart(utf8(pinValue), utf8(PAKE_CHANNEL), sid, true);
       // Keep this attempt alongside any earlier one — completeKex accepts a
       // reply to whichever is answered first.
       if (sock !== ws || sock.readyState !== WebSocket.OPEN) return; // superseded while deriving
-      kexAttempts.set(exID, { eph, mask, exIDBytes });
+      kexAttempts.set(exID, { cp, exIDBytes });
       kexExID = exID;
 
       sock.send(JSON.stringify({
-        type: 'kex_init',
+        type: 'pake_init',
         ex_id: exID,
-        data: u8ToBase64(blinded),
+        data: u8ToBase64(cp.mine),
       }));
-      dbg('▶ kex_init sent ex=' + exID.slice(0, 6) + ' agentLive=' + agentLive + ' (outstanding=' + kexAttempts.size + ')');
+      dbg('▶ pake_init sent ex=' + exID.slice(0, 6) + ' agentLive=' + agentLive + ' (outstanding=' + kexAttempts.size + ')');
       // Arm a watchdog: if completeKex doesn't clear it within
       // KEX_TIMEOUT_MS, all outstanding replies are presumed lost.
       // Clear state and retry on a fresh ws if still connected, otherwise
@@ -5049,10 +5110,12 @@
         if (ws && ws.readyState === WebSocket.OPEN) {
           // One automatic retry. If it fails again the user will see
           // the second timeout fire and the status banner.
-          setStatus('Handshake timed out — retrying…', 'warn connecting');
+          // A machine on a reminal from before this handshake never answers
+          // it, and retrying will not change that — so say what would.
+          setStatus(pakeTimeouts++ ? 'No answer — if this machine’s reminal is older than 3.15.6, update it. Retrying…' : 'Handshake timed out — retrying…', 'warn connecting');
           sendKexInit().catch(() => {});
         } else {
-          setStatus('Handshake timed out', 'error');
+          setStatus('No answer from this machine — if its reminal is older than 3.15.6, update it', 'error');
         }
       }, KEX_TIMEOUT_MS);
       } finally {
@@ -5065,17 +5128,12 @@
       if (!att || cryptoKey) {
         // Not one of our outstanding attempts (the relay fans agent replies out
         // to every viewer), or we're already done — ignore.
-        dbg('  kex_resp IGNORED (' + (cryptoKey ? 'already complete' : 'ex ' + String(msg.ex_id).slice(0, 6) + ' not outstanding') + ')');
+        dbg('  pake_resp IGNORED (' + (cryptoKey ? 'already complete' : 'ex ' + String(msg.ex_id).slice(0, 6) + ' not outstanding') + ')');
         return;
       }
-      dbg('  kex_resp matched — deriving key…');
-      const agentBlinded = base64ToU8(msg.data || '');
-      if (agentBlinded.length !== 32) {
-        throw new Error('agent key has bad length');
-      }
-      const agentPubBytes = new Uint8Array(32);
-      for (let i = 0; i < 32; i++) agentPubBytes[i] = agentBlinded[i] ^ att.mask[i];
-      const shared = await att.eph.deriveShared(agentPubBytes);
+      dbg('  pake_resp matched — deriving key…');
+      // Throws on an element that does not decode or is the identity.
+      const shared = await cpaceFinish(att.cp, base64ToU8(msg.data || ''));
       const sharedKey = await crypto.subtle.importKey(
         'raw', shared, 'HKDF', false, ['deriveBits']
       );
@@ -5108,6 +5166,7 @@
         'raw', sessionKeyRaw, { name: 'AES-GCM' }, false, ['encrypt', 'decrypt']
       );
       dbg('✓ handshake complete — session key set');
+      pakeTimeouts = 0;
       reportSizeNow();
       // Burn ALL ephemeral material (every outstanding attempt) — nothing
       // downstream needs it, and holding on makes a long-running tab a juicier
@@ -6725,7 +6784,14 @@
         // The PIN rides the fragment, which never leaves the browser: the gate
         // fills it in, submits, and drops it from history. A --public port has
         // no gate and simply ignores the fragment.
-        const url = r.open_url + (r.open_pin ? '#p=' + encodeURIComponent(r.open_pin) : '');
+        // The address comes from the machine. The tab it is assigned to was
+        // opened from this page, so anything but a web address — a script
+        // URL, say — would run as this page. Only http(s) is a link.
+        let target;
+        try { target = new URL(String(r.open_url)); } catch (_) { throw new Error('the machine sent an address that is not a link'); }
+        if (target.protocol !== 'https:' && target.protocol !== 'http:') throw new Error('the machine sent an address that is not a link');
+        if (r.open_pin) target.hash = 'p=' + encodeURIComponent(String(r.open_pin));
+        const url = target.toString();
         if (!tab) { setStatus('Allow pop-ups to open :' + (port || '?') + ' from here', 'error'); return; }
         tab.location = url;
         setStatus('Opened :' + (port || '?'), 'info');
@@ -7827,11 +7893,8 @@
           rememberSession(sessionId, pinValue);
           refreshTabTitle();
           acquireWakeLock();
-          // Kick off the v2 PIN-authenticated X25519 handshake. The
-          // session AES key is no longer derived from the PIN +
-          // sessionID directly — see the comment block above
-          // derivePinMask. If the agent is offline right now the
-          // relay drops our kex_init; the next agent_online event
+          // Kick off the PIN handshake (CPace). If the agent is offline right
+          // now the relay drops our pake_init; the next agent_online event
           // re-sends it (see below).
           try {
             await startHandshake();
@@ -7869,7 +7932,7 @@
           }
           startSessionFlow();
           break;
-        case 'kex_resp':
+        case 'pake_resp':
           try {
             await completeKex(msg);
           } catch (e) {

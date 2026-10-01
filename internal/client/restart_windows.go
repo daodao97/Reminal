@@ -182,8 +182,8 @@ func (a *Agent) executeRestart() error {
 	cmd.Env = append(os.Environ(),
 		envResume+"=1",
 		envResumeSessionID+"="+a.sessionID,
-		envResumePIN+"="+a.pin,
-		envResumePinHash+"="+a.pinHash,
+		envResumePIN+"="+a.carriedPIN(),
+		envResumePinHash+"="+a.carriedPinHash(),
 		envResumeToken+"="+a.token,
 		envResumeStartedAt+"="+strconv.FormatInt(a.startedAt.Unix(), 10),
 		envResumePTYSock+"="+sock,
@@ -301,7 +301,7 @@ func (a *Agent) becomeViewer() {
 	fmt.Printf("\r\n  [%s] Hot-restarted onto the new binary. The session now runs in the background;\r\n  this terminal is attached as a viewer — everything works as before. Ctrl-] detaches (session keeps running).\r\n\r\n",
 		time.Now().Format("15:04:05"))
 
-	v, err := NewViewer(a.sessionID, a.pin)
+	v, err := NewViewer(a.sessionID, a.carriedPIN())
 	if err == nil {
 		err = v.Run()
 	}
