@@ -3154,8 +3154,20 @@ func (a *Agent) runReader(conn *websocket.Conn, cursorCh chan uint64) error {
 				// we're not capturing the screen into the void, and release any
 				// held mouse button / modifier so leaving the page can never
 				// strand the host's desktop in a grab.
-				a.stopWindowStream("")
-				a.closeAllRTCPeers()
+				//
+				// Off the reader: closing a peer whose ICE never finished takes
+				// pion about ten seconds, and this loop is what reads the next
+				// viewer's handshake. Run inline, a device that came back within
+				// those seconds — closing one tab, opening the session from the
+				// map — had its owner handshake answered only once the teardown
+				// returned, past the viewer's nine-second patience: "Couldn't
+				// connect as an owner" for a device that owns the machine. The
+				// peers are already out of the table under rtcMu, so a new
+				// viewer's peers are untouched by the close in flight.
+				go func() {
+					a.stopWindowStream("")
+					a.closeAllRTCPeers()
+				}()
 				// Must not be dropped: a drag that filled winOps and left a button
 				// held is exactly when this fires, and a lost release strands the
 				// host's desktop in a grab. Guaranteed-delivery, off the reader.
