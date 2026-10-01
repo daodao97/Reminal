@@ -589,36 +589,12 @@ func main() {
 			}
 			return
 		case "expose":
-			port := 0
-			public := false
-			for _, a := range os.Args[2:] {
-				switch a {
-				case "--public":
-					public = true
-				default:
-					if !strings.HasPrefix(a, "-") && port == 0 {
-						// Parse the WHOLE token. Sscanf's %d stops at the first
-						// non-digit and still reports success, so "8080abc" used
-						// to silently expose port 8080 — a mistyped port quietly
-						// forwarding something other than what was typed. Range
-						// is checked here too: NewTunnel rejects it in the
-						// spawned child, whose stderr goes to /dev/null, so the
-						// user only saw "read handshake: EOF" with no mention of
-						// the port.
-						n, err := strconv.Atoi(a)
-						if err != nil || n <= 0 || n > 65535 {
-							fmt.Fprintf(os.Stderr, "reminal expose: %q is not a valid port number (expected 1-65535)\n", a)
-							os.Exit(2)
-						}
-						port = n
-					}
-				}
-			}
-			if port == 0 {
-				fmt.Fprintln(os.Stderr, "usage: reminal expose <port> [--public]")
+			port, public, name, perr := parseExposeArgs(os.Args[2:])
+			if perr != nil {
+				fmt.Fprintln(os.Stderr, "reminal expose: "+perr.Error())
 				os.Exit(2)
 			}
-			if err := runExpose(port, public); err != nil {
+			if err := runExpose(port, public, name); err != nil {
 				fmt.Fprintf(os.Stderr, "error: %v\n", err)
 				os.Exit(1)
 			}
@@ -729,6 +705,7 @@ func main() {
 	exposeHeadless := flag.Bool("expose-headless", false, "run as a headless port-forwarder; users normally invoke this via `reminal expose <port>`")
 	exposePort := flag.Int("expose-port", 0, "local TCP port to forward (used with --expose-headless)")
 	exposePublic := flag.Bool("expose-public", false, "skip PIN gate on the port forward (used with --expose-headless)")
+	exposeName := flag.String("expose-name", "", "human-friendly name for the port forward (used with --expose-headless)")
 	flag.Parse()
 
 	if *verbose || *verboseLong {
@@ -742,6 +719,7 @@ func main() {
 		tun, err := client.NewTunnel(client.TunnelOptions{
 			Port:          *exposePort,
 			Public:        *exposePublic,
+			Name:          *exposeName,
 			HandshakeFD:   *handshakeFD,
 			HandshakeAddr: *handshakeAddr,
 			Version:       version,
@@ -865,7 +843,7 @@ func printHelp() {
 	helpTable(w, "Commands", []helpRow{
 		{"reminal [--name <name>]", "Share this terminal (works out of the box)"},
 		{"reminal new [name] [--machine <id|name>]", "Spawn a detached background session — here, or on a machine you own"},
-		{"reminal expose <port> [--public]", "Forward a local HTTP port to a public URL (PIN-protected by default)"},
+		{"reminal expose <port> [--public] [--name <name>]", "Forward a local HTTP port to a public URL (PIN-protected by default)"},
 		{"reminal list [filter] [-v]", "List sessions, recent-first; filter by id/name/cwd/title (--idle/--viewers/--headless)"},
 		{"reminal prune [dur] [-y]", "Kill idle, unwatched shell sessions (default idle 30m+; e.g. 12h, 1d, 2w)"},
 		{"reminal connect <session|url> [pin]", "Connect to a remote session (PIN prompted if omitted)"},
@@ -1392,7 +1370,7 @@ func runStop(idArg string, yes bool) error {
 		fmt.Printf("\n  This will stop the public proxy to localhost:%d.\n", a.Port)
 		fmt.Printf("    · The URL %s stops working immediately.\n", a.OpenURL)
 		fmt.Printf("    · Your localhost:%d server keeps running — nothing is killed.\n", a.Port)
-		fmt.Printf("    · You can re-expose anytime with: reminal expose %d\n", a.Port)
+		fmt.Printf("    · You can re-expose anytime with: %s\n", exposeCommandFor(a))
 		fmt.Println()
 		if !yes && term.IsTerminal(int(os.Stdin.Fd())) {
 			fmt.Print("  Press Enter to continue, Ctrl-C to cancel: ")
@@ -1556,7 +1534,7 @@ func runRestart(arg string) error {
 // forward (version set) returns "".
 func portRestartHint(a *session.Active) string {
 	if a.Version == "" {
-		return fmt.Sprintf("this forward predates in-place restart — run `reminal stop %d` then `reminal expose %d` to move it onto the new version", a.Port, a.Port)
+		return fmt.Sprintf("this forward predates in-place restart — run `reminal stop %d` then `%s` to move it onto the new version", a.Port, exposeCommandFor(a))
 	}
 	return ""
 }
@@ -1653,13 +1631,70 @@ func runRestartAll() error {
 // runExpose spawns a detached port-forwarder for the given local port
 // and prints the public URL + PIN + QR in the calling terminal. Refuses
 // to double-spawn for a port that's already exposed.
-func runExpose(port int, public bool) error {
+// exposeCommandFor is the command that re-creates this forward, name and all.
+// Printing a bare `reminal expose <port>` when the forward had a name tells
+// someone to rebuild it as something it was not, and the name is the part they
+// would not notice losing until they went looking for it in the list.
+func exposeCommandFor(a *session.Active) string {
+	cmd := fmt.Sprintf("reminal expose %d", a.Port)
+	if a.Name != "" {
+		cmd += fmt.Sprintf(" --name %q", a.Name)
+	}
+	return cmd
+}
+
+// parseExposeArgs reads `reminal expose <port> [--public] [--name <name>]`.
+//
+// A name is what a person calls the thing on that port — "Quarterly report"
+// rather than "port :8080" — so it is taken whole, spaces and all, in either
+// --name X or --name=X form.
+func parseExposeArgs(args []string) (port int, public bool, name string, err error) {
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		switch {
+		case a == "--public":
+			public = true
+		case a == "--name" || a == "-name":
+			if i+1 >= len(args) {
+				return 0, false, "", fmt.Errorf("--name needs a name, e.g. --name \"Quarterly report\"")
+			}
+			i++
+			name = args[i]
+		case strings.HasPrefix(a, "--name="), strings.HasPrefix(a, "-name="):
+			name = a[strings.Index(a, "=")+1:]
+		case strings.HasPrefix(a, "-"):
+			return 0, false, "", fmt.Errorf("unknown option %q", a)
+		default:
+			if port != 0 {
+				return 0, false, "", fmt.Errorf("more than one port given (%d and %q)", port, a)
+			}
+			// Parse the WHOLE token. Sscanf's %d stops at the first non-digit
+			// and still reports success, so "8080abc" used to silently expose
+			// port 8080 — a mistyped port quietly forwarding something other
+			// than what was typed. The range is checked here too: NewTunnel
+			// rejects it in the spawned child, whose stderr goes to /dev/null,
+			// so the user only saw "read handshake: EOF" with no mention of
+			// the port.
+			n, aerr := strconv.Atoi(a)
+			if aerr != nil || n <= 0 || n > 65535 {
+				return 0, false, "", fmt.Errorf("%q is not a valid port number (expected 1-65535)", a)
+			}
+			port = n
+		}
+	}
+	if port == 0 {
+		return 0, false, "", fmt.Errorf(`needs a port — e.g. reminal expose 8080 --name "Quarterly report"`)
+	}
+	return port, public, name, nil
+}
+
+func runExpose(port int, public bool, name string) error {
 	if existing, err := session.ReadActiveByPort(port); err == nil {
 		fmt.Printf("Port %d is already exposed: %s\n", port, existing.OpenURL)
 		fmt.Printf("To replace it: reminal stop %d  (then re-run reminal expose %d)\n", port, port)
 		return nil
 	}
-	sp, err := client.SpawnTunnel(port, public)
+	sp, err := client.SpawnTunnel(port, public, name)
 	if err != nil {
 		return err
 	}

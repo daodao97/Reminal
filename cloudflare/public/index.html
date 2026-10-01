@@ -6614,11 +6614,15 @@
       return working ? 'working' : '';
     }
     function sessionLabelWeb(s) {
-      if (s.kind === 'port') return 'port :' + (s.port || '?');
+      // A named forward is called what its owner called it — "Quarterly
+      // report", not "port :8080". The port is still shown, in the detail
+      // line, because it is how you recognise which one this is.
+      if (s.kind === 'port') return s.name || ('port :' + (s.port || '?'));
       return s.name || s.title || s.cwd || (s.headless ? 'background shell' : 'shell');
     }
     function sessionMetaWeb(s) {
       const parts = [];
+      if (s.kind === 'port' && s.name && s.port) parts.push('port :' + s.port);
       if (s.viewers > 0) parts.push(s.viewers + (s.viewers === 1 ? ' viewer' : ' viewers'));
       if (s.idle_secs > 0) parts.push('idle ' + fmtShort(s.idle_secs));
       return parts.join(' · ');
