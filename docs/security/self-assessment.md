@@ -120,7 +120,7 @@ Full detail in [architecture §4](architecture.md#4-key-establishment).
 | EKM.7 | Forward secrecy | Yes — ephemeral keys per connection; recorded traffic remains unreadable even if the PIN is later disclosed |
 | EKM.8 | Provider access to keys | None. The relay never receives the session key and cannot derive it, and it performs no PIN verification — a capability deliberately withheld, because holding it would enable the relay to man-in-the-middle the exchange (`internal/relay/auth.go`) |
 | EKM.9 | Key material on disk | Yes, minimized — only long-lived Ed25519 identity keys, written atomically at mode 0600. Session keys and PINs are memory-only and destroyed on exit |
-| EKM.10 | Cryptography independently reviewed | Not performed. The design and its rationale are documented inline in `internal/crypto/kex.go` and `owner.go` for reviewers who wish to evaluate it directly |
+| EKM.10 | Cryptography independently reviewed | Not performed. The design and its rationale are documented inline in `internal/crypto/cpace.go`, `kex.go` and `owner.go` for reviewers who wish to evaluate it directly |
 
 ## Governance, risk, and human resources
 

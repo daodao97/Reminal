@@ -46,3 +46,36 @@ func TestKexThrottle(t *testing.T) {
 		t.Fatalf("bucket should be capped at kexBurst even after long idle")
 	}
 }
+
+// The short-term pace alone let a patient guesser try the PIN thousands of
+// times a day. The long-term allowance is what bounds that: once it is spent,
+// attempts are answered only as fast as it refills, however long they keep
+// coming.
+func TestKexLongTermAllowance(t *testing.T) {
+	a := &Agent{}
+	now := time.Unix(1_700_000_000, 0)
+
+	// Someone trying as fast as the short-term pace allows, for a whole day.
+	answered := 0
+	for end := now.Add(24 * time.Hour); now.Before(end); now = now.Add(kexRefill) {
+		if a.allowKex(now) {
+			answered++
+		}
+	}
+	ceiling := kexLongBurst + int((24*time.Hour)/kexLongRefill) + 1
+	if answered > ceiling {
+		t.Fatalf("answered %d PIN handshakes in a day, want at most %d", answered, ceiling)
+	}
+	if answered < kexLongBurst {
+		t.Fatalf("answered only %d — the allowance should cover at least its burst", answered)
+	}
+
+	// And ordinary use is untouched: after a quiet stretch a person can still
+	// connect several times in a row.
+	now = now.Add(48 * time.Hour)
+	for i := 0; i < kexBurst; i++ {
+		if !a.allowKex(now) {
+			t.Fatalf("connect %d after a quiet stretch was refused", i)
+		}
+	}
+}

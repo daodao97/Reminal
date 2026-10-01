@@ -34,11 +34,12 @@ Ranked by what an attacker gains from compromising them.
 *Capability:* records traffic between agent, relay, and viewer.
 
 *Mitigations:* WSS/TLS on every hop. Beneath that, payloads are already sealed with
-AES-256-GCM under a key the observer never sees. The key exchange is blinded such
-that no recorded value's distribution depends on the PIN, so **no offline
-brute-force is possible** — this is the specific property `internal/crypto/kex.go`
-is built to provide. Ephemeral X25519 keys per connection give forward secrecy: a
-PIN disclosed later does not decrypt traffic recorded earlier.
+AES-256-GCM under a key the observer never sees. The key exchange is CPace, a
+password-authenticated key exchange in which no recorded value's distribution
+depends on the PIN, so **no offline brute-force is possible** — this is the
+property `internal/crypto/cpace.go` is built to provide. Fresh scalars per
+connection give forward secrecy: a PIN disclosed later does not decrypt traffic
+recorded earlier.
 
 *Residual risk:* traffic analysis. Frame sizes and timing leak typing cadence and
 activity patterns. Not mitigated.
@@ -56,9 +57,9 @@ attempt to impersonate either party.
 - Payloads are opaque ciphertext; the relay holds no session key.
 - The relay performs **no PIN verification and never receives the PIN**. This is a
   deliberate capability refusal: a relay able to check a PIN could brute-force it
-  offline and could unblind both ephemeral keys to MITM the exchange
+  offline and could take part in the exchange as either side
   (`internal/relay/auth.go` documents the reasoning).
-- Active MITM against the PIN path costs one **online** ECDH per guess, and a wrong
+- Active MITM against the PIN path costs one **online** handshake per guess, and a wrong
   guess fails the unwrap and drops the viewer — loud and slow (see [Brute-force
   economics](#brute-force-economics)).
 - Against the owner path, MITM fails outright. The signed transcript binds both
@@ -80,19 +81,21 @@ machine can insert itself before any key is pinned.
 
 *Capability:* connects to the correct room and attempts handshakes.
 
-*Mitigations:* the PIN is required to derive the blinding mask; a wrong PIN produces
-a different wrap key and the unwrap fails. Guessing is strictly online — each
-attempt requires a live handshake with the agent — and rate-limited by a token
-bucket in the agent (`internal/client/agent.go`): a burst of 8, refilling one token
-per 10 seconds, i.e. **6 sustained guesses per minute**.
+*Mitigations:* the PIN selects the handshake's generator; a wrong PIN produces a
+different wrap key and the unwrap fails. Guessing is strictly online — each
+attempt requires a live handshake with the agent, and each handshake is exactly
+one guess — and rate-limited by two allowances in the agent
+(`internal/client/agent.go`): a short-term one (a burst of 8, one back per 10
+seconds) and a long-term one (a burst of 30, one back per 3 minutes), i.e. about
+**480 sustained guesses per day**.
 
 *Residual risk:* see below.
 
 #### Brute-force economics
 
-| Scenario | Search space | At 6 guesses/min |
+| Scenario | Search space | At ~480 guesses/day |
 |---|---|---|
-| PIN only (session ID already known) | 10⁶ | ~58 days expected, ~116 days exhaustive |
+| PIN only (session ID already known) | 10⁶ | ~2.9 years expected, ~5.7 years exhaustive |
 | Session ID only | 32⁸ ≈ 1.1 × 10¹² | Infeasible |
 | Both unknown | ~10¹⁸ | Infeasible |
 

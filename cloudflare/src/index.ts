@@ -13,6 +13,19 @@ export interface Env extends PushEnv {
   // nothing forced). Served at /version so clients pick it up on their next
   // ≤24h check without anyone running `--force`.
   CRITICAL_MIN?: string;
+  // TUNNEL_SUFFIX is the base domain whose `port-<id>.` subdomains reach this
+  // Worker. Set it only where those subdomains actually route here (production
+  // has *.reminal.app), because it makes a forwarded app reachable ONLY on its
+  // own origin: a request for /p/<id>/ arriving on any other host under the
+  // suffix is redirected there rather than served.
+  //
+  // Why that matters: the viewer keeps this origin's remembered sessions and
+  // its owner key in localStorage and IndexedDB, and anything served from the
+  // same origin can read them. A forwarded app is somebody's arbitrary HTML,
+  // so it belongs on an origin of its own. Deployments without wildcard
+  // subdomains (a workers.dev staging relay, `wrangler dev`) leave this empty
+  // and keep serving at the path.
+  TUNNEL_SUFFIX?: string;
 }
 
 // internalHeaders copies a request's headers with every x-reminal-* stripped.
@@ -27,6 +40,29 @@ function internalHeaders(src: Headers): Headers {
     if (k.toLowerCase().startsWith("x-reminal-")) h.delete(k);
   }
   return h;
+}
+
+// tunnelOrigin returns the origin a forward should be served from, or "" when
+// this request is already there (or the deployment has no tunnel subdomains).
+//
+// A forwarded app is somebody's arbitrary HTML. Served at /p/<id>/ on the
+// relay's own host it would share an origin with the viewer, which is where
+// this browser keeps its remembered sessions and its owner key — so it is sent
+// to an origin of its own instead. Exported for the tests.
+export function tunnelOrigin(
+  hostHeader: string,
+  suffixVar: string | undefined,
+  sessionId: string,
+): string {
+  const suffix = (suffixVar || "").trim().toLowerCase();
+  if (!suffix) return ""; // no wildcard subdomains here (staging, wrangler dev)
+  const host = (hostHeader || "").trim().toLowerCase().split(":")[0];
+  if (!host) return "";
+  if (host !== suffix && !host.endsWith("." + suffix)) return ""; // not our domain
+  if (/^port-[a-z0-9]+$/i.test(host.slice(0, host.length - suffix.length - 1))) {
+    return ""; // already on the forward's own origin
+  }
+  return `https://port-${sessionId.toLowerCase()}.${suffix}`;
 }
 
 export default {
@@ -112,6 +148,18 @@ export default {
         return new Response(null, {
           status: 308,
           headers: { Location: `/p/${sessionId}${rest}${url.search}` },
+        });
+      }
+      // Send it to the forward's own origin where one exists. Serving it here
+      // would put somebody's arbitrary HTML on the same origin as the viewer,
+      // which is where this browser keeps its remembered sessions and its
+      // owner key. A 308 keeps the method and body, so a POST to __auth is
+      // unaffected, and links already in circulation still work.
+      const ownOrigin = tunnelOrigin(hostHeader, env.TUNNEL_SUFFIX, sessionId);
+      if (ownOrigin) {
+        return new Response(null, {
+          status: 308,
+          headers: { Location: `${ownOrigin}${rest}${url.search}` },
         });
       }
       const id = env.SESSION.idFromName(sessionId);

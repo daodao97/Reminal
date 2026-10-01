@@ -87,6 +87,15 @@ type rendezvousChunk struct {
 // paste's key-confirmation, and only then streams the file at path. It
 // returns errWrongCode if the peer can't prove the code, so the caller can
 // count the failed attempt without ever having leaked file bytes.
+// copyChannel keeps copy/paste's use of CPace apart from the session handshake's.
+const copyChannel = "reminal-copy-v3"
+
+// copySID binds the exchange to this transfer's meeting point and to this
+// exchange, so an element from one transfer is no use in another.
+func copySID(code string, exID []byte) []byte {
+	return append([]byte(routeID(code)+"|"), exID...)
+}
+
 func runSource(fc frameConn, code, path string) error {
 	info, err := os.Stat(path)
 	if err != nil {
@@ -96,7 +105,7 @@ func runSource(fc frameConn, code, path string) error {
 		return errors.New("directories aren't supported (try tar first)")
 	}
 
-	// 1. Paste opens with KexInit.
+	// 1. Paste opens with pake_init.
 	init, err := fc.recv()
 	if err != nil {
 		return err
@@ -105,52 +114,41 @@ func runSource(fc frameConn, code, path string) error {
 		// Relay rejected the source (e.g. the code is already in use).
 		return errors.New(init.Error)
 	}
-	if init.Type != protocol.TypeKexInit {
-		return fmt.Errorf("rendezvous: expected kex_init, got %q", init.Type)
+	if init.Type != protocol.TypePakeInit {
+		return fmt.Errorf("rendezvous: expected pake_init, got %q", init.Type)
 	}
 	exID, err := crypto.ParseExID(init.ExID)
 	if err != nil {
 		return fmt.Errorf("rendezvous: bad ex_id: %w", err)
 	}
-	blindedPaste, err := base64.StdEncoding.DecodeString(init.Data)
+	pasteElem, err := base64.StdEncoding.DecodeString(init.Data)
 	if err != nil {
-		return fmt.Errorf("rendezvous: bad paste pubkey: %w", err)
-	}
-	pastePubRaw, err := crypto.UnblindPub(blindedPaste, code)
-	if err != nil {
-		return err
-	}
-	pastePub, err := crypto.PeerPublicKey(pastePubRaw)
-	if err != nil {
-		// A bad point can be a mistyped code mangling the blinded bytes.
-		return errWrongCode
+		return fmt.Errorf("rendezvous: bad paste element: %w", err)
 	}
 
-	// 2. Our ephemeral half + a fresh transfer key, wrapped under the
-	//    code-authenticated ECDH and sent back blinded.
-	priv, err := crypto.NewEphemeralKey()
+	// 2. Our half of the exchange, and a fresh transfer key wrapped under the
+	//    key we both derive. A paste with the wrong code derives a different
+	//    key and cannot open the wrap — and it has to prove it opened it
+	//    before a byte of the file is sent (step 3).
+	st, mine, err := crypto.NewCPace([]byte(code), []byte(copyChannel), copySID(code, exID), false)
 	if err != nil {
 		return err
 	}
-	shared, err := priv.ECDH(pastePub)
+	key, err := st.Finish(pasteElem)
 	if err != nil {
-		return errWrongCode
+		return fmt.Errorf("rendezvous: %w", err)
 	}
 	transferKey, err := crypto.NewSessionKey()
 	if err != nil {
 		return err
 	}
-	wrapped, err := crypto.WrapSessionKey(shared, exID, transferKey)
-	if err != nil {
-		return err
-	}
-	blindedSrc, err := crypto.BlindPub(priv.PublicKey().Bytes(), code)
+	wrapped, err := crypto.WrapSessionKey(key, exID, transferKey)
 	if err != nil {
 		return err
 	}
 	if err := fc.send(protocol.Message{
-		Type: protocol.TypeKexResp,
-		Data: base64.StdEncoding.EncodeToString(blindedSrc),
+		Type: protocol.TypePakeResp,
+		Data: base64.StdEncoding.EncodeToString(mine),
 		ExID: init.ExID,
 		Wrap: base64.StdEncoding.EncodeToString(wrapped),
 	}); err != nil {
@@ -252,21 +250,17 @@ func streamFile(fc frameConn, box *crypto.Box, path string, size int) error {
 // the source's filename"; anything else is treated as the target path.
 // Returns the written path on success.
 func runPaste(fc frameConn, code, dest string) (string, error) {
-	priv, err := crypto.NewEphemeralKey()
-	if err != nil {
-		return "", err
-	}
-	blinded, err := crypto.BlindPub(priv.PublicKey().Bytes(), code)
-	if err != nil {
-		return "", err
-	}
 	exIDHex, exID, err := crypto.NewExID()
 	if err != nil {
 		return "", err
 	}
+	st, mine, err := crypto.NewCPace([]byte(code), []byte(copyChannel), copySID(code, exID), true)
+	if err != nil {
+		return "", err
+	}
 	if err := fc.send(protocol.Message{
-		Type: protocol.TypeKexInit,
-		Data: base64.StdEncoding.EncodeToString(blinded),
+		Type: protocol.TypePakeInit,
+		Data: base64.StdEncoding.EncodeToString(mine),
 		ExID: exIDHex,
 	}); err != nil {
 		return "", err
@@ -280,32 +274,24 @@ func runPaste(fc frameConn, code, dest string) (string, error) {
 		// Relay (no live source) or source (rejection) said no.
 		return "", errCodeNotLive
 	}
-	if resp.Type != protocol.TypeKexResp {
-		return "", fmt.Errorf("rendezvous: expected kex_resp, got %q", resp.Type)
+	if resp.Type != protocol.TypePakeResp {
+		return "", fmt.Errorf("rendezvous: expected pake_resp, got %q", resp.Type)
 	}
-	blindedSrc, err := base64.StdEncoding.DecodeString(resp.Data)
+	srcElem, err := base64.StdEncoding.DecodeString(resp.Data)
 	if err != nil {
-		return "", fmt.Errorf("rendezvous: bad source pubkey: %w", err)
+		return "", fmt.Errorf("rendezvous: bad source element: %w", err)
 	}
-	srcPubRaw, err := crypto.UnblindPub(blindedSrc, code)
+	key, err := st.Finish(srcElem)
 	if err != nil {
-		return "", err
-	}
-	srcPub, err := crypto.PeerPublicKey(srcPubRaw)
-	if err != nil {
-		return "", errWrongCode
-	}
-	shared, err := priv.ECDH(srcPub)
-	if err != nil {
-		return "", errWrongCode
+		return "", fmt.Errorf("rendezvous: %w", err)
 	}
 	wrapped, err := base64.StdEncoding.DecodeString(resp.Wrap)
 	if err != nil {
 		return "", fmt.Errorf("rendezvous: bad wrap: %w", err)
 	}
-	transferKey, err := crypto.UnwrapSessionKey(shared, exID, wrapped)
+	transferKey, err := crypto.UnwrapSessionKey(key, exID, wrapped)
 	if err != nil {
-		// The wrap won't open under a key derived from the wrong code.
+		// The wrap will not open under a key derived from a different code.
 		return "", errWrongCode
 	}
 	box, err := crypto.NewBox(transferKey)

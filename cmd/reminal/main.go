@@ -539,6 +539,43 @@ func main() {
 				os.Exit(1)
 			}
 			return
+		case "repin":
+			// reminal repin            the session you are in
+			// reminal repin <id|name>  one session
+			// reminal repin --all      every session on this machine
+			var target string
+			all := false
+			for _, a := range os.Args[2:] {
+				switch {
+				case a == "--all" || a == "-a":
+					all = true
+				case a == "-h" || a == "--help":
+					fmt.Println("usage: reminal repin [id|name] [--all]")
+					fmt.Println("  Gives a session a new PIN. The old PIN and any link made with it stop working;")
+					fmt.Println("  devices that own this machine keep connecting without one.")
+					return
+				case !strings.HasPrefix(a, "-") && target == "":
+					target = a
+				default:
+					fmt.Fprintln(os.Stderr, "usage: reminal repin [id|name] [--all]")
+					os.Exit(2)
+				}
+			}
+			if all && target != "" {
+				fmt.Fprintln(os.Stderr, "error: give a session or --all, not both")
+				os.Exit(2)
+			}
+			var rerr error
+			if all {
+				rerr = runRepinAll()
+			} else {
+				rerr = runRepin(target)
+			}
+			if rerr != nil {
+				fmt.Fprintf(os.Stderr, "error: %v\n", rerr)
+				os.Exit(1)
+			}
+			return
 		case "restart":
 			// --machine <id|name> / --all-owned-machines restart the sessions on
 			// machines you own, over their owner directory channel. Checked first:
@@ -868,6 +905,7 @@ func printHelp() {
 		{"reminal completion <bash|zsh|fish|powershell>", "Print a shell completion script"},
 		{"reminal upgrade [--machine <id|name>|--all-owned-machines]", "Upgrade to the latest release, here or on machines you own"},
 		{"reminal restart [--all] [--machine <id|name>|--all-owned-machines]", "Hot-swap the running agent(s) onto the latest binary"},
+		{"reminal repin [id|name] [--all]", "Give session(s) a new PIN; the old PIN and links stop working"},
 		{"reminal version [--verbose]", "Print version (--verbose adds build date / commit)"},
 		{"reminal help", "Show this help"},
 	})
@@ -1520,6 +1558,114 @@ func runRestart(arg string) error {
 		return fmt.Errorf("ask agent to restart: %w", err)
 	}
 	fmt.Printf("Asked reminal (PID %d, session %s) to hot-restart. Viewers will briefly disconnect.\n", a.PID, a.ID)
+	return nil
+}
+
+// repinOne asks one shell session for a new PIN and waits for it to take
+// effect. The session answers before it restarts, so success is only known
+// once its record shows a different PIN.
+func repinOne(a *session.Active) (string, error) {
+	if _, err := sendControl(a.PID, "repin"); err != nil {
+		if strings.Contains(err.Error(), "unknown command") {
+			return "", fmt.Errorf("this session is running an older reminal — run `reminal restart %s` first, then try again", a.ID)
+		}
+		return "", err
+	}
+	deadline := time.Now().Add(20 * time.Second)
+	for time.Now().Before(deadline) {
+		time.Sleep(200 * time.Millisecond)
+		all, err := session.ReadAllActive()
+		if err != nil {
+			continue
+		}
+		for i := range all {
+			if all[i].ID == a.ID && all[i].PIN != "" && all[i].PIN != a.PIN {
+				return all[i].PIN, nil
+			}
+		}
+	}
+	return "", errors.New("the session did not come back with a new PIN — check `reminal info " + a.ID + "`")
+}
+
+func repinLabel(a *session.Active) string {
+	if a.Name != "" {
+		return fmt.Sprintf("%s (%s)", a.Name, a.ID)
+	}
+	return a.ID
+}
+
+// runRepin gives one session a new PIN.
+func runRepin(arg string) error {
+	a, err := resolveActive(arg)
+	if err != nil {
+		if arg == "" {
+			return fmt.Errorf("%w — run from inside the session, name one (reminal repin <id|name>), or use --all", err)
+		}
+		return err
+	}
+	if a.IsPort() {
+		return fmt.Errorf("%s is a port forward — to change its PIN, run `reminal stop %d` then `%s`", a.ID, a.Port, exposeCommandFor(a))
+	}
+	current := strings.ToUpper(strings.TrimSpace(os.Getenv("REMINAL_SESSION")))
+	if a.ID == current {
+		// Restarting the session this command runs in can cut the command
+		// off before it prints anything; say where the new PIN will be.
+		fmt.Printf("Changing the PIN of this session (%s). Viewers briefly disconnect; see the new one with `reminal info`.\n", a.ID)
+	}
+	pin, err := repinOne(a)
+	if err != nil {
+		return fmt.Errorf("%s: %w", repinLabel(a), err)
+	}
+	fmt.Printf("  %s  new PIN %s\n", repinLabel(a), pin)
+	fmt.Println("The old PIN and any link made with it no longer work. Devices that own this machine are unaffected.")
+	return nil
+}
+
+// runRepinAll gives every shell session on this machine a new PIN. Like
+// runRestartAll, the session it is run from goes last.
+func runRepinAll() error {
+	all, err := session.ReadAllActive()
+	if err != nil {
+		return err
+	}
+	current := strings.ToUpper(strings.TrimSpace(os.Getenv("REMINAL_SESSION")))
+	var self *session.Active
+	var ok, skipped, failed int
+	do := func(a *session.Active) {
+		pin, err := repinOne(a)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "  %-24s failed: %v\n", repinLabel(a), err)
+			failed++
+			return
+		}
+		fmt.Printf("  %-24s new PIN %s\n", repinLabel(a), pin)
+		ok++
+	}
+	for i := range all {
+		a := &all[i]
+		switch {
+		case a.IsPort():
+			skipped++
+		case current != "" && a.ID == current:
+			self = a
+		default:
+			do(a)
+		}
+	}
+	if self != nil {
+		do(self)
+	}
+	if ok == 0 && failed == 0 {
+		return errors.New("no active reminal sessions on this machine")
+	}
+	msg := fmt.Sprintf("Changed the PIN of %d session(s)", ok)
+	if skipped > 0 {
+		msg += fmt.Sprintf(" (skipped %d port forward(s) — re-expose those to change theirs)", skipped)
+	}
+	fmt.Println(msg + ". Old PINs and links no longer work; devices that own this machine are unaffected.")
+	if failed > 0 {
+		return fmt.Errorf("%d session(s) kept their old PIN", failed)
+	}
 	return nil
 }
 

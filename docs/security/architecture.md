@@ -86,23 +86,26 @@ A fresh random 256-bit AES-256-GCM session key is minted per agent run
 that same key, so the agent encrypts the PTY stream once regardless of viewer count.
 The key is delivered by one of two handshakes.
 
-### 4.1 PIN path — EKE-style authenticated ECDH
+### 4.1 PIN path — CPace
 
-Implemented in `internal/crypto/kex.go`.
+Implemented in `internal/crypto/cpace.go` (and mirrored in the web viewer).
+CPace is a balanced password-authenticated key exchange
+(draft-irtf-cfrg-cpace), run here over the ristretto255 group.
 
-1. Agent and viewer each generate an **ephemeral X25519 keypair, per WebSocket
-   connection**.
-2. Each blinds its public key by XOR with a 32-byte mask
-   `HKDF-SHA256(IKM = PIN, salt = "reminal-blind-v2", info = "reminal-kex-v2")`.
-   Every 32-byte string is a valid Montgomery u-coordinate, so a blinded key is
-   uniformly distributed for *every* PIN — an observer cannot test a PIN guess
-   against it.
-3. Blinded keys are exchanged, each side unblinds with its own PIN, and both run
-   ECDH.
-4. The wrap key is `HKDF-SHA256(IKM = shared secret, salt = ex_id, info = "reminal-wrap-v2")`,
-   where `ex_id` is a fresh 16-byte per-handshake correlation ID.
-5. The agent wraps the session key under that key with AES-256-GCM; the viewer
+1. Both sides derive the same generator from what they share:
+   `G = hash_to_group(PIN, channel, sid)`, where `sid` binds the session ID and a
+   fresh 16-byte per-handshake `ex_id`.
+2. Each picks a fresh random scalar per handshake and sends `Y = y·G`.
+3. Both compute the shared element `y·Y_peer`, rejecting a peer element that does
+   not decode or is the identity, and derive a key from it together with the
+   whole transcript (channel, sid, both elements in order).
+4. The wrap key is `HKDF-SHA256(IKM = that key, salt = ex_id, info = "reminal-wrap-v2")`.
+5. The agent wraps the session key under it with AES-256-GCM; the viewer
    unwraps. **A successful unwrap is the proof that both sides used the same PIN.**
+
+The PIN never masks or encrypts anything that goes over the wire: it only selects
+the generator. The elements exchanged are uniformly distributed group elements
+for every PIN.
 
 The essential property: **there is nothing here a passive observer can attack
 offline.** To test a PIN guess an attacker needs either an ephemeral private key
@@ -168,7 +171,7 @@ titles, or the session key. It cannot obtain the key: it never transits the rela
 in usable form, and the relay performs no PIN verification of its own — by design.
 The comment in `internal/relay/auth.go` is explicit about why: a relay that could
 check a 6-digit PIN would be able to brute-force it offline and, worse, would be
-able to unblind both ephemeral keys and MITM the exchange. So it deliberately
+able to take part in the exchange as either side. So it deliberately
 holds no capability it does not need.
 
 **WebRTC.** When a direct peer-to-peer path is negotiated, the signaling (SDP, ICE)
@@ -179,9 +182,13 @@ Media and data frames on the DataChannel are DTLS-protected end-to-end.
 ### 5.2 Copy/paste rendezvous — end-to-end encrypted
 
 `reminal copy` → `reminal paste` is brokered by a separate blind Durable Object
-(`cloudflare/src/rendezvous.ts`) that pairs two sockets by a short code and relays
-frames verbatim. The code-authenticated handshake runs end-to-end through it, so
-the relay learns neither the code, the transfer key, the filename, nor the bytes.
+(`cloudflare/src/rendezvous.ts`) that pairs two sockets and relays frames
+verbatim. A code is ten characters in two halves (`ABCDE-FGHJK`): the relay is
+given the first five, which is only where the two ends meet; the second five
+never leave the two machines. The whole code is the secret for a CPace handshake
+(§4.1) that runs end-to-end through the relay, so the relay learns neither the
+transfer key, the filename, nor the bytes, and cannot complete a transfer itself
+without guessing the half it was never given.
 
 A short code is safe here because of three properties that do not hold for a
 store-and-forward system: the source must be **online**, so there is no stored
@@ -331,7 +338,7 @@ where one exists, is in the threat model's
 cat internal/crypto/box.go
 
 # PIN-authenticated key exchange, with its own security analysis in comments
-cat internal/crypto/kex.go
+cat internal/crypto/cpace.go internal/crypto/kex.go
 
 # Owner-device authentication
 cat internal/crypto/owner.go

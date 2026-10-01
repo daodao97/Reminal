@@ -121,6 +121,7 @@ func (s *Server) HandleSessionWS(w http.ResponseWriter, r *http.Request, session
 var forwardableTypes = map[protocol.MessageType]bool{
 	protocol.TypeData: true, protocol.TypeResize: true, protocol.TypeResume: true,
 	protocol.TypeKexInit: true, protocol.TypeKexResp: true,
+	protocol.TypePakeInit: true, protocol.TypePakeResp: true,
 	protocol.TypeOwnerInit: true, protocol.TypeOwnerResp: true, protocol.TypeOwnerBusy: true,
 	protocol.TypeDirQuery: true, protocol.TypeDirResp: true, protocol.TypeDirRename: true,
 	protocol.TypeDirRevokeSelf: true, protocol.TypeDirKill: true, protocol.TypeDirIntegrate: true,

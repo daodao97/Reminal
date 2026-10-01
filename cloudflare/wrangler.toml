@@ -58,6 +58,10 @@ run_worker_first = true
 # deploy` — clients pick it up on their next ≤24h check and upgrade automatically
 # (no `--force`). Leave "" for normal (prompt-only) releases.
 CRITICAL_MIN = ""
+# The base domain whose port-<id>. subdomains reach this Worker. Set here
+# because *.reminal.app is routed above; a deployment without those wildcard
+# subdomains (workers.dev staging, wrangler dev) must leave it empty.
+TUNNEL_SUFFIX = "reminal.app"
 # Public half of the push signing key (VAPID). Browsers subscribe with it and
 # push services check each alert's signature against it; the private half is
 # the VAPID_PRIVATE_JWK secret (`wrangler secret put VAPID_PRIVATE_JWK`).

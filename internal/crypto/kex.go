@@ -3,60 +3,26 @@
 
 package crypto
 
-// PIN-authenticated key exchange (EKE-style) for reminal v2.
+// Session-key wrapping and handshake helpers.
 //
-// The v1 wire encryption key was deterministically derived from
-// (PIN, sessionID) via HKDF. The sessionID is the relay's routing
-// key, so its only secret is the 6-digit PIN (~20 bits). A relay
-// that recorded a single ciphertext frame could iterate all 10^6
-// PIN candidates offline against the AES-GCM authentication tag and
-// recover the session key. See GitHub issue #1.
+// The PIN handshake itself is CPace (cpace.go). What lives here is what
+// surrounds it: the per-handshake exchange id, wrapping the session key under
+// the key a handshake derives, and the X25519 helpers the owner (PIN-free)
+// handshake uses.
 //
-// v2 establishes the session key with an authenticated ECDH instead:
+// History, kept on purpose. The v1 wire key was derived directly from
+// (PIN, sessionID) via HKDF. The sessionID is the relay's routing key, so the
+// only secret was the 6-digit PIN (~20 bits): a relay that recorded a single
+// ciphertext frame could try all 10^6 PINs offline against the AES-GCM tag and
+// recover the session key. See GitHub issue #1. Since then the session key has
+// been random and delivered by an authenticated handshake; that handshake is
+// now CPace.
 //
-//   1. Both endpoints (host & viewer) generate ephemeral X25519
-//      keypairs per WebSocket connection.
-//   2. Each side blinds its public key by XOR-ing it with a 32-byte
-//      mask derived from the PIN: HKDF-SHA256(IKM=PIN, salt=blindSalt,
-//      info=kexVersion). Every 32-byte value is a valid Montgomery
-//      u-coordinate, so the masked bytes carry no PIN information a
-//      passive observer can verify offline.
-//   3. After exchanging blinded public keys, each side unblinds with
-//      its own copy of the PIN, runs ECDH, and derives a wrap key:
-//      HKDF-SHA256(IKM=shared, salt=ex_id, info=wrapInfo).
-//   4. The agent wraps a random 256-bit session key under this wrap
-//      key (AES-256-GCM) and sends the ciphertext to the viewer.
-//   5. The viewer decrypts. A successful unwrap proves both sides
-//      used the same PIN.
-//
-// Security properties:
-//
-//   - Passive recorder: cannot brute-force the PIN. To verify a
-//     guess they would need either an ECDH private key (ephemeral,
-//     destroyed after the handshake) or a value whose distribution
-//     depends on the PIN — the blinded pubkey looks uniform random
-//     for every PIN. Forward secrecy is preserved.
-//   - Active MITM (the threat model the README's "relay-blind"
-//     claim is supposed to cover): forced to complete a full ECDH
-//     with each side per PIN guess. Each guess is one online
-//     attempt — a wrong guess produces a different wrap key, the
-//     unwrap fails, the viewer disconnects. The relay observes
-//     many failed handshakes; this is loud, and the agent's kex
-//     token bucket bounds the rate: kexBurst=8 back-to-back, then
-//     one guess per kexRefill=10s, so ~6/min and ~115 days of
-//     continuous conspicuous spam to walk the 10^6 space
-//     (client/agent.go). NOT the relay's old 5-strike lockout —
-//     that was removed precisely because a relay that could check
-//     the PIN could also unblind both keys and MITM this exchange
-//     (see relay/auth.go).
-//
-// The exchange ID (ex_id) the viewer picks per handshake is the
-// HKDF salt for the wrap key and is also echoed back in
-// TypeKexResp. With multiple viewers, the relay broadcasts the
-// agent's response to all of them; the ex_id is how each viewer
-// recognises which response is for them. (A non-originating viewer
-// could not unwrap it anyway — different ECDH shared secret — but
-// matching the ex_id avoids gratuitous decryption attempts.)
+// The exchange id (ex_id) the initiator picks per handshake is the HKDF salt
+// for the wrap key and is echoed in the reply. With several viewers, the relay
+// broadcasts the agent's reply to all of them; the ex_id is how each
+// recognises its own. (Another viewer could not unwrap it anyway — different
+// shared secret — but matching avoids pointless decryption attempts.)
 
 import (
 	"crypto/aes"
@@ -71,15 +37,6 @@ import (
 
 	"golang.org/x/crypto/hkdf"
 )
-
-// Wire-protocol version. Bumping this string forces a hard cutover —
-// any peer using a different version derives a different mask / wrap
-// key and the unwrap fails. v1 used "reminal-v1" in HKDF.
-const kexVersion = "reminal-kex-v2"
-
-// Domain separation for the PIN→mask HKDF call. Distinct from the
-// wrap key derivation so the two key streams cannot collide.
-var blindSalt = []byte("reminal-blind-v2")
 
 // Domain separation for the wrap-key derivation (salt is per-handshake
 // ex_id; info is this constant).
@@ -96,41 +53,6 @@ const ExIDBytes = 16
 // NewEphemeralKey returns a fresh X25519 keypair for one handshake.
 func NewEphemeralKey() (*ecdh.PrivateKey, error) {
 	return ecdh.X25519().GenerateKey(rand.Reader)
-}
-
-// pinMask returns the 32-byte XOR mask derived from the PIN.
-func pinMask(pin string) ([]byte, error) {
-	r := hkdf.New(sha256.New, []byte(pin), blindSalt, []byte(kexVersion))
-	mask := make([]byte, PubKeyBytes)
-	if _, err := io.ReadFull(r, mask); err != nil {
-		return nil, err
-	}
-	return mask, nil
-}
-
-// BlindPub XOR-masks a 32-byte X25519 public key with HKDF(PIN). The
-// output is indistinguishable from random without the PIN. The
-// transform is its own inverse — UnblindPub just calls back here.
-func BlindPub(pub []byte, pin string) ([]byte, error) {
-	if len(pub) != PubKeyBytes {
-		return nil, fmt.Errorf("blind: public key must be %d bytes, got %d", PubKeyBytes, len(pub))
-	}
-	mask, err := pinMask(pin)
-	if err != nil {
-		return nil, err
-	}
-	out := make([]byte, PubKeyBytes)
-	for i := range pub {
-		out[i] = pub[i] ^ mask[i]
-	}
-	return out, nil
-}
-
-// UnblindPub reverses BlindPub. XOR is its own inverse, so this is the
-// same operation — the named alias exists for code that reads with the
-// peer's role in mind.
-func UnblindPub(blinded []byte, pin string) ([]byte, error) {
-	return BlindPub(blinded, pin)
 }
 
 // NewExID returns a fresh random per-handshake correlation ID,

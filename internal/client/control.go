@@ -15,6 +15,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"reminal/internal/session"
 	"strings"
 	"sync"
 	"time"
@@ -235,6 +236,35 @@ func (a *Agent) handleControlConn(conn net.Conn) {
 			}
 		}()
 		return
+	case line == "repin":
+		// `reminal repin`: a hot-restart that hands the successor a fresh PIN
+		// instead of the current one. The restart already gives the session a
+		// new encryption key and makes every viewer handshake again, so after
+		// it the old PIN opens nothing; owner devices reconnect on their own.
+		pin, err := session.NewPIN(6)
+		if err != nil {
+			_, _ = fmt.Fprintln(conn, "error:", err)
+			return
+		}
+		hash, err := session.HashPIN(pin)
+		if err != nil {
+			_, _ = fmt.Fprintln(conn, "error:", err)
+			return
+		}
+		a.nextPIN, a.nextPinHash = pin, hash
+		_, _ = fmt.Fprintln(conn, "ok")
+		_ = conn.Close()
+		go func() {
+			time.Sleep(50 * time.Millisecond)
+			if err := a.executeRestart(); err != nil {
+				// Still the old process, so still the old PIN.
+				a.nextPIN, a.nextPinHash = "", ""
+				a.stopControlFn = a.listenControl()
+				a.broadcastNotice("changing the PIN failed (" + err.Error() +
+					") — the PIN is unchanged; try again")
+			}
+		}()
+		return
 	case line == "quit":
 		// `reminal kill`, asked politely. Killing the agent outright is a
 		// TerminateProcess on Windows — no signal, no handler, no defers — so
@@ -407,4 +437,23 @@ func (a *Agent) broadcastFile(path string) error {
 
 	a.broadcastNotice(fmt.Sprintf("sent %s (%s) to viewers", name, humanByteSize(size)))
 	return nil
+}
+
+// carriedPIN is the PIN a hot-restart hands to its successor: the current one,
+// or the replacement when the restart is a `reminal repin`.
+func (a *Agent) carriedPIN() string {
+	if a.nextPIN != "" {
+		return a.nextPIN
+	}
+	return a.pin
+}
+
+// carriedPinHash pairs with carriedPIN. A session still waiting to move off
+// its original relay credential keeps that credential, or the relay would not
+// recognise it after the restart.
+func (a *Agent) carriedPinHash() string {
+	if a.nextPinHash != "" && !a.sendPinHash {
+		return a.nextPinHash
+	}
+	return a.pinHash
 }
