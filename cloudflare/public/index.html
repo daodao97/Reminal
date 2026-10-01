@@ -7007,7 +7007,7 @@
         if (msg.type === 'data') {
           msg = { type: 'data', data: await encrypt(cryptoKey, Uint8Array.from(atob(msg.data), c => c.charCodeAt(0))) };
         } else {
-          const payload = JSON.stringify({ cols: msg.cols, rows: msg.rows, viewer: viewerId });
+          const payload = JSON.stringify({ cols: msg.cols, rows: msg.rows, viewer: viewerId, ...(msg.away ? { away: true } : {}) });
           msg = { type: 'resize', data: await encrypt(cryptoKey, payload) };
         }
       }
@@ -7078,6 +7078,30 @@
       };
     };
 
+    // Whether this tab's terminal is in sight: the tab visible and nothing
+    // covering it. A view that covers the terminal says so with
+    // TermSight.cover(name, true/false). The agent is told on the resize
+    // report (away), so a terminal that is open but not being looked at —
+    // behind another view, or in a background tab — is known as that.
+    const TermSight = (() => {
+      const covers = new Set();
+      const onChange = [];
+      let last = null;
+      const inSight = () => !document.hidden && covers.size === 0;
+      function changed() {
+        const now = inSight();
+        if (now === last) return;
+        last = now;
+        for (const f of onChange) { try { f(now); } catch (_) {} }
+      }
+      document.addEventListener('visibilitychange', changed);
+      return {
+        inSight,
+        cover(name, on) { if (on) covers.add(name); else covers.delete(name); changed(); },
+        onChange(f) { onChange.push(f); },
+      };
+    })();
+
     // TermSize — the only size loop on this page.
     //
     // This tab reports the wrap it can show. The agent owns the PTY
@@ -7091,7 +7115,7 @@
     const TermSize = (() => {
       const MIN_C = 20, MIN_R = 8, SETTLE_MS = 200;
       let timer = 0, lastW = 0, lastH = 0;
-      let lastReportC = 0, lastReportR = 0;
+      let lastReportC = 0, lastReportR = 0, lastReportAway = null;
       let ptyC = 0, ptyR = 0;
 
       function atLiveBottom() {
@@ -7246,11 +7270,13 @@
         if (!ownsTerminal || !agentLive || !cryptoKey) return;
         if (!wrap) wrap = measure();
         if (!wrap) return;
-        if (wrap.cols === lastReportC && wrap.rows === lastReportR) return;
+        const away = !TermSight.inSight();
+        if (wrap.cols === lastReportC && wrap.rows === lastReportR && away === lastReportAway) return;
         lastReportC = wrap.cols;
         lastReportR = wrap.rows;
+        lastReportAway = away;
         sizeTrace('send', wrap.cols, wrap.rows);
-        send({ type: 'resize', cols: wrap.cols, rows: wrap.rows });
+        send({ type: 'resize', cols: wrap.cols, rows: wrap.rows, away });
       }
       function sync() {
         const wrap = measure();
@@ -7268,6 +7294,7 @@
         adoptPty(c, r) {
           if (c === 0 && r === 0) {
             lastReportC = lastReportR = 0;
+            lastReportAway = null;
             ptyC = ptyR = 0;
             sync();
             return;
@@ -7303,6 +7330,8 @@
     // until the keyboard opens, so the PTY stayed at another screen's
     // width and the frame came out garbled until then.
     function reportSizeNow() { try { TermSize.sync(); } catch (_) {} }
+    // Coming into or going out of sight is reported like a size change.
+    TermSight.onChange(() => reportSizeNow());
     function sendResize() { TermSize.sync(); }
     function publishSize() { TermSize.sync(); }
     function scheduleSize() { TermSize.schedule(); }

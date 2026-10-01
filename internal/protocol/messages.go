@@ -350,7 +350,10 @@ type Message struct {
 	// agent can take min(width)×min(height) across everyone currently
 	// attached. Absent on viewers older than this field: those share a
 	// single anonymous slot (last anonymous report wins that slot).
-	Viewer  string `json:"viewer,omitempty"`
+	Viewer string `json:"viewer,omitempty"`
+	// Away, on a viewer's resize report: its terminal is out of sight — the
+	// tab hidden, or another view over it. Still attached, not looking.
+	Away    bool   `json:"away,omitempty"`
 	Error   string `json:"error,omitempty"`
 	Seq     uint64 `json:"seq,omitempty"`
 	FromSeq uint64 `json:"from_seq,omitempty"`

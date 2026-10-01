@@ -228,6 +228,7 @@ type Agent struct {
 	// seen. See inject.go.
 	bracketedPaste atomic.Bool
 	pasteCarry     []byte
+	lastInput      time.Time // a person typing, not programs printing (session.Active.LastInput)
 	// attnState is the detected attention state of the foreground agent —
 	// "working", "input" (awaiting the user), "done", or "" (no agent / bare
 	// shell). Written by the attention detector goroutine, read by activeRecord
@@ -323,6 +324,8 @@ type Agent struct {
 	// See viewersize.go. viewerCount (how many sockets are attached) is
 	// separate — the relay only gives us a count, not which id left.
 	sizeBook viewerSizeBook
+	// sight is which viewers have their terminal out of sight (viewersight.go).
+	sight viewerSight
 
 	viewerSizeMu sync.Mutex
 	viewerCount  int
@@ -1239,6 +1242,7 @@ func (a *Agent) activeRecord(viewers int) session.Active {
 	a.metaMu.Lock()
 	title := a.title
 	last := a.lastActivity
+	lastIn := a.lastInput
 	name := a.name
 	cwd := a.cwd
 	attn := a.attnState
@@ -1259,10 +1263,12 @@ func (a *Agent) activeRecord(viewers int) session.Active {
 		PidStartedAt: session.SelfStartTime(),
 		Headless:     a.headless,
 		Viewers:      viewers,
+		Away:         a.sight.awayOf(viewers),
 		Name:         name,
 		Cwd:          cwd,
 		Title:        title,
 		LastActivity: last,
+		LastInput:    lastIn,
 		Attn:         attn,
 		AttnSince:    attnSince,
 		Fg:           attnFG,
@@ -1375,6 +1381,26 @@ func (a *Agent) updateActiveViewers(viewers int) {
 func (a *Agent) markActivity(now time.Time) {
 	a.metaMu.Lock()
 	a.lastActivity = now
+	a.metaMu.Unlock()
+	a.metaDirty.Store(true)
+}
+
+// markInput stamps when a person last typed, for the record; throttled to
+// disk like markActivity.
+// noteInput records that a person typed — if it really was a person. Both
+// input paths (the host terminal and a viewer) go through here, so the rule
+// lives in one place: when it was written out at each site, resolving a merge
+// around them left one site marking input unconditionally, which cancels
+// typedByPerson while every test still passes.
+func (a *Agent) noteInput(data []byte) {
+	if typedByPerson(data) {
+		a.markInput()
+	}
+}
+
+func (a *Agent) markInput() {
+	a.metaMu.Lock()
+	a.lastInput = time.Now()
 	a.metaMu.Unlock()
 	a.metaDirty.Store(true)
 }
@@ -2664,6 +2690,7 @@ func (a *Agent) pumpHostStdin() {
 		}
 		if n > 0 {
 			data := buf[:n]
+			a.noteInput(data)
 			if i := bytes.IndexByte(data, escapeKey); i >= 0 {
 				// Flush bytes before the escape to the PTY.
 				if i > 0 {
@@ -2934,6 +2961,7 @@ func (a *Agent) runReader(conn *websocket.Conn, cursorCh chan uint64) error {
 			if err != nil {
 				continue
 			}
+			a.noteInput(data)
 			if _, err := a.term.Write(data); err != nil {
 				return err
 			}
@@ -2953,6 +2981,9 @@ func (a *Agent) runReader(conn *websocket.Conn, cursorCh chan uint64) error {
 			// still grow the PTY back. Reset happens when the last
 			// viewer leaves (TypeClosed below).
 			a.coalesceViewerResize(rs.Viewer, rs.Cols, rs.Rows)
+			if a.sight.note(rs.Viewer, rs.Away) {
+				a.updateActiveViewers(int(a.curViewers.Load()))
+			}
 			// Do not rebroadcast the PTY just because this wrap differs
 			// from it. Web viewers already paint min(wrap, last PTY);
 			// rebroadcasting on every mismatch re-enters adoptPty and
@@ -3136,6 +3167,11 @@ func (a *Agent) runReader(conn *websocket.Conn, cursorCh chan uint64) error {
 			// phone's keyboard-open height cannot keep pinning the PTY.
 			rebroadcast := msg.Count > 0 && msg.Count < prevCount
 			a.viewerSizeMu.Unlock()
+			if rebroadcast || msg.Count == 0 {
+				// Who is away is forgotten with the sizes, and reported
+				// again with them.
+				a.sight.clear()
+			}
 			if rebroadcast {
 				sizeLog("viewer left, forget wraps  %s", a.sizeBook.dump())
 				a.sizeBook.forgetWraps()
