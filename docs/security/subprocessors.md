@@ -42,10 +42,10 @@ grep -rIn --exclude-dir=testdata "analytics\|telemetry\|posthog\|sentry\|mixpane
 ```
 
 `testdata` is excluded because it holds the captured `--help` output of other
-tools (claude, qwen, pi), which reminal reads to work out how to resume them.
-Those mention their own telemetry flags; none of it is reminal's. Drop the
-exclusion to see exactly what is in there — it is eight lines of third-party
-help text and nothing else.
+tools (claude, qwen, pi), which reminal's tests read to check how it resumes
+them. Those mention their own telemetry flags; none of it is reminal's. Drop
+the exclusion to see exactly what is in there — it is eight lines of
+third-party help text and nothing else.
 
 ## What Cloudflare can and cannot see
 
