@@ -1389,8 +1389,6 @@ func (a *Agent) markActivity(now time.Time) {
 	a.metaDirty.Store(true)
 }
 
-// markInput stamps when a person last typed, for the record; throttled to
-// disk like markActivity.
 // noteInput records that a person typed — if it really was a person. Both
 // input paths (the host terminal and a viewer) go through here, so the rule
 // lives in one place: when it was written out at each site, resolving a merge
@@ -1402,6 +1400,8 @@ func (a *Agent) noteInput(data []byte) {
 	}
 }
 
+// markInput stamps when a person last typed, for the record; throttled to
+// disk like markActivity.
 func (a *Agent) markInput() {
 	a.metaMu.Lock()
 	a.lastInput = time.Now()
