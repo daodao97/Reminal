@@ -572,10 +572,18 @@ var sc=$.CGEventCreateScrollWheelEvent2(src,$.kCGScrollEventUnitPixel,2,%d,%d,0)
 }
 
 func (darwinWindows) typeText(w winInfo, text string) error {
-	// System Events "keystroke" types arbitrary text reliably (layout-aware),
-	// where the CGEvent unicode path doesn't marshal correctly from JXA. asStr
-	// escapes the text into an AppleScript string literal so viewer input can't
-	// break out of the script.
+	// The helper posts the text as a CGEvent carrying a unicode string, which
+	// is layout-independent and takes about a tenth of a millisecond. It is
+	// the same mechanism the JXA path could not marshal, which is why this
+	// used to spawn osascript — at 40-50ms a character, and a process per
+	// letter is what made typing lag behind the picture.
+	if keyHelperType(text) {
+		return nil
+	}
+	// No helper (an old one beside a new binary, or a build without it):
+	// System Events types arbitrary text reliably too, just slowly. asStr
+	// escapes the text into an AppleScript string literal so viewer input
+	// cannot break out of the script.
 	script := fmt.Sprintf(`tell application "System Events" to keystroke %s`, asStr(text))
 	_, err := run("osascript", "-e", script)
 	return err
@@ -612,6 +620,15 @@ func (darwinWindows) key(w winInfo, name string) error {
 	// key (return, left, …) through `key code`. Modifiers ride either — so
 	// cmd+c, ctrl+shift+t and cmd+left all inject the same way.
 	if len(base) == 1 && base[0] > ' ' {
+		// A bare character with no modifiers is just text; with modifiers it
+		// has to go as a keycode, because the shortcut an app listens for is
+		// the physical key, not the character it would produce.
+		if len(mods) == 0 && keyHelperType(base) {
+			return nil
+		}
+		if code, ok := darwinCharKeyCodes[base]; ok && keyHelperKey(code, mods) {
+			return nil
+		}
 		script := fmt.Sprintf(`tell application "System Events" to keystroke %s%s`, asStr(base), using)
 		_, err := run("osascript", "-e", script)
 		return err
@@ -620,9 +637,24 @@ func (darwinWindows) key(w winInfo, name string) error {
 	if !ok {
 		return fmt.Errorf("unknown key %q", name)
 	}
+	if keyHelperKey(code, mods) {
+		return nil
+	}
 	script := fmt.Sprintf(`tell application "System Events" to key code %d%s`, code, using)
 	_, err := run("osascript", "-e", script)
 	return err
+}
+
+// darwinCharKeyCodes maps the letters and digits a shortcut is built from to
+// their US-layout virtual keycodes. Only needed for chords (cmd+c): plain
+// characters go in as text, which carries no layout assumption at all. A key
+// missing here falls back to osascript rather than injecting the wrong one.
+var darwinCharKeyCodes = map[string]int{
+	"a": 0, "b": 11, "c": 8, "d": 2, "e": 14, "f": 3, "g": 5, "h": 4, "i": 34,
+	"j": 38, "k": 40, "l": 37, "m": 46, "n": 45, "o": 31, "p": 35, "q": 12,
+	"r": 15, "s": 1, "t": 17, "u": 32, "v": 9, "w": 13, "x": 7, "y": 16, "z": 6,
+	"0": 29, "1": 18, "2": 19, "3": 20, "4": 21, "5": 23, "6": 22, "7": 26,
+	"8": 28, "9": 25,
 }
 
 func (darwinWindows) exists(id string) bool {
