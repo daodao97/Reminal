@@ -89,8 +89,9 @@ No usage reporting, no crash reporting, no third-party SDK. This is a claim you 
 and the checks are published in
 <a href="https://github.com/harshalgajjar/Reminal/blob/main/docs/security/architecture.md">the
 security architecture</a>:</p>
-<pre><code>grep -rIn "analytics\|telemetry\|posthog\|sentry\|mixpanel" internal/ cmd/   # no output
-grep -rn  "console\." cloudflare/src                                        # no output</code></pre>
+<pre><code>grep -rIn --exclude-dir=testdata "analytics\|telemetry\|posthog\|sentry\|mixpanel" internal/ cmd/   # no output
+# testdata is left out: it holds other tools' help text, which mentions their telemetry flags
+grep -rn  "console\." cloudflare/src                                                                # no output</code></pre>
 <p>Two things do involve a network connection, and you should know about both:</p>
 <ul>
   <li><strong>Update checks.</strong> At most once every 24 hours the client asks GitHub for the
