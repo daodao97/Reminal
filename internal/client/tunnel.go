@@ -88,6 +88,10 @@ type TunnelOptions struct {
 	// the URL can reach the port. Off by default; opt-in via
 	// `reminal expose <port> --public`.
 	Public bool
+	// Name is what a person calls this forward — "Quarterly report" rather
+	// than "port :8080". It rides the session record, so `reminal list` and
+	// the Machines panel show it wherever a session's name is shown.
+	Name string
 	// HandshakeFD mirrors AgentOptions — when non-zero, the tunnel
 	// writes credentials JSON to this fd once it's connected so the
 	// parent `reminal expose` process can print + exit.
@@ -109,6 +113,7 @@ type Tunnel struct {
 	webURL    string
 	port      int
 	public    bool
+	name      string
 	version   string
 	startedAt time.Time
 
@@ -273,6 +278,7 @@ func NewTunnel(opts TunnelOptions) (*Tunnel, error) {
 		webURL:        config.WebURL(),
 		port:          opts.Port,
 		public:        opts.Public,
+		name:          sanitizeTitle(opts.Name),
 		version:       opts.Version,
 		httpClient:    hc,
 		handshakeFD:   opts.HandshakeFD,
@@ -414,6 +420,7 @@ func (t *Tunnel) activeRecord() session.Active {
 		StartedAt:    t.startedAt,
 		Kind:         session.KindPort,
 		Port:         t.port,
+		Name:         t.name,
 		Version:      t.version, // marks this forward as hot-swap-capable (see Active.Version)
 	}
 }
@@ -1840,6 +1847,11 @@ func (t *Tunnel) execRestart() error {
 	}
 	t.connMu.Unlock()
 	args := []string{exe, "--expose-headless", "--expose-port", strconv.Itoa(t.port)}
+	if t.name != "" {
+		// Without this an upgrade restarts the forward nameless, and the name
+		// a person gave it disappears from their list for no reason they can see.
+		args = append(args, "--expose-name", t.name)
+	}
 	if t.public {
 		args = append(args, "--expose-public")
 	}
@@ -1916,7 +1928,7 @@ func isHopHeader(name string) bool {
 // SpawnTunnel forks a detached headless port-forwarder via the running
 // binary and blocks until the child writes its credentials back. Mirrors
 // Spawn() (shell sessions) — same fd-3 handshake, same Setsid detach.
-func SpawnTunnel(port int, public bool) (*SpawnedSession, error) {
+func SpawnTunnel(port int, public bool, name string) (*SpawnedSession, error) {
 	exe, err := os.Executable()
 	if err != nil {
 		return nil, fmt.Errorf("locate self: %w", err)
@@ -1933,6 +1945,9 @@ func SpawnTunnel(port int, public bool) (*SpawnedSession, error) {
 	}
 	if public {
 		args = append(args, "--expose-public")
+	}
+	if name != "" {
+		args = append(args, "--expose-name", name)
 	}
 	cmd := exec.Command(exe, args...)
 	cmd.Stdin = devnull

@@ -146,6 +146,8 @@ Prefer no MCP? Hand an agent a session ID and PIN and it connects like any other
 
 `reminal expose 3000` turns whatever's running on `localhost` into a **public HTTPS URL** — a dev server, a webhook target, a build to show a client. PIN-gated by default (or `--public` to open it up), so you can share the link without deploying anything. It's a built-in ngrok, on the tool you already have running.
 
+Give it a name — `reminal expose 3000 --name "Quarterly report"` — and that's what you see in `reminal list` and in the Machines panel, instead of `port :3000`. With a few forwards open at once, the name is the only thing that tells you which is which.
+
 <div align="center">
 <img src="docs/expose.gif" alt="A terminal runs a dev server on localhost:3000, then reminal expose 3000 prints a public https URL — which loads the same app live on a phone, PIN-gated over TLS" width="900">
 </div>
@@ -391,7 +393,7 @@ The mirroring you see above isn't macOS-only — window capture **and** full con
 | `reminal restart [--all]` | Hot-swap the running agent(s) onto the latest binary — the shell stays alive |
 | `reminal integrate [--remove]` | Register reminal's MCP server with your agent CLIs (Claude Code, Codex, Cursor, Gemini, Qwen, OpenCode, Antigravity, Amp, pi) |
 | `reminal mcp` | Run the MCP server on stdio — list, search, read and type into sessions across your machines |
-| `reminal expose <port> [--public]` | Forward a local HTTP port to a public URL (PIN-protected by default) |
+| `reminal expose <port> [--public] [--name <name>]` | Forward a local HTTP port to a public URL (PIN-protected by default) |
 | `reminal send <file>` | Push a file to every connected viewer (web client auto-downloads) |
 | `reminal copy [--ttl <dur>] <file>` | Offer a file for pickup anywhere; prints a one-time code |
 | `reminal paste <code> [dest]` | Fetch a file offered by `reminal copy` on another machine |
