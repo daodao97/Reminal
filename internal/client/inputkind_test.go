@@ -30,3 +30,34 @@ func TestTypedByPerson(t *testing.T) {
 		}
 	}
 }
+
+// noteInput is the only way either input path records typing, so this is the
+// test that would have caught a merge leaving a bare markInput beside the
+// guarded one — the shape that silently undoes typedByPerson.
+func TestNoteInputIgnoresTheTerminalsOwnReplies(t *testing.T) {
+	cases := []struct {
+		name  string
+		data  string
+		typed bool
+	}{
+		{"a keystroke", "x", true},
+		{"a carriage return", "\r", true},
+		{"cursor position report", "\x1b[24;80R", false},
+		{"device attributes", "\x1b[?62;c", false},
+		{"device status report", "\x1b[0n", false},
+		{"focus in", "\x1b[I", false},
+		{"focus out", "\x1b[O", false},
+		{"an OSC colour reply", "\x1b]11;rgb:1e1e/1e1e/1e1e\x07", false},
+		{"a reply with a keystroke after it", "\x1b[24;80Rq", true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			a := &Agent{}
+			a.noteInput([]byte(c.data))
+			moved := !a.lastInput.IsZero()
+			if moved != c.typed {
+				t.Fatalf("noteInput(%q) recorded typing = %v, want %v", c.data, moved, c.typed)
+			}
+		})
+	}
+}

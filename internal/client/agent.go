@@ -1387,6 +1387,17 @@ func (a *Agent) markActivity(now time.Time) {
 
 // markInput stamps when a person last typed, for the record; throttled to
 // disk like markActivity.
+// noteInput records that a person typed — if it really was a person. Both
+// input paths (the host terminal and a viewer) go through here, so the rule
+// lives in one place: when it was written out at each site, resolving a merge
+// around them left one site marking input unconditionally, which cancels
+// typedByPerson while every test still passes.
+func (a *Agent) noteInput(data []byte) {
+	if typedByPerson(data) {
+		a.markInput()
+	}
+}
+
 func (a *Agent) markInput() {
 	a.metaMu.Lock()
 	a.lastInput = time.Now()
@@ -2679,9 +2690,7 @@ func (a *Agent) pumpHostStdin() {
 		}
 		if n > 0 {
 			data := buf[:n]
-			if typedByPerson(data) {
-				a.markInput()
-			}
+			a.noteInput(data)
 			if i := bytes.IndexByte(data, escapeKey); i >= 0 {
 				// Flush bytes before the escape to the PTY.
 				if i > 0 {
@@ -2952,9 +2961,7 @@ func (a *Agent) runReader(conn *websocket.Conn, cursorCh chan uint64) error {
 			if err != nil {
 				continue
 			}
-			if typedByPerson(data) {
-				a.markInput()
-			}
+			a.noteInput(data)
 			if _, err := a.term.Write(data); err != nil {
 				return err
 			}
