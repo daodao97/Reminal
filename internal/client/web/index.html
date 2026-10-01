@@ -8640,9 +8640,7 @@
     // keyboard should refocus wkey/term after — this only sends.
     function typeToTarget(text) {
       if (winKbdActive()) {
-        for (let i = 0; i < text.length; i += WIN_TYPE_CHUNK) {
-          sendWin('window_input', { id: focusedPaneId, kind: 'key', text: text.slice(i, i + WIN_TYPE_CHUNK) });
-        }
+        winType(focusedPaneId, text);
         return true;
       }
       Promise.resolve(sendInput(text)).catch(() => {});
@@ -10547,7 +10545,63 @@
     // sendWin sends a window_* control frame. If obj is provided it's
     // JSON-encoded and encrypted into data; otherwise a bare {type} goes out
     // (used for the window_list request, which carries no payload).
+    // ---- typing: one event per burst, not one per letter ---------------------
+    //
+    // Every character used to be its own window_input, and on macOS each one
+    // spawns an osascript to inject it — measured at 40-50ms on an idle
+    // machine, more under load. Typing therefore had a ceiling around 16
+    // characters a second, and anything faster queued: letters arrived
+    // seconds late while the picture kept updating at full rate, because
+    // frames come from a different goroutine entirely.
+    //
+    // Characters that arrive within a frame of each other are sent as one
+    // event. The host types a whole string in one call, so a burst of ten
+    // costs one injection instead of ten. A lone keypress waits 16ms, which
+    // is below what anyone can see.
+    const WIN_TYPE_COALESCE_MS = 16;
+    let winTypeBuf = '', winTypeId = '', winTypeTimer = 0, winTypeFlushing = false;
+
+    // winTypeFlush sends what has been typed so far. Called before any other
+    // window input, so a Return can never overtake the line it ends.
+    function winTypeFlush() {
+      if (!winTypeBuf) return;
+      const text = winTypeBuf, id = winTypeId;
+      winTypeBuf = ''; winTypeId = '';
+      winTypeFlushing = true;
+      try {
+        for (let i = 0; i < text.length; i += WIN_TYPE_CHUNK) {
+          sendWin('window_input', { id, kind: 'key', text: text.slice(i, i + WIN_TYPE_CHUNK) });
+        }
+      } finally { winTypeFlushing = false; }
+    }
+
+    // winType sends the first character straight away and coalesces only what
+    // follows it within the window. Someone typing at human speed therefore
+    // waits for nothing — every keypress leaves immediately, as before — while
+    // a burst (autorepeat, a paste, a phone's autocomplete inserting a whole
+    // word) collapses into one event instead of one per character. Delaying
+    // every keypress to catch the bursts would have traded latency everyone
+    // feels for a saving that only shows up sometimes.
+    function winType(id, text) {
+      if (!id || !text) return;
+      if (winTypeId && winTypeId !== id) winTypeFlush(); // another pane: order first
+      winTypeId = id;
+      winTypeBuf += text;
+      // A paste is already a burst; send it rather than waiting on a timer.
+      if (winTypeBuf.length >= WIN_TYPE_CHUNK) { winTypeFlush(); return; }
+      if (!winTypeTimer) {
+        // Nothing in flight: this is the start of typing, so it goes now and
+        // the window opens behind it for whatever lands next.
+        winTypeFlush();
+        winTypeTimer = setTimeout(() => { winTypeTimer = 0; winTypeFlush(); }, WIN_TYPE_COALESCE_MS);
+      }
+    }
+
     async function sendWin(type, obj) {
+      // Anything that is not the buffered text itself goes behind it: a
+      // special key, a click, a scroll, a drag. Without this, Return could
+      // reach the host before the line it was meant to end.
+      if (type === 'window_input' && !winTypeFlushing) winTypeFlush();
       // Interacting with a pane means latency now matters more than smoothness:
       // stop playing buffered frames out and jump to the newest.
       if (type === 'window_input' && obj && obj.id) {
@@ -12802,7 +12856,7 @@
       if (sp) { e.preventDefault(); sendWin('window_input', { id: focusedPaneId, kind: 'key', special: sp }); return; }
       if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {
         e.preventDefault();
-        sendWin('window_input', { id: focusedPaneId, kind: 'key', text: e.key });
+        winType(focusedPaneId, e.key);
       }
     });
     wkey.addEventListener('input', (e) => {
@@ -12817,9 +12871,7 @@
       // twenty seconds of host work, against an input queue that holds 64 and
       // DROPS what it cannot fit. The tail of a paste simply vanished.
       // Chunked only to keep any single script argument sane.
-      for (let i = 0; i < text.length; i += WIN_TYPE_CHUNK) {
-        sendWin('window_input', { id: focusedPaneId, kind: 'key', text: text.slice(i, i + WIN_TYPE_CHUNK) });
-      }
+      winType(focusedPaneId, text);
     });
 
     // Fetch a fresh window list each time the dropdown is opened.

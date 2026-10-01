@@ -73,6 +73,90 @@ if args.count >= 2, args[1] == "scroll" {
     exit(0)
 }
 
+// Keys subcommand: `reminal-capture keys` stays running and injects what it is
+// given, one event per line of stdin, answering "ok" for each.
+//
+// It stays running because the cost here was never the injection — it was
+// starting something. Every character used to spawn an osascript to run
+// `keystroke`, measured at 40-50ms on an idle machine and worse under load, so
+// typing had a ceiling around 16 characters a second and anything faster piled
+// up: letters landed seconds after they were typed, while the picture kept
+// arriving on time because frames come from somewhere else entirely. Posting a
+// CGEvent takes microseconds; paying a process launch per letter was the whole
+// problem.
+//
+// Lines are JSON, one per event:
+//   {"t":"text","s":"hello"}            type this text
+//   {"t":"key","code":36,"flags":1}     a key by virtual keycode, with modifiers
+// Flags are the CGEventFlags bits the agent already computes. Unicode goes in
+// as a string on a synthetic key, which is what makes layout-independent text
+// work; the JXA path could not marshal it, which is why osascript was used.
+if args.count >= 2, args[1] == "keys" {
+    let src = CGEventSource(stateID: .hidSystemState)
+    let out = FileHandle.standardOutput
+
+    func post(_ e: CGEvent?) {
+        guard let e = e else { return }
+        e.post(tap: .cghidEventTap)
+    }
+
+    func typeText(_ text: String) {
+        // In chunks: CGEventKeyboardSetUnicodeString takes a bounded buffer,
+        // and a long paste arrives as one line.
+        let units = Array(text.utf16)
+        var i = 0
+        while i < units.count {
+            let end = min(i + 20, units.count)
+            var slice = Array(units[i..<end])
+            if let down = CGEvent(keyboardEventSource: src, virtualKey: 0, keyDown: true) {
+                down.keyboardSetUnicodeString(stringLength: slice.count, unicodeString: &slice)
+                post(down)
+            }
+            if let up = CGEvent(keyboardEventSource: src, virtualKey: 0, keyDown: false) {
+                up.keyboardSetUnicodeString(stringLength: slice.count, unicodeString: &slice)
+                post(up)
+            }
+            i = end
+        }
+    }
+
+    func typeKey(_ code: CGKeyCode, _ flags: UInt64) {
+        let f = CGEventFlags(rawValue: flags)
+        if let down = CGEvent(keyboardEventSource: src, virtualKey: code, keyDown: true) {
+            down.flags = f
+            post(down)
+        }
+        if let up = CGEvent(keyboardEventSource: src, virtualKey: code, keyDown: false) {
+            up.flags = f
+            post(up)
+        }
+    }
+
+    while let line = readLine(strippingNewline: true) {
+        if line.isEmpty { continue }
+        guard let data = line.data(using: .utf8),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            out.write(Data("error\n".utf8))
+            continue
+        }
+        switch obj["t"] as? String {
+        case "text":
+            if let text = obj["s"] as? String { typeText(text) }
+        case "key":
+            if let code = obj["code"] as? Int {
+                typeKey(CGKeyCode(code), UInt64(obj["flags"] as? Int ?? 0))
+            }
+        case "ping":
+            break // a round trip with no injection, for checking the helper is alive
+        default:
+            out.write(Data("error\n".utf8))
+            continue
+        }
+        out.write(Data("ok\n".utf8))
+    }
+    exit(0)
+}
+
 // Drag-phase subcommand: `reminal-capture drag <down|move|up> <x> <y>` posts ONE
 // step of a live drag. Split into phases because a drag used to be shipped as a
 // whole path after the finger lifted and replayed at scripted speed — nothing
