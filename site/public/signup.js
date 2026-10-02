@@ -44,6 +44,19 @@
     return out;
   }
 
+  // A phrase in the thank-you can be a link: data-done-link names the
+  // phrase, data-done-href where it goes.
+  function linkDone() {
+    var phrase = form.dataset.doneLink, href = form.dataset.doneHref;
+    var text = msgEl.textContent, at = phrase ? text.indexOf(phrase) : -1;
+    if (!href || at < 0) return;
+    var a = document.createElement("a");
+    a.href = href;
+    a.textContent = phrase;
+    msgEl.textContent = "";
+    msgEl.append(text.slice(0, at), a, text.slice(at + phrase.length));
+  }
+
   function say(text, kind) {
     msgEl.textContent = text;
     msgEl.className = "formmsg" + (kind ? " " + kind : "");
@@ -91,6 +104,7 @@
       if (!res.ok) throw new Error("HTTP " + res.status);
       form.hidden = true;
       say(form.dataset.done, "ok");
+      linkDone();
     } catch (err) {
       submitEl.disabled = false;
       say("That didn't go through. Email mail@harshalgajjar.com and I'll add you by hand.", "err");
