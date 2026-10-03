@@ -232,6 +232,7 @@ func mirrorServeCapture(conn net.Conn, args []string) {
 	// the only place the reason exists.
 	if msg := strings.TrimSpace(errBuf.String()); msg != "" {
 		fmt.Fprintf(os.Stderr, "reminal: capture %s ended: %s\n", id, msg)
+		noteCaptureFailure(msg)
 		writeMirrorError(conn, msg)
 	}
 }
@@ -542,7 +543,7 @@ func (m *captureMux) startLocked(helper string) bool {
 		return true // someone else started one while we waited
 	}
 	cmd := exec.Command(helper, "serve")
-	cmd.Stderr = &lineLogger{prefix: "reminal: "}
+	cmd.Stderr = &lineLogger{prefix: "reminal: ", onLine: noteCaptureFailure}
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return false
@@ -674,20 +675,31 @@ type lineLogger struct {
 	mu     sync.Mutex
 	prefix string
 	buf    []byte
+	// onLine, when set, sees each finished line (without the prefix), called
+	// outside the lock. The capture helper's logger uses it to spot the
+	// stuck-replayd failure (see replayd_heal.go).
+	onLine func(string)
 }
 
 func (l *lineLogger) Write(p []byte) (int, error) {
+	var lines []string
 	l.mu.Lock()
-	defer l.mu.Unlock()
 	for _, c := range p {
 		if c == '\n' {
 			fmt.Fprintf(os.Stderr, "%s%s\n", l.prefix, l.buf)
+			if l.onLine != nil {
+				lines = append(lines, string(l.buf))
+			}
 			l.buf = l.buf[:0]
 			continue
 		}
 		if len(l.buf) < 4096 {
 			l.buf = append(l.buf, c)
 		}
+	}
+	l.mu.Unlock()
+	for _, line := range lines {
+		l.onLine(line)
 	}
 	return len(p), nil
 }

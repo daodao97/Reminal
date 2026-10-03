@@ -1584,6 +1584,9 @@
     /* Shown when a pane stops receiving frames — e.g. the host screen is locked
        or asleep, which blocks capture. Turns a silent freeze into a clear cue. */
     .wpane-stall {
+      /* The pane body is line-height 0 so the video sits flush; without this a
+         message long enough to wrap drew every line on top of the last. */
+      line-height: 1.4;
       position: absolute; inset: 0; z-index: 4; display: none;
       align-items: center; justify-content: center;
       background: rgba(13, 17, 23, 0.5); backdrop-filter: blur(2px);
@@ -1592,7 +1595,7 @@
     .wpane-stall .pill {
       display: flex; align-items: center; gap: 9px; max-width: 92%;
       background: rgba(22, 27, 34, 0.96); border: 1px solid #30363d; color: #e6edf3;
-      font-size: 13px; padding: 8px 14px; border-radius: 999px;
+      font-size: 13px; padding: 8px 14px; border-radius: 18px;
       box-shadow: 0 4px 18px rgba(0, 0, 0, 0.45);
     }
     .wpane-stall .dot {
@@ -1618,7 +1621,7 @@
       animation: wpspin 0.8s linear infinite;
     }
     @keyframes wpspin { to { transform: rotate(360deg); } }
-    .wpane-loadmsg { color: #adbac7; font-size: 12px; text-align: center; max-width: 82%; }
+    .wpane-loadmsg { color: #adbac7; font-size: 12px; line-height: 1.4; text-align: center; max-width: 82%; }
     .wpane-loadmsg .sub { display: block; color: #8b949e; font-size: 11px; margin-top: 3px; }
     /* Transport/details popover toggled by the (i) button in a pane's titlebar. */
     .wpane-info {
@@ -12184,12 +12187,23 @@
     }
     setInterval(viewerTick, 1000);
 
+    // What a capture error means, in words a person can act on. macOS reports a
+    // stuck screen-capture service (replayd) as "The user declined TCCs …"
+    // even when reminal is allowed to record; the host restarts that service
+    // itself and the pane recovers on its next retry.
+    function paneErrorText(raw) {
+      const s = String(raw || '');
+      if (/declined TCCs/i.test(s)) {
+        return "macOS refused screen capture. If Screen Recording is on for reminal, it is restarting macOS's capture service and this view will recover in a few seconds. If it doesn't, run reminal permissions on that machine.";
+      }
+      return s;
+    }
     function onWindowFrame(payload, viaDC) {
       const p = panes.get(payload.id);
       if (!p) return;
       if (payload.closed) { closePane(payload.id); return; } // window closed on the host
       if (payload.error) { // host could list but not capture this window
-        p.errorMsg = payload.error;
+        p.errorMsg = paneErrorText(payload.error);
         updatePaneOverlay(p);
         return;
       }
