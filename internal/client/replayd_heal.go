@@ -31,6 +31,12 @@ import (
 // leaves it alone for a while. The session's normal retry then succeeds. A
 // genuine "no" (preflight says not granted) is the person's choice and is left
 // alone: restarting replayd would not change it.
+//
+// The cost: replayd serves every app's screen recording, so restarting it also
+// stops any other recording or screen share in progress on that Mac (Zoom,
+// QuickTime, OBS) for a moment. That is why it happens only on this exact
+// error, only when the permission really is granted (capture is already
+// broken for everyone at that point), and at most once per cooldown.
 
 const (
 	// The ScreenCaptureKit error this heals. Matched loosely: it reaches us
