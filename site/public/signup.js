@@ -94,7 +94,8 @@
           body: new URLSearchParams(fields),
         });
       };
-      var res = await send(Object.assign({}, base, extras()));
+      // The form's own fields win over any hidden field of the same name.
+      var res = await send(Object.assign({}, extras(), base));
       // Loops refuses the whole signup when any value is too long; the
       // address matters more than the extras, so it goes again without them.
       if (res.status === 400) {
