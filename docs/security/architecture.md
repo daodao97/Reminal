@@ -140,9 +140,14 @@ Two directions of authentication matter here:
 - The agent verifies the device signature against its authorised owner list, so
   only enrolled devices connect.
 - The device verifies the agent signature against the machine key it **pinned on
-  first connect** (trust-on-first-use, `~/.reminal/known_machines.json`). A relay
-  impersonating the host is detected, and the user is told the machine identity
-  changed rather than silently connected.
+  first connect** (trust-on-first-use). Trust is held per machine
+  (`~/.reminal/owned_machines.json`; the browser keeps the same list), so a machine
+  the device has connected to before is recognised on any of its sessions. A
+  session that one of the device's machines reports, answered by a different key,
+  is refused. A key the device has not seen before is used only after the person
+  confirms it, showing the machine's id. `~/.reminal/known_machines.json` still
+  records which machine each session was on, and a session answered by a key other
+  than that one is refused.
 
 **Enrollment is privilege-separated.** The authorised owner list lives in a
 root-owned system location (`/etc/reminal/owners.json`), which is what makes
@@ -251,7 +256,8 @@ outside reminal's control; see [subprocessors](subprocessors.md).
 |---|---|---|
 | `~/.reminal/settings.json` | User preferences | 0600 |
 | `~/.reminal/device_ed25519` | This device's owner key | 0600 |
-| `~/.reminal/known_machines.json` | Pinned machine identities (TOFU) | 0600 |
+| `~/.reminal/owned_machines.json` | Machines this device trusts as an owner | 0600 |
+| `~/.reminal/known_machines.json` | Which machine each session was on | 0600 |
 | `~/.reminal/revoked_owners.json` | Revocation tombstones | Agent-writable |
 | `/etc/reminal/owners.json` | Authorised owner devices | Root-owned |
 
