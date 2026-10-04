@@ -384,11 +384,8 @@ export class SessionRoom {
       return "authentication required";
     }
 
-    const meta = await this.loadMeta();
-    if (meta.lockedUntil && Date.now() < meta.lockedUntil) {
-      return "too many failed attempts — try again in a few minutes";
-    }
-
+    // The PIN-attempt lockout belongs to a forwarded port's visitor gate
+    // (handleTunnelAuth); agents and tunnels authenticate here without it.
     if (attachment.role === "agent" || attachment.role === "tunnel") {
       // Accept-either: the agent proves control with a high-entropy reattach
       // *token* (preferred) and/or a legacy bcrypt *pin_hash*. The relay never
@@ -449,7 +446,7 @@ export class SessionRoom {
       if (attachment.role === "agent") {
         await this.state.storage.put("agentAuthed", true);
       }
-      await this.resetFailures();
+      // The visitor gate's attempt count is its own; reconnecting leaves it.
       ws.serializeAttachment({ role: attachment.role, authed: true } satisfies Attachment);
       ws.send(JSON.stringify({ type: "auth_ok" }));
 
