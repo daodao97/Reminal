@@ -61,7 +61,12 @@ func sendControlToDeadline(pid int, cmd string, d time.Duration) (string, error)
 	if err != nil {
 		return "", err
 	}
-	conn, err := net.Dial("unix", sock)
+	var conn net.Conn
+	if d > 0 {
+		conn, err = net.DialTimeout("unix", sock, d)
+	} else {
+		conn, err = net.Dial("unix", sock)
+	}
 	if err != nil {
 		return "", fmt.Errorf("connect to agent %d: %w", pid, err)
 	}
@@ -236,6 +241,11 @@ func (a *Agent) handleControlConn(conn net.Conn) {
 			}
 		}()
 		return
+	case line == "pin":
+		// The PIN of this running session, for `reminal info` / list when
+		// the copy in its record could not be opened (the keystore locked
+		// and no key file to fall back to). The socket is this user's only.
+		_, _ = fmt.Fprintln(conn, "ok", a.pin)
 	case line == "repin":
 		// `reminal repin`: a hot-restart that hands the successor a fresh PIN
 		// instead of the current one. The restart already gives the session a

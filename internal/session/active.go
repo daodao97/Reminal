@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"reminal/internal/atrest"
 	"reminal/internal/proc"
 )
 
@@ -26,8 +27,11 @@ import (
 // own active-<id>.json so `reminal list` can enumerate them. Kind tells
 // shell agents and port-forwarders apart.
 type Active struct {
-	ID        string    `json:"id"`
-	PIN       string    `json:"pin"`
+	ID  string `json:"id"`
+	PIN string `json:"pin"`
+	// PinSealed is the PIN as it is kept on disk (see atrest); PIN is
+	// filled from it on read and left empty in the file.
+	PinSealed []byte    `json:"pin_sealed,omitempty"`
 	OpenURL   string    `json:"open_url"`
 	PID       int       `json:"pid"`
 	StartedAt time.Time `json:"started_at"`
@@ -197,12 +201,24 @@ func WriteActive(a Active) error {
 	if err := os.MkdirAll(filepath.Dir(p), 0o700); err != nil {
 		return err
 	}
+	// The PIN goes on disk sealed. A keystore that will not give the key up
+	// right now leaves it out of the file rather than in the clear; `reminal
+	// info` then shows no PIN until the next write.
+	a.PinSealed = nil
+	if a.PIN != "" {
+		if blob, err := atrest.Seal(kindActivePIN, a.ID, []byte(a.PIN)); err == nil {
+			a.PinSealed = blob
+		}
+		a.PIN = ""
+	}
 	data, err := json.MarshalIndent(a, "", "  ")
 	if err != nil {
 		return err
 	}
 	return os.WriteFile(p, data, 0o600)
 }
+
+const kindActivePIN = "active-pin"
 
 // ClearActive deletes this session's record. Idempotent — a missing file
 // is not an error since the agent may be cleaning up after never having
@@ -356,8 +372,24 @@ func readActiveFile(path string) (*Active, error) {
 	if err := json.Unmarshal(data, &a); err != nil {
 		return nil, err
 	}
+	if a.PIN == "" && len(a.PinSealed) > 0 {
+		if pin, err := atrest.Open(kindActivePIN, a.ID, a.PinSealed); err == nil {
+			a.PIN = string(pin)
+		}
+	}
+	// No PIN it could open (older versions always wrote one): ask the
+	// running session itself.
+	if a.PIN == "" && a.Kind != KindPort && PINFromSession != nil {
+		a.PIN = PINFromSession(a.PID)
+	}
+	a.PinSealed = nil
 	return &a, nil
 }
+
+// PINFromSession asks a running session for its PIN (set by the client
+// package: over the session's own control socket). Used only when the copy
+// in its record cannot be opened.
+var PINFromSession func(pid int) string
 
 // pidAlive returns true if a process with this PID exists and is reachable.
 // On Unix this is the standard signal-0 probe; on Windows proc.Alive opens the

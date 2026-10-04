@@ -31,9 +31,9 @@ screen $ID | grep -q "you said: remember the number 4242" && ok "claude is runni
 o2=$(newsession quitter /root); Q=$(idof "$o2"); send $Q "exit"
 o3=$(newsession killed /root); K=$(idof "$o3"); box "reminal kill $K -y >/dev/null 2>&1"
 sleep 17   # past one save (every 15s)
-box "test -f /root/.reminal/restore/$ID.json" && ok "restore record kept for $ID" || fail "no restore record"
-box "test -f /root/.reminal/restore/$Q.json" && fail "exited session $Q kept a record" || ok "a shell that exited on its own leaves no record"
-box "test -f /root/.reminal/restore/$K.json" && fail "killed session $K kept a record" || ok "reminal kill leaves no record"
+box "test -f /root/.reminal/restore/$ID.sealed" && ok "restore record kept for $ID" || fail "no restore record"
+box "test -f /root/.reminal/restore/$Q.sealed" && fail "exited session $Q kept a record" || ok "a shell that exited on its own leaves no record"
+box "test -f /root/.reminal/restore/$K.sealed" && fail "killed session $K kept a record" || ok "reminal kill leaves no record"
 
 docker restart $BOX >/dev/null
 ok "box rebooted — every process gone, no chance to clean up"

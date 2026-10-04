@@ -92,8 +92,11 @@ Under `~/.reminal/` (mode 0600): user settings, this device's Ed25519 owner key,
 pinned machine identities, and revocation tombstones. Under `/etc/reminal/`
 (root-owned): the machine's authorised owner list.
 
-Session IDs, PINs, and session keys exist **in memory only** and are destroyed when
-the agent exits. No session content is ever written to disk.
+Session keys exist in memory only and are destroyed when the agent exits. So that a
+session can come back after its machine restarts, its ID, PIN, relay token and
+terminal history are kept under `~/.reminal/restore/`, sealed with a per-user key
+held by the OS keystore, until the session is ended on purpose
+([architecture §6.2](architecture.md#62-on-the-host)). None of it leaves the machine.
 
 ## Data residency
 
