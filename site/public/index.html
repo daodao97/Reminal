@@ -102,7 +102,7 @@
         "Stream every window, desktop and terminal to any browser",
         "Software closed-lid mode keeps a MacBook awake and rendering headlessly",
         "End-to-end encrypted with AES-256-GCM under a per-run key",
-        "No open ports, no long-lived keys on disk, no account",
+        "No open ports, session secrets encrypted on disk, no account",
         "Nothing to install on the device you are holding"
       ],
       "description": "Streams every window, desktop and terminal on your machines into any browser, with input. Software closed-lid mode keeps a MacBook awake and rendering headlessly. End-to-end encrypted, no open ports, no client, no account.",
@@ -552,7 +552,7 @@ header figcaption{max-width:720px}
     <h1>Every window, desktop and terminal on your machines, <span class="em">live in any browser.</span></h1>
     <p class="lede">
       <strong>Close the laptop lid and walk away.</strong> reminal keeps the machine serving and hands you
-      its actual apps, not just a shell, in any browser, from anywhere. No open ports, no keys on disk,
+      its actual apps, not just a shell, in any browser, from anywhere. No open ports, session secrets encrypted on disk,
       nothing to install on the device you're holding.
     </p>
 
@@ -1038,8 +1038,8 @@ header figcaption{max-width:720px}
   <p class="eyebrow reveal">Security</p>
   <h2 class="reveal">As secure as a properly configured SSH, and safer by default.</h2>
   <p class="body reveal">
-    SSH leaves port 22 open, stores long-lived keys on disk, and trusts you to configure everything
-    correctly. reminal takes the opposite approach: nothing to expose, nothing permanent to steal.
+    SSH leaves port 22 open and trusts you to configure everything correctly. reminal takes the
+    opposite approach: nothing to expose, session secrets encrypted on disk.
   </p>
   <div class="grid">
     <div class="card wide reveal">
@@ -1121,7 +1121,7 @@ header figcaption{max-width:720px}
       <div class="f-brand">
         <span class="f-logo"><img src="/assets/icon-96.png" alt="" width="26" height="26"><span>reminal</span></span>
         <p>Every window, desktop and terminal on your machines, live in any browser.
-        No open ports, no keys on disk, nothing to install on the device you&rsquo;re holding.</p>
+        No open ports, session secrets encrypted on disk, nothing to install on the device you&rsquo;re holding.</p>
         <div class="f-badges">
           <span>macOS &middot; Linux &middot; Windows</span>
           <span>AGPL-3.0</span>
