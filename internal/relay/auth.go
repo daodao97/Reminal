@@ -3,6 +3,12 @@
 
 package relay
 
+import (
+	"crypto/sha256"
+	"crypto/subtle"
+	"encoding/hex"
+)
+
 // authState tracks who has authenticated on a room.
 //
 // The relay intentionally does NO PIN verification of its own. A 6-digit PIN
@@ -18,4 +24,35 @@ type authState struct {
 	pinHash     string // legacy credential; superseded by token (see server.go)
 	token       string // high-entropy reattach credential; empty on legacy sessions
 	agentAuthed bool
+	// ownerHash, on a room for a session ID that was cleared, is the hash of
+	// the credential that had it (credentialHash); only that may claim it.
+	ownerHash string
+}
+
+// credentialHash is what is kept of an agent's credential once its room is
+// cleared: SHA-256 of the token, or of the legacy pin_hash. "" for neither.
+func credentialHash(token, pinHash string) string {
+	switch {
+	case token != "":
+		return hashHex("token:" + token)
+	case pinHash != "":
+		return hashHex("pin_hash:" + pinHash)
+	}
+	return ""
+}
+
+// credentialMatches reports whether an agent presenting token / pinHash is
+// the one whose credential hashed to want.
+func credentialMatches(want, token, pinHash string) bool {
+	for _, h := range []string{credentialHash(token, ""), credentialHash("", pinHash)} {
+		if h != "" && subtle.ConstantTimeCompare([]byte(h), []byte(want)) == 1 {
+			return true
+		}
+	}
+	return false
+}
+
+func hashHex(s string) string {
+	sum := sha256.Sum256([]byte(s))
+	return hex.EncodeToString(sum[:])
 }

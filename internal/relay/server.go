@@ -19,6 +19,18 @@ import (
 // giving the same agent a chance to reattach (e.g., across a network blip).
 const orphanTTL = 10 * time.Minute
 
+// ownerKeep is how long a session ID stays reserved for the agent that had it
+// once its room has been cleared: only the same credential may claim it in
+// that window (a reboot, `reminal restore`). Kept as a hash. Matches the
+// Worker's OWNER_KEEP_MS.
+const ownerKeep = 30 * 24 * time.Hour
+
+// roomOwner is what is kept of a cleared room.
+type roomOwner struct {
+	hash  string
+	until time.Time
+}
+
 // wsWriteWait bounds a single WS write to a peer. Without it, a peer that stops
 // reading (its send buffer fills) makes WriteMessage block forever while holding
 // writeMu, leaking the forwarding goroutine and stalling that peer's queue. The
@@ -59,12 +71,32 @@ type room struct {
 
 type Server struct {
 	rooms map[string]*room
-	mu    sync.RWMutex
+	// owners reserves cleared rooms' session IDs for their agents (ownerKeep).
+	owners map[string]roomOwner
+	mu     sync.RWMutex
 	// Read-deadline windows; fields (not globals) so a test can set them on its
 	// own Server before serving without racing the handler goroutines. See
 	// defaultAuthWait/defaultReadWait.
 	authWait time.Duration
 	readWait time.Duration
+	// Room lifetimes; fields so a test can shorten them on its own Server.
+	// Zero means the default (orphanTTL, ownerKeep).
+	orphanWait time.Duration
+	ownerWait  time.Duration
+}
+
+func (s *Server) orphanTTL() time.Duration {
+	if s.orphanWait > 0 {
+		return s.orphanWait
+	}
+	return orphanTTL
+}
+
+func (s *Server) ownerKeep() time.Duration {
+	if s.ownerWait > 0 {
+		return s.ownerWait
+	}
+	return ownerKeep
 }
 
 func NewServer() *Server {
@@ -299,8 +331,14 @@ func (s *Server) handleAuthLocked(r *room, role protocol.Role, msg protocol.Mess
 				r.auth.pinHash = ""
 			}
 		default:
-			// Brand-new session: register whatever proves control, preferring
-			// the token so no PIN-derived value is ever stored.
+			// No credential yet: a brand-new session, or one whose room was
+			// cleared. A cleared room's session ID stays reserved for the
+			// agent that had it.
+			if r.auth.ownerHash != "" && !credentialMatches(r.auth.ownerHash, msg.Token, msg.PinHash) {
+				return "session credentials mismatch"
+			}
+			// Register whatever proves control, preferring the token so no
+			// PIN-derived value is ever stored.
 			if msg.Token != "" {
 				r.auth.token = msg.Token
 			} else {
@@ -419,6 +457,9 @@ func (s *Server) attach(sessionID string, role protocol.Role, conn *websocket.Co
 			return false, "session not found or not ready"
 		}
 		r = &room{}
+		if o, ok := s.owners[sessionID]; ok && time.Now().Before(o.until) {
+			r.auth.ownerHash = o.hash
+		}
 		s.rooms[sessionID] = r
 	}
 	s.mu.Unlock()
@@ -471,7 +512,7 @@ func (s *Server) detach(sessionID string, role protocol.Role, conn *websocket.Co
 			r.cleanup.Stop()
 		}
 		sid := sessionID
-		r.cleanup = time.AfterFunc(orphanTTL, func() { s.expireRoom(sid) })
+		r.cleanup = time.AfterFunc(s.orphanTTL(), func() { s.expireRoom(sid) })
 	case protocol.RoleViewer:
 		for i, v := range r.viewers {
 			if v.conn == conn {
@@ -504,6 +545,23 @@ func (s *Server) detach(sessionID string, role protocol.Role, conn *websocket.Co
 	}
 }
 
+// keepOwnerLocked reserves sessionID for the credential hash owner, and drops
+// reservations that have run out. Callers hold s.mu.
+func (s *Server) keepOwnerLocked(sessionID, owner string) {
+	if s.owners == nil {
+		s.owners = make(map[string]roomOwner)
+	}
+	now := time.Now()
+	for id, o := range s.owners {
+		if now.After(o.until) {
+			delete(s.owners, id)
+		}
+	}
+	if owner != "" {
+		s.owners[sessionID] = roomOwner{hash: owner, until: now.Add(s.ownerKeep())}
+	}
+}
+
 // expireRoom fires after orphanTTL. If the agent never reattached, we kick
 // the viewer (if any) and drop the room. If the agent did come back, this is
 // a no-op.
@@ -527,6 +585,7 @@ func (s *Server) expireRoom(sessionID string) {
 	}
 	r.viewers = nil
 	r.cleanup = nil
+	owner := credentialHash(r.auth.token, r.auth.pinHash)
 	r.mu.Unlock()
 
 	for _, c := range viewerConns {
@@ -536,6 +595,7 @@ func (s *Server) expireRoom(sessionID string) {
 	s.mu.Lock()
 	if existing, ok := s.rooms[sessionID]; ok && existing == r {
 		delete(s.rooms, sessionID)
+		s.keepOwnerLocked(sessionID, owner)
 	}
 	s.mu.Unlock()
 }

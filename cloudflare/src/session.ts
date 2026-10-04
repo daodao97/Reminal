@@ -7,6 +7,13 @@ const LOCKOUT_MS = 5 * 60 * 1000;
 // same agent a chance to reattach across a network blip.
 const ORPHAN_TTL_MS = 10 * 60 * 1000;
 
+// How long a room remembers who it belongs to after that. Once the room has
+// been cleared, only an agent with the same credential may take the session ID
+// again within this window (a reboot, a `reminal restore`, a laptop asleep for
+// the weekend). Kept as a hash of the credential, never the credential itself.
+// Every reconnect renews it.
+const OWNER_KEEP_MS = 30 * 24 * 60 * 60 * 1000;
+
 // Per-tunnel-request timeout. If the tunnel agent doesn't reply in this
 // window we 504 — covers the local server hanging or the WS dying
 // mid-request.
@@ -98,8 +105,16 @@ export class SessionRoom {
     timeout: ReturnType<typeof setTimeout>;
   }> = new Map();
 
-  constructor(state: DurableObjectState) {
+  // Overridable for tests only (wrangler dev --var); production uses the
+  // constants above.
+  private orphanTTL = ORPHAN_TTL_MS;
+  private ownerKeep = OWNER_KEEP_MS;
+
+  constructor(state: DurableObjectState, env?: { ORPHAN_TTL_MS?: string; OWNER_KEEP_MS?: string }) {
     this.state = state;
+    const n = (v?: string) => (v && Number(v) > 0 ? Number(v) : 0);
+    this.orphanTTL = n(env?.ORPHAN_TTL_MS) || ORPHAN_TTL_MS;
+    this.ownerKeep = n(env?.OWNER_KEEP_MS) || OWNER_KEEP_MS;
     // Answer app-level keepalive pings in the runtime itself. Without this,
     // every `{"type":"ping"}` wakes the hibernated DO and counts as a billable
     // request; auto-response replies with the canned pong without ever invoking
@@ -295,7 +310,7 @@ export class SessionRoom {
           v.send(JSON.stringify({ type: "agent_offline" }));
         }
       }
-      await this.state.storage.setAlarm(Date.now() + ORPHAN_TTL_MS);
+      await this.state.storage.setAlarm(Date.now() + this.orphanTTL);
     } else if (attachment.role === "viewer") {
       const remaining = this.getSockets("viewer").filter(v => v !== ws);
       if (remaining.length === 0) {
@@ -339,7 +354,7 @@ export class SessionRoom {
       for (const v of this.getSockets("visitor")) {
         try { v.close(1011, "reminal: tunnel disconnected"); } catch { /* already closing */ }
       }
-      await this.state.storage.setAlarm(Date.now() + ORPHAN_TTL_MS);
+      await this.state.storage.setAlarm(Date.now() + this.orphanTTL);
     } else if (attachment.role === "visitor") {
       // Visitor hung up: tell the agent to close the backend connection.
       const tunnel = this.getSocket("tunnel");
@@ -370,7 +385,17 @@ export class SessionRoom {
         v.close(1000, "expired");
       }
     }
+    // Clear the room, but keep who it belongs to until that runs out; the
+    // alarm comes back then to clear that too.
+    const [ownerHash, ownerUntil] = await Promise.all([
+      this.state.storage.get<string>("ownerHash"),
+      this.state.storage.get<number>("ownerUntil"),
+    ]);
     await this.state.storage.deleteAll();
+    if (ownerHash && ownerUntil && Date.now() < ownerUntil) {
+      await this.state.storage.put({ ownerHash, ownerUntil });
+      await this.state.storage.setAlarm(ownerUntil);
+    }
   }
 
   // ---- auth ----
@@ -419,8 +444,19 @@ export class SessionRoom {
           await this.state.storage.delete("pinHash");
         }
       } else {
-        // Brand-new session: register whatever proves control, preferring the
-        // token so no PIN-derived value is ever stored.
+        // No credential stored: a brand-new session, or one whose room was
+        // cleared. A cleared room still remembers who it belonged to, and
+        // only that agent may have it back.
+        const ownerHash = (await this.state.storage.get<string>("ownerHash")) ?? "";
+        const ownerUntil = (await this.state.storage.get<number>("ownerUntil")) ?? 0;
+        if (ownerHash && Date.now() < ownerUntil) {
+          const presented = await credentialHashes(token, pinHash);
+          if (!presented.some((h) => timingSafeEqual(h, ownerHash))) {
+            return "session credentials mismatch";
+          }
+        }
+        // Register whatever proves control, preferring the token so no
+        // PIN-derived value is ever stored.
         if (token) {
           await this.state.storage.put("token", token);
         } else {
@@ -447,6 +483,12 @@ export class SessionRoom {
         await this.state.storage.put("agentAuthed", true);
       }
       // The visitor gate's attempt count is its own; reconnecting leaves it.
+      // Remember who this room belongs to, for after it is cleared.
+      const owner = await credentialHashes(
+        (await this.state.storage.get<string>("token")) ?? "",
+        (await this.state.storage.get<string>("pinHash")) ?? "",
+      );
+      await this.state.storage.put({ ownerHash: owner[0], ownerUntil: Date.now() + this.ownerKeep });
       ws.serializeAttachment({ role: attachment.role, authed: true } satisfies Attachment);
       ws.send(JSON.stringify({ type: "auth_ok" }));
 
@@ -1311,6 +1353,19 @@ export class SessionRoom {
 }
 
 // ---- shared crypto / encoding helpers ----
+
+// credentialHashes is what a room keeps of an agent's credential once it is
+// cleared: SHA-256 of the token, or of the legacy pin_hash. The first entry is
+// the one to store (the token when there is one).
+async function credentialHashes(token: string, pinHash: string): Promise<string[]> {
+  const h = async (label: string, v: string) =>
+    [...new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(label + v)))]
+      .map((b) => b.toString(16).padStart(2, "0")).join("");
+  const out: string[] = [];
+  if (token) out.push(await h("token:", token));
+  if (pinHash) out.push(await h("pin_hash:", pinHash));
+  return out;
+}
 
 async function hmacHex(keyHex: string, message: string): Promise<string> {
   const keyBytes = fromHex(keyHex);
