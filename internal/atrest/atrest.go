@@ -315,7 +315,7 @@ func fileFallback(dir string) ([]byte, [idLen]byte, byte, error) {
 		noteFallback(dir)
 		return keys[dir][id], id, srcFile, nil
 	}
-	unlock, err := lockDir(dir)
+	unlock, err := lockFile(dir, "atrest-file.lock", keystoreTimeout)
 	if err != nil {
 		return nil, zero, 0, err
 	}
@@ -362,6 +362,13 @@ func mint(dir string) error {
 		id, ok, locked := fromStore(dir, st)
 		if ok && hex.EncodeToString(id[:]) == m.ID {
 			return nil
+		}
+		if ok {
+			// The store holds a key, just not the one atrest.json names
+			// (an older ~/.reminal restored from a backup): keep what the
+			// store has — never write over a key that exists.
+			m.ID = hex.EncodeToString(id[:])
+			return writeMeta(dir, *m)
 		}
 		if locked || st == nil {
 			return ErrLocked
@@ -488,17 +495,25 @@ func sourceByte(name string) byte {
 	return srcFile
 }
 
-// lockDir takes ~/.reminal/atrest.lock with an OS file lock, which the kernel
-// lets go of if the holder dies: no stale lock, no two holders.
+// lockDir takes ~/.reminal/atrest.lock, held while the key is made. A
+// process that cannot get it soon gives up with ErrLocked and saves with the
+// key file meanwhile (which has its own lock), so a slow keystore holding it
+// up does not hold up a session start for long.
 func lockDir(dir string) (func(), error) {
+	return lockFile(dir, "atrest.lock", 2*keystoreTimeout)
+}
+
+// lockFile takes an OS file lock, which the kernel lets go of if the holder
+// dies: no stale lock, no two holders.
+func lockFile(dir, name string, wait time.Duration) (func(), error) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, err
 	}
-	f, err := os.OpenFile(filepath.Join(dir, "atrest.lock"), os.O_CREATE|os.O_RDWR, 0o600)
+	f, err := os.OpenFile(filepath.Join(dir, name), os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
 		return nil, err
 	}
-	deadline := time.Now().Add(4 * keystoreTimeout)
+	deadline := time.Now().Add(wait)
 	for {
 		if tryLock(f) {
 			return func() { unlockFile(f); _ = f.Close() }, nil
@@ -525,21 +540,29 @@ func Backend() string {
 	return m.Source
 }
 
-// Available reports whether the key atrest.json names can be had right now
-// (true when there is none yet). For doctor.
-func Available() bool {
+// Status says whether the key atrest.json names can be had right now: "ok"
+// (or no key yet), "locked" (the store did not answer) or "gone" (it answered
+// without it; a new one is made at the next save). For doctor.
+func Status() string {
 	dir, err := Dir()
 	if err != nil {
-		return false
+		return "locked"
 	}
 	keyMu.Lock()
 	defer keyMu.Unlock()
 	m, err := readMeta(dir)
 	if err != nil {
-		return true
+		return "ok"
 	}
-	id, ok, _ := fromStore(dir, storeAt(dir, m))
-	return ok && hex.EncodeToString(id[:]) == m.ID
+	st := storeAt(dir, m)
+	id, ok, locked := fromStore(dir, st)
+	switch {
+	case ok && hex.EncodeToString(id[:]) == m.ID:
+		return "ok"
+	case locked || st == nil:
+		return "locked"
+	}
+	return "gone"
 }
 
 // ---- sealing -------------------------------------------------------------------

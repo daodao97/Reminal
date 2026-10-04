@@ -5,6 +5,7 @@ package atrest
 
 import (
 	"bytes"
+	"encoding/hex"
 	"errors"
 	"os"
 	"os/exec"
@@ -350,5 +351,30 @@ func TestQuarantineKeepsAndPrunes(t *testing.T) {
 	}
 	if ents, _ := os.ReadDir(filepath.Join(dir, "quarantine")); len(ents) != 0 {
 		t.Fatal("old quarantine not pruned")
+	}
+}
+
+// atrest.json naming a different key than the keystore holds (an old
+// ~/.reminal restored from a backup): the keystore's key is kept, never
+// written over.
+func TestStaleMetadataNeverOverwritesStoredKey(t *testing.T) {
+	dir := isolate(t)
+	f := &fakeStore{}
+	useFake(f)
+	blob, _ := Seal("restore", "ABCD2345", []byte("x"))
+	held := append([]byte(nil), f.key...)
+	other, _ := NewKey()
+	oid := keyID(other)
+	_ = writeMeta(dir, meta{V: 1, Source: "keychain", ID: hex.EncodeToString(oid[:]), Account: "acct"})
+	resetCache()
+	if _, err := Seal("restore", "ABCD2345", []byte("y")); err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(f.key, held) || f.puts != 1 {
+		t.Fatal("the key the keystore held was written over")
+	}
+	resetCache()
+	if pt, err := Open("restore", "ABCD2345", blob); err != nil || string(pt) != "x" {
+		t.Fatalf("%q %v", pt, err)
 	}
 }

@@ -188,6 +188,11 @@ func readLegacyRestore(id string) (*Restore, error) {
 	return &r, nil
 }
 
+func plainNewer(plain string, sealed os.FileInfo) bool {
+	fi, err := os.Stat(plain)
+	return err == nil && fi.ModTime().After(sealed.ModTime())
+}
+
 func sessionRunning(id string) bool {
 	a, err := ReadActiveByID(id)
 	return err == nil && a != nil
@@ -212,7 +217,9 @@ func migrateLegacyScrollback(id string) error {
 	if err != nil {
 		return err
 	}
-	if _, err := os.Stat(sp); err != nil {
+	// A sealed copy written by this version is newer — unless the plain one
+	// was written after it (an older version run again in between).
+	if sfi, err := os.Stat(sp); err != nil || plainNewer(lsp, sfi) {
 		blob, err := SealScrollback(id, pt)
 		if err != nil {
 			return err
