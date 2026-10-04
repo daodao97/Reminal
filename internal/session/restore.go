@@ -368,6 +368,12 @@ func ReadRestores() ([]Restore, error) {
 // its agent's conversation id, sealed or from an older version.
 func ClearRestore(id string) error {
 	id = strings.ToUpper(id)
+	// The lock file goes too, or one is left per session ever run. Removing a
+	// lock file others might open is the classic flock gotcha (one process
+	// locks the deleted file while another creates a new one); it happens
+	// only here, as the session ends for good, so the risk is negligible. On
+	// Windows the remove fails while the file is open and is ignored; the
+	// lock file then simply stays.
 	if unlock, err := lockSession(id); err == nil {
 		defer func() {
 			if dir, err := restoreDir(); err == nil {
