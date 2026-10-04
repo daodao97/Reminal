@@ -236,6 +236,11 @@ func (a *Agent) handleControlConn(conn net.Conn) {
 			}
 		}()
 		return
+	case line == "pin":
+		// The PIN of this running session, for `reminal info` / list when
+		// the copy in its record could not be opened (the keystore locked
+		// and no key file to fall back to). The socket is this user's only.
+		_, _ = fmt.Fprintln(conn, "ok", a.pin)
 	case line == "repin":
 		// `reminal repin`: a hot-restart that hands the successor a fresh PIN
 		// instead of the current one. The restart already gives the session a

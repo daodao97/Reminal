@@ -6,10 +6,13 @@ package session
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io/fs"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -174,5 +177,61 @@ func TestLiveOldSessionNotMigrated(t *testing.T) {
 	}
 	if r, _ := ReadRestore("LIVE2345"); r == nil || r.Name != "fresh" {
 		t.Fatalf("sealed copy: %+v", r)
+	}
+}
+
+// Several processes migrating the same old records at once (the daemon at
+// start while someone runs `reminal restore`) lose nothing: every record ends
+// up sealed, readable, with no plain copy and nothing quarantined.
+func TestParallelMigrationLosesNothing(t *testing.T) {
+	if os.Getenv("REMINAL_MIGRATE_HELPER") == "1" {
+		_, _ = ReadRestores()
+		return
+	}
+	dir := isolateHome(t)
+	rd := filepath.Join(dir, "restore")
+	_ = os.MkdirAll(rd, 0o700)
+	const n = 120
+	ids := make([]string, n)
+	for i := range ids {
+		ids[i] = fmt.Sprintf("M%07d", i)
+		plain, _ := json.Marshal(Restore{ID: ids[i], PIN: fmt.Sprintf("%06d", i), SavedAt: time.Now()})
+		_ = os.WriteFile(filepath.Join(rd, ids[i]+".json"), plain, 0o600)
+		_ = os.WriteFile(filepath.Join(rd, ids[i]+".scrollback.json"), []byte(`{"v":1}`), 0o600)
+	}
+	// Seal once first so every process shares one key (as on a real machine
+	// whose key exists before the upgrade's first start).
+	if _, err := SealScrollback("WARMUP00", []byte("x")); err != nil {
+		t.Fatal(err)
+	}
+	var wg sync.WaitGroup
+	for p := 0; p < 4; p++ { // separate processes
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			cmd := exec.Command(os.Args[0], "-test.run=^TestParallelMigrationLosesNothing$")
+			cmd.Env = append(os.Environ(), "REMINAL_MIGRATE_HELPER=1")
+			if out, err := cmd.CombinedOutput(); err != nil {
+				t.Errorf("helper: %v %s", err, out)
+			}
+		}()
+	}
+	for g := 0; g < 4; g++ { // and goroutines in this one
+		wg.Add(1)
+		go func() { defer wg.Done(); _, _ = ReadRestores() }()
+	}
+	wg.Wait()
+	resetAtrestCache(t)
+	for i, id := range ids {
+		if _, err := os.Stat(filepath.Join(rd, id+".json")); err == nil {
+			t.Errorf("%s: plain record left", id)
+		}
+		r, err := ReadRestore(id)
+		if err != nil || r.PIN != fmt.Sprintf("%06d", i) {
+			t.Errorf("%s: lost (%v)", id, err)
+		}
+	}
+	if q, _ := os.ReadDir(filepath.Join(rd, "quarantine")); len(q) > 0 {
+		t.Errorf("%d files quarantined", len(q))
 	}
 }

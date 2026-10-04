@@ -7,6 +7,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 	"unsafe"
 
@@ -20,13 +21,21 @@ const caseInsensitiveFS = true
 // dpapiStore keeps the key wrapped by DPAPI for the current user: the blob in
 // ~/.reminal/atrest.key.dpapi opens only for this Windows account. The daemon
 // runs as the user (an HKCU Run key), so it shares the CLI's DPAPI scope.
-type dpapiStore struct{ dir string }
+type dpapiStore struct{ dir, file string }
 
-func osStore(dir, account string) store { return dpapiStore{dir: dir} }
+// osStore: the account's suffix after a dot (a key kept by id, see
+// promoteFallback) picks its own blob file.
+func osStore(dir, account string) store {
+	name := "atrest.key.dpapi"
+	if i := strings.LastIndexByte(account, '.'); i >= 0 {
+		name = "atrest-" + account[i+1:] + ".key.dpapi"
+	}
+	return dpapiStore{dir: dir, file: name}
+}
 
 func (dpapiStore) name() string   { return "dpapi" }
 func (dpapiStore) source() byte   { return srcDPAPI }
-func (d dpapiStore) path() string { return filepath.Join(d.dir, "atrest.key.dpapi") }
+func (d dpapiStore) path() string { return filepath.Join(d.dir, d.file) }
 
 var dpapiEntropy = []byte("reminal at-rest key")
 

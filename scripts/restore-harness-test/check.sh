@@ -12,7 +12,7 @@ fails=0
 ok()   { echo "ok   $*"; }
 fail() { echo "FAIL $*"; fails=$((fails+1)); }
 skip() { echo "skip $*"; }
-record() { bx "node -e \"const r=require('$H/.reminal/restore/$1.json'); console.log('$2'==='conv' ? (r.conv||'') : (r.fg||''))\""; }
+record() { restore_field "$1" "$([ "$2" = conv ] && echo conv || echo fg)"; }
 setid() { eval "ID_$1=$2"; }
 id()    { eval "echo \$ID_$1"; }
 

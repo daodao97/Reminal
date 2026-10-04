@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"reminal/internal/atomicfile"
 	"reminal/internal/atrest"
 )
 
@@ -86,12 +87,23 @@ func writeFileAtomic(p string, data []byte) error {
 	if err := os.MkdirAll(filepath.Dir(p), 0o700); err != nil {
 		return err
 	}
-	tmp := p + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o600); err != nil {
-		return err
+	// A unique temp name and a replacing rename: two writers can never
+	// remove each other's file, and a reader sees the old file or the new.
+	return atomicfile.Write(p, data, 0o600)
+}
+
+// lockSession serialises writers of one session's restore files across
+// processes (the daemon restoring at start while `reminal restore` runs, a
+// session's save tick while a migration seals its old record).
+func lockSession(id string) (func(), error) {
+	dir, err := restoreDir()
+	if err != nil {
+		return nil, err
 	}
-	_ = os.Remove(p) // Windows rename will not replace
-	return os.Rename(tmp, p)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return nil, err
+	}
+	return atrest.Lock(dir, "."+id+".lock", 5*time.Second)
 }
 
 // WriteRestore saves (replaces) a session's restore record, sealed. When the
@@ -99,6 +111,15 @@ func writeFileAtomic(p string, data []byte) error {
 // — never the record in the clear.
 func WriteRestore(r Restore) error {
 	r.ID = strings.ToUpper(r.ID)
+	unlock, err := lockSession(r.ID)
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	return writeRestoreLocked(r)
+}
+
+func writeRestoreLocked(r Restore) error {
 	p, err := restorePath(r.ID, ".sealed")
 	if err != nil {
 		return err
@@ -114,7 +135,13 @@ func WriteRestore(r Restore) error {
 	if err := writeFileAtomic(p, blob); err != nil {
 		return err
 	}
-	// What an older version left in the clear is superseded.
+	// What an older version left in the clear is superseded — once the
+	// sealed copy is on disk and opens.
+	if back, err := os.ReadFile(p); err != nil {
+		return err
+	} else if _, err := atrest.Open(kindRestore, r.ID, back); err != nil {
+		return err
+	}
 	if lp, err := restorePath(r.ID, ".json"); err == nil {
 		_ = os.Remove(lp)
 	}
@@ -182,8 +209,29 @@ func readLegacyRestore(id string) (*Restore, error) {
 	if r.ID == "" {
 		r.ID = id
 	}
-	if !sessionRunning(id) {
-		_ = WriteRestore(r) // seals the scrollback too, then drops the plain copies
+	if sessionRunning(id) {
+		return &r, nil
+	}
+	unlock, err := lockSession(id)
+	if err != nil {
+		return &r, nil // someone else is migrating it; read it as it is
+	}
+	defer unlock()
+	// Re-read under the lock: another process may have sealed it already,
+	// or the session may have written a newer plain record meanwhile.
+	b, err = os.ReadFile(lp)
+	if errors.Is(err, os.ErrNotExist) {
+		return &r, nil
+	}
+	if err == nil {
+		var cur Restore
+		if json.Unmarshal(b, &cur) == nil {
+			if cur.ID == "" {
+				cur.ID = id
+			}
+			r = cur
+		}
+		_ = writeRestoreLocked(r) // seals the scrollback too, then drops the plain copies
 	}
 	return &r, nil
 }
@@ -225,6 +273,11 @@ func migrateLegacyScrollback(id string) error {
 			return err
 		}
 		if err := writeFileAtomic(sp, blob); err != nil {
+			return err
+		}
+		if back, err := os.ReadFile(sp); err != nil {
+			return err
+		} else if _, err := OpenScrollback(id, back); err != nil {
 			return err
 		}
 	}

@@ -35,7 +35,7 @@ func (s keychainStore) get() ([]byte, error) {
 		// 44 is also what a keychain outside this security session's
 		// search list says. Believe "not there" only once a throwaway item
 		// can be written and read back.
-		if s.canary() {
+		if canaryOn && s.canary() {
 			return nil, errNotFound
 		}
 		return nil, ErrLocked
@@ -59,6 +59,8 @@ func (s keychainStore) canary() bool {
 	}
 	out, _, _, err := runTool(nil, "/usr/bin/security", "find-generic-password",
 		"-s", keystoreCanary, "-a", s.account, "-w")
+	_, _, _, _ = runTool(nil, "/usr/bin/security", "delete-generic-password",
+		"-s", keystoreCanary, "-a", s.account)
 	return err == nil && strings.TrimSpace(string(out)) == "01"
 }
 

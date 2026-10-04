@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"reminal/internal/atomicfile"
 	"reminal/internal/atrest"
 )
 
@@ -117,20 +118,10 @@ func (a *Agent) writeScrollbackDumpTo(path string, seal func([]byte) ([]byte, er
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return err
 	}
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, body, 0o600); err != nil {
-		return err
-	}
-	// Windows rename refuses to replace an existing dest. A leftover from a
-	// failed restart would then make every later dump fail open (no history).
-	// Crash between this remove and rename leaves only .tmp; take/remove
-	// delete that too.
-	_ = os.Remove(path)
-	if err := os.Rename(tmp, path); err != nil {
-		_ = os.Remove(tmp)
-		return err
-	}
-	return nil
+	// Unique temp name, replacing rename, flushed: no window where the old
+	// file is gone and the new one not there, and no two writers removing
+	// each other's file.
+	return atomicfile.Write(path, body, 0o600)
 }
 
 // dumpScrollbackForRestart writes the dump if there is history and returns

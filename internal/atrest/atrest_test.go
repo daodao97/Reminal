@@ -33,40 +33,62 @@ func isolate(t *testing.T) string {
 
 func resetCache() { ResetCacheForTest() }
 
-// fakeStore is an OS keystore whose answers the test controls.
+// fakeStore is an OS keystore whose answers the test controls. Entries are
+// per account, like a real keychain; key is the main account's entry.
 type fakeStore struct {
-	mu     sync.Mutex
-	key    []byte
-	locked bool
-	puts   int
+	mu      sync.Mutex
+	key     []byte
+	entries map[string][]byte
+	locked  bool
+	puts    int
 }
 
-func (*fakeStore) name() string { return "keychain" }
-func (*fakeStore) source() byte { return srcKeychain }
-func (f *fakeStore) get() ([]byte, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	if f.locked {
+type fakeEntry struct {
+	f    *fakeStore
+	acct string
+}
+
+func (fakeEntry) name() string { return "keychain" }
+func (fakeEntry) source() byte { return srcKeychain }
+
+func (e fakeEntry) main() bool { return !strings.Contains(e.acct, ".") }
+
+func (e fakeEntry) get() ([]byte, error) {
+	e.f.mu.Lock()
+	defer e.f.mu.Unlock()
+	if e.f.locked {
 		return nil, ErrLocked
 	}
-	if f.key == nil {
+	k := e.f.entries[e.acct]
+	if e.main() {
+		k = e.f.key
+	}
+	if k == nil {
 		return nil, errNotFound
 	}
-	return append([]byte(nil), f.key...), nil
+	return append([]byte(nil), k...), nil
 }
-func (f *fakeStore) put(k []byte) error {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	if f.locked {
+
+func (e fakeEntry) put(k []byte) error {
+	e.f.mu.Lock()
+	defer e.f.mu.Unlock()
+	if e.f.locked {
 		return ErrLocked
 	}
-	f.puts++
-	f.key = append([]byte(nil), k...)
+	e.f.puts++
+	if e.main() {
+		e.f.key = append([]byte(nil), k...)
+		return nil
+	}
+	if e.f.entries == nil {
+		e.f.entries = map[string][]byte{}
+	}
+	e.f.entries[e.acct] = append([]byte(nil), k...)
 	return nil
 }
 
 func useFake(f *fakeStore) {
-	osStoreFor = func(string, string) store { return f }
+	osStoreFor = func(_ string, acct string) store { return fakeEntry{f, acct} }
 	osUsable = func() bool { return true }
 	allowOSStore = func() bool { return true }
 }
@@ -376,5 +398,129 @@ func TestStaleMetadataNeverOverwritesStoredKey(t *testing.T) {
 	resetCache()
 	if pt, err := Open("restore", "ABCD2345", blob); err != nil || string(pt) != "x" {
 		t.Fatalf("%q %v", pt, err)
+	}
+}
+
+// atrest.json damaged or deleted while the keystore that holds the key cannot
+// be reached (no session bus): later, never gone, and no key is made over it.
+func TestDamagedMetaWithUnreachableStoreIsLocked(t *testing.T) {
+	for _, damage := range []string{"corrupt", "deleted"} {
+		t.Run(damage, func(t *testing.T) {
+			dir := isolate(t)
+			f := &fakeStore{}
+			useFake(f)
+			blob, err := Seal("restore", "ABCD2345", []byte("x"))
+			if err != nil || blob[len(magic)+1] != srcKeychain {
+				t.Fatalf("seal: %v", err)
+			}
+			if damage == "corrupt" {
+				_ = os.WriteFile(filepath.Join(dir, "atrest.json"), []byte("{not json"), 0o600)
+			} else {
+				_ = os.Remove(filepath.Join(dir, "atrest.json"))
+			}
+			osStoreFor = func(string, string) store { return nil } // unreachable from here
+			resetCache()
+			if _, err := Open("restore", "ABCD2345", blob); !errors.Is(err, ErrLocked) {
+				t.Fatalf("open: %v, want ErrLocked", err)
+			}
+			if damage == "corrupt" {
+				// Saving goes on with the key file; atrest.json is left alone.
+				before, _ := os.ReadFile(filepath.Join(dir, "atrest.json"))
+				if _, err := Seal("restore", "ABCD2345", []byte("y")); err != nil {
+					t.Fatalf("seal with damaged meta: %v", err)
+				}
+				after, _ := os.ReadFile(filepath.Join(dir, "atrest.json"))
+				if !bytes.Equal(before, after) {
+					t.Fatal("a damaged atrest.json was rewritten")
+				}
+			}
+			// Reachable again: the blob opens.
+			useFake(f)
+			resetCache()
+			if pt, err := Open("restore", "ABCD2345", blob); err != nil || string(pt) != "x" {
+				t.Fatalf("after: %q %v", pt, err)
+			}
+		})
+	}
+}
+
+// An empty (or garbled) key file — a crash mid-write — is never "no key":
+// blobs are locked, not gone, and the file is never written over.
+func TestEmptyKeyFileIsLockedNeverReplaced(t *testing.T) {
+	for _, content := range []string{"", "zz-not-hex\n"} {
+		dir := isolate(t)
+		blob, err := Seal("restore", "ABCD2345", []byte("x"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		kf := filepath.Join(dir, "atrest.key")
+		good, _ := os.ReadFile(kf)
+		_ = os.WriteFile(kf, []byte(content), 0o600)
+		resetCache()
+		if _, err := Open("restore", "ABCD2345", blob); !errors.Is(err, ErrLocked) {
+			t.Fatalf("%q: open %v, want ErrLocked", content, err)
+		}
+		resetCache()
+		if _, err := Seal("restore", "ABCD2345", []byte("y")); err == nil {
+			t.Fatalf("%q: sealed with a key file it cannot read", content)
+		}
+		if b, _ := os.ReadFile(kf); string(b) != content {
+			t.Fatalf("%q: key file was written over", content)
+		}
+		_ = os.WriteFile(kf, good, 0o600)
+		resetCache()
+		if pt, err := Open("restore", "ABCD2345", blob); err != nil || string(pt) != "x" {
+			t.Fatalf("%q: after repair %q %v", content, pt, err)
+		}
+	}
+}
+
+// A second key-file writer never replaces the first one's file.
+func TestKeyFileNeverReplaced(t *testing.T) {
+	dir := isolate(t)
+	fs := fileStore{dir: dir}
+	_ = os.MkdirAll(dir, 0o700)
+	a, _ := NewKey()
+	b, _ := NewKey()
+	if err := fs.put(a); err != nil {
+		t.Fatal(err)
+	}
+	if err := fs.put(b); err == nil {
+		t.Fatal("second put replaced the key file")
+	}
+	if got, _ := fs.get(); !bytes.Equal(got, a) {
+		t.Fatal("key file changed")
+	}
+}
+
+// A key file made while the keychain was locked moves into the keychain (by
+// id) once it answers, and the file goes; what it sealed still opens.
+func TestFallbackKeyMovesIntoKeystore(t *testing.T) {
+	dir := isolate(t)
+	f := &fakeStore{}
+	useFake(f)
+	if _, err := Seal("restore", "ABCD2345", []byte("x")); err != nil {
+		t.Fatal(err)
+	}
+	f.locked = true
+	resetCache()
+	fb, err := Seal("restore", "ABCD2345", []byte("while locked"))
+	if err != nil || fb[len(magic)+1] != srcFile {
+		t.Fatalf("fallback seal: %v", err)
+	}
+	f.locked = false
+	resetCache()
+	if _, err := Seal("restore", "ABCD2345", []byte("after")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "atrest.key")); !os.IsNotExist(err) {
+		t.Fatal("key file still there after the keystore answered")
+	}
+	if len(f.entries) != 1 {
+		t.Fatalf("keystore entries by id: %d", len(f.entries))
+	}
+	resetCache()
+	if pt, err := Open("restore", "ABCD2345", fb); err != nil || string(pt) != "while locked" {
+		t.Fatalf("fallback blob after the move: %q %v", pt, err)
 	}
 }

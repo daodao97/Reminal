@@ -51,14 +51,22 @@ func (f fileStore) get() ([]byte, error) {
 	}
 	k, err := hex.DecodeString(strings.TrimSpace(string(b)))
 	if err != nil || len(k) != keyLen {
-		return nil, errNotFound
+		// There but unreadable (a crash mid-write on an old version, a
+		// damaged disk): never "no key" — that would quarantine everything
+		// and make a new key over this one.
+		return nil, ErrLocked
 	}
 	return k, nil
 }
 
+// put writes the key file. It never replaces one that exists.
 func (f fileStore) put(k []byte) error {
-	return atomicfile.Write(f.path(), []byte(hex.EncodeToString(k)+"\n"), 0o600)
+	return atomicfile.WriteNew(f.path(), []byte(hex.EncodeToString(k)+"\n"), 0o600)
 }
+
+// canaryOn: a keystore's "not found" is confirmed with a throwaway write.
+// Off for read-only checks (doctor), which must not write anything.
+var canaryOn = true
 
 // runTool runs a keystore helper with a hard timeout. A timeout, a missing
 // binary, anything but a clean exit comes back as an error with the exit code

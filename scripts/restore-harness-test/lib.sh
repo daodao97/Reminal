@@ -122,16 +122,19 @@ shows()       { screen "$1" | grep -q -- "$2"; }          # ID's screen has TEXT
 shows_after() { since_restore "$1" | grep -q -- "$2"; }   # …since its restore
 # record_field ID FILE FIELD — a field of a session's active or restore record.
 record_field() { bx "node -e \"try{console.log(require('$H/.reminal/$2').$3||'')}catch(e){}\"" 2>/dev/null | tr -d '\r'; }
+# restore_field ID FIELD — a field of a session's restore record. Those are
+# sealed on disk; `reminal restore --records` prints them (no PIN or token).
+restore_field() { bx "reminal restore --records | node -e \"let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{try{const r=JSON.parse(s).find(x=>x.id==='$1');console.log((r&&r.$2)||'')}catch(e){}})\"" 2>/dev/null | tr -d '\r'; }
 # running ID PROG — PROG is in the foreground of ID: from the active record
 # (updated the moment it starts), or the restore record where the OS gives the
 # active record no foreground (Windows).
-running() { [ "$(record_field "$1" "active-$1.json" fg)" = "$2" ] || [ "$(record_field "$1" "restore/$1.json" fg)" = "$2" ]; }
+running() { [ "$(record_field "$1" "active-$1.json" fg)" = "$2" ] || [ "$(restore_field "$1" fg)" = "$2" ]; }
 # ready ID PROG — PROG has started in ID and had a moment to draw.
 ready() { eventually 60 running "$1" "$2" && sleep 3; }
 # enough_sessions N — at least N sessions are up (after a reboot).
 enough_sessions() { [ "$(nsessions)" -ge "$1" ]; }
 # saved ID PROG — ID's restore record says PROG is running.
-saved() { [ "$(record_field "$1" "restore/$1.json" fg)" = "$2" ]; }
+saved() { [ "$(restore_field "$1" fg)" = "$2" ]; }
 # has_conv ID — ID's agent reported a conversation id.
 has_conv() { [ -n "$(bx "cat $H/.reminal/restore/$1.conv 2>/dev/null")" ]; }
 

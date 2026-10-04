@@ -301,17 +301,31 @@ Where the key lives:
 | Linux without a keyring, containers | `~/.reminal/atrest.key`, mode 0600 | Same protection as the plain files it replaces: the contents are not greppable, but anyone who can read `~/.reminal` can read the key. |
 
 `~/.reminal/atrest.json` records which of these holds the key. A run with `HOME`
-pointed somewhere other than the user's real home, or with `REMINAL_KEYSTORE=file`,
-always uses the file, so a test can never write into the person's own keychain.
+pointed somewhere other than the user's real home never touches the OS keystore at
+all, not even to read, so a test can never reach the person's own keychain.
+`REMINAL_KEYSTORE=file` keeps a new key out of the OS keystore; a key already kept
+there is still used.
 
 Every keystore call has a 3-second limit; one that does not answer in time is
-treated as locked. A locked keystore never stops a session from starting: saved
-details are written once the key is available, and restoring after a reboot waits
-and tries again every 30 seconds, so sessions come back once the keystore unlocks.
-A key is treated as gone only when the keystore answers and says it does not exist;
-even then, the files it sealed are moved to the quarantine, not deleted. Deleting a
-file is a plain delete: on SSDs and copy-on-write file systems overwriting in place
-does not reach the old blocks, so reminal does not pretend to.
+treated as locked. A locked keystore never stops a session from starting and never
+costs a save: while it cannot be reached, details are sealed at once with the key
+file instead, and once the keystore answers again that key is moved into it (under
+its own entry, so everything sealed with it still opens) and the file is deleted.
+Restoring after a reboot waits for records it cannot open yet and tries again every
+30 seconds, so sessions come back once the keystore unlocks.
+
+Each sealed file names the key it was sealed with, and is opened from whichever
+store holds that key. A key counts as gone only when every store that could hold it
+answered and none did, and an OS keystore's "not found" is believed only after a
+throwaway check entry can be written and read back (and is then deleted), since a
+locked keyring or a keychain outside this login session can say the same. A damaged
+`atrest.json` or a key file that is present but unreadable counts as locked, never
+as gone, and an existing key or key file is never written over. Even when a key is
+gone, the files it sealed are moved to the quarantine, not deleted. Key and record
+files are flushed to disk before they replace anything, and records are written
+under a per-session lock so two processes converting the same record cannot lose
+it. Deleting a file is a plain delete: on SSDs and copy-on-write file systems
+overwriting in place does not reach the old blocks, so reminal does not pretend to.
 
 Files written by versions before 3.15.11 held the PIN, the relay token and the
 terminal history in the clear (mode 0600). The first start of 3.15.11 or later

@@ -45,7 +45,7 @@ func (s secretServiceStore) get() ([]byte, error) {
 	// So is a locked collection whose unlock prompt was dismissed: believe
 	// "not there" only once a throwaway item can be stored and read back.
 	if code == 1 && len(strings.TrimSpace(string(out))) == 0 && len(strings.TrimSpace(string(stderr))) == 0 {
-		if s.canary() {
+		if canaryOn && s.canary() {
 			return nil, errNotFound
 		}
 		return nil, ErrLocked
@@ -66,6 +66,7 @@ func (s secretServiceStore) canary() bool {
 		return false
 	}
 	out, _, _, err := runTool(nil, "secret-tool", "lookup", "service", keystoreCanary, "account", s.account)
+	_, _, _, _ = runTool(nil, "secret-tool", "clear", "service", keystoreCanary, "account", s.account)
 	return err == nil && strings.TrimSpace(string(out)) == "01"
 }
 

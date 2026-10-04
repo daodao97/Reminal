@@ -190,10 +190,14 @@ func readMeta(dir string) (*meta, error) {
 	}
 	var m meta
 	if json.Unmarshal(b, &m) != nil || m.Source == "" || m.ID == "" {
-		return nil, os.ErrNotExist // unreadable metadata is as good as none
+		// Damaged, not absent: which key it named is unknown, so nothing may
+		// be called gone and no key may be made in its place.
+		return nil, errMetaCorrupt
 	}
 	return &m, nil
 }
+
+var errMetaCorrupt = errors.New("atrest.json is damaged")
 
 func writeMeta(dir string, m meta) error {
 	b, _ := json.Marshal(m)
@@ -278,6 +282,9 @@ func sealingKey(dir string) ([]byte, [idLen]byte, byte, error) {
 		switch {
 		case ok && hex.EncodeToString(id[:]) == m.ID:
 			current[dir] = id
+			if st.source() != srcFile {
+				promoteFallback(dir, m)
+			}
 			return keys[dir][id], id, st.source(), nil
 		case locked || st == nil:
 			return fileFallback(dir)
@@ -324,6 +331,9 @@ func fileFallback(dir string) ([]byte, [idLen]byte, byte, error) {
 		noteFallback(dir)
 		return keys[dir][id], id, srcFile, nil
 	}
+	if _, err := os.Lstat(fs.path()); err == nil {
+		return nil, zero, 0, ErrLocked // there but unreadable: never replaced
+	}
 	k := make([]byte, keyLen)
 	if _, err := rand.Read(k); err != nil {
 		return nil, zero, 0, err
@@ -356,6 +366,9 @@ func mint(dir string) error {
 	}
 	defer unlock()
 	m, merr := readMeta(dir)
+	if merr != nil && !errors.Is(merr, os.ErrNotExist) {
+		return ErrLocked
+	}
 	if merr == nil {
 		// Someone else may have made it while we waited.
 		st := storeAt(dir, m)
@@ -410,7 +423,11 @@ func mint(dir string) error {
 		Logf("reminal: the %s did not take the at-rest key; using a file in %s instead", ost.name(), dir)
 	}
 	fs := fileStore{dir: dir}
-	if old, err := fs.get(); err == nil && len(old) == keyLen {
+	old, ferr := fs.get()
+	if errors.Is(ferr, ErrLocked) {
+		return ErrLocked // a key file that cannot be read is never replaced
+	}
+	if ferr == nil && len(old) == keyLen {
 		// The file holds a fallback key blobs may already be sealed with:
 		// keep it, and make it the key.
 		id := remember(dir, old)
@@ -442,45 +459,103 @@ func promoteFileKey(dir string, k []byte) bool {
 	return true
 }
 
-// openingKey finds the key with this id: one already seen, the store
-// atrest.json names, the key file, the OS keystore. ErrKeyGone only when all
-// of them answered without it.
-func openingKey(dir string, want [idLen]byte) ([]byte, error) {
+// openingKey finds the key with this id, starting with the store the blob's
+// header names: one already seen, then that store (and, for an OS keystore,
+// a fallback key kept there by id), then the rest. ErrKeyGone only when every
+// store answered without it; a store that could not be asked — locked, slow,
+// absent in this context (no session bus) — or a damaged atrest.json makes it
+// ErrLocked.
+func openingKey(dir string, want [idLen]byte, src byte) ([]byte, error) {
 	if k, ok := keys[dir][want]; ok {
 		return k, nil
 	}
 	m, merr := readMeta(dir)
 	locked := merr != nil && !errors.Is(merr, os.ErrNotExist)
 	tried := map[string]bool{}
-	try := func(st store) []byte {
-		if st == nil || tried[st.name()] {
+	try := func(st store, label string) []byte {
+		if tried[label] {
 			return nil
 		}
-		tried[st.name()] = true
+		tried[label] = true
+		if st == nil {
+			return nil
+		}
 		if _, _, l := fromStore(dir, st); l {
 			locked = true
 		}
 		return keys[dir][want]
 	}
-	if m != nil {
-		st := storeAt(dir, m)
-		if st == nil {
-			locked = true
+	osAt := func(suffix string) store {
+		acct := keystoreAccount(canonical(dir))
+		if m != nil && m.Account != "" {
+			acct = m.Account
 		}
-		if k := try(st); k != nil {
+		if suffix != "" {
+			acct += "." + suffix
+		}
+		return osStoreAt(dir, &meta{Account: acct})
+	}
+	tryOS := func() []byte {
+		st := osAt("")
+		if st == nil && src != srcFile {
+			locked = true // the store that sealed it cannot be reached from here
+		}
+		if k := try(st, "os"); k != nil {
+			return k
+		}
+		return try(osAt(hex.EncodeToString(want[:])), "os-by-id")
+	}
+	order := []func() []byte{tryOS, func() []byte { return try(fileStore{dir: dir}, "file") }}
+	if src == srcFile {
+		order[0], order[1] = order[1], order[0]
+	}
+	for _, f := range order {
+		if k := f(); k != nil {
 			return k, nil
 		}
-	}
-	if k := try(fileStore{dir: dir}); k != nil {
-		return k, nil
-	}
-	if k := try(osStoreAt(dir, m)); k != nil {
-		return k, nil
 	}
 	if locked {
 		return nil, ErrLocked
 	}
 	return nil, ErrKeyGone
+}
+
+// promoteFallback moves a key file made while the keystore was not answering
+// into the keystore, kept under its id so blobs sealed with it still open,
+// and deletes the file — once the keystore answers again.
+func promoteFallback(dir string, m *meta) {
+	fs := fileStore{dir: dir}
+	if _, err := os.Lstat(fs.path()); err != nil {
+		return
+	}
+	unlock, err := lockFile(dir, "atrest-file.lock", 0)
+	if err != nil {
+		return // someone else is on it; try at the next save
+	}
+	defer unlock()
+	k, err := fs.get()
+	if err != nil {
+		return
+	}
+	id := keyID(k)
+	acct := m.Account
+	if acct == "" {
+		acct = keystoreAccount(canonical(dir))
+	}
+	st := osStoreAt(dir, &meta{Account: acct + "." + hex.EncodeToString(id[:])})
+	if st == nil || !allowOSStore() {
+		return
+	}
+	if got, err := st.get(); err != nil || !bytes.Equal(got, k) {
+		if st.put(k) != nil {
+			return
+		}
+		if got, err := st.get(); err != nil || !bytes.Equal(got, k) {
+			return
+		}
+	}
+	remember(dir, k)
+	_ = os.Remove(fs.path())
 }
 
 func sourceByte(name string) byte {
@@ -550,9 +625,14 @@ func Status() string {
 	}
 	keyMu.Lock()
 	defer keyMu.Unlock()
+	canaryOn = false // a check writes nothing
+	defer func() { canaryOn = true }()
 	m, err := readMeta(dir)
-	if err != nil {
+	if errors.Is(err, os.ErrNotExist) {
 		return "ok"
+	}
+	if err != nil {
+		return "locked"
 	}
 	st := storeAt(dir, m)
 	id, ok, locked := fromStore(dir, st)
@@ -598,7 +678,7 @@ func Open(kind, id string, blob []byte) ([]byte, error) {
 	var bid [idLen]byte
 	copy(bid[:], blob[len(magic)+2:len(magic)+2+idLen])
 	keyMu.Lock()
-	k, err := openingKey(dir, bid)
+	k, err := openingKey(dir, bid, blob[len(magic)+1])
 	keyMu.Unlock()
 	if err != nil {
 		return nil, err
@@ -698,7 +778,7 @@ func Quarantine(dir, name, reason string, files ...string) error {
 	if err := os.MkdirAll(q, 0o700); err != nil {
 		return err
 	}
-	stamp := time.Now().UTC().Format("20060102T150405Z")
+	stamp := time.Now().UTC().Format("20060102T150405.000000000Z")
 	moved := 0
 	for _, f := range files {
 		if _, err := os.Stat(f); err != nil {
@@ -750,4 +830,11 @@ func ResetCacheForTest() {
 	keyMu.Lock()
 	keys, current, lockedUntil, fellBack = map[string]map[[idLen]byte][]byte{}, map[string][idLen]byte{}, time.Time{}, false
 	keyMu.Unlock()
+}
+
+// Lock takes an OS file lock on dir/name, waiting up to wait. The kernel lets
+// it go if the holder dies. For callers that must not interleave (two
+// processes migrating the same record).
+func Lock(dir, name string, wait time.Duration) (func(), error) {
+	return lockFile(dir, name, wait)
 }

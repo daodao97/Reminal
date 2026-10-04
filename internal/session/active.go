@@ -377,9 +377,19 @@ func readActiveFile(path string) (*Active, error) {
 			a.PIN = string(pin)
 		}
 	}
+	// No PIN it could open (older versions always wrote one): ask the
+	// running session itself.
+	if a.PIN == "" && a.Kind != KindPort && PINFromSession != nil {
+		a.PIN = PINFromSession(a.PID)
+	}
 	a.PinSealed = nil
 	return &a, nil
 }
+
+// PINFromSession asks a running session for its PIN (set by the client
+// package: over the session's own control socket). Used only when the copy
+// in its record cannot be opened.
+var PINFromSession func(pid int) string
 
 // pidAlive returns true if a process with this PID exists and is reachable.
 // On Unix this is the standard signal-0 probe; on Windows proc.Alive opens the

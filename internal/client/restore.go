@@ -682,6 +682,16 @@ func isRegularFile(p string) bool {
 }
 
 func init() {
+	session.PINFromSession = func(pid int) string {
+		if pid == os.Getpid() {
+			return "" // never ask ourselves
+		}
+		pin, err := sendControlToDeadline(pid, "pin", time.Second)
+		if err != nil {
+			return ""
+		}
+		return pin
+	}
 	// The sealing package reports a fallback taken or a record set aside —
 	// on stderr, never stdout, which `reminal mcp` speaks its protocol on.
 	atrest.Logf = func(format string, args ...any) { fmt.Fprintf(os.Stderr, "  "+format+"\n", args...) }

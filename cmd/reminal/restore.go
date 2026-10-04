@@ -4,6 +4,7 @@
 package main
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -18,6 +19,9 @@ import (
 // client/restore.go): `reminal restore`, `reminal restore <id|name>`,
 // `reminal restore --all`.
 func runRestore(args []string) error {
+	if len(args) > 0 && args[0] == "--records" {
+		return printRestoreRecords()
+	}
 	gone, err := client.Restorable()
 	if errors.Is(err, atrest.ErrLocked) {
 		fmt.Println("Some saved sessions are locked in your keychain right now; unlock it (log in to the desktop) and run this again to see them.")
@@ -88,4 +92,31 @@ func restoreAgo(d time.Duration) string {
 		return fmt.Sprintf("%dh", int(d.Hours()))
 	}
 	return fmt.Sprintf("%dd", int(d.Hours()/24))
+}
+
+// printRestoreRecords prints every saved session record as JSON — running
+// sessions included, PIN and relay token left out. The records are sealed on
+// disk; this is how a script (the restore test rigs) reads what they say.
+func printRestoreRecords() error {
+	all, err := session.ReadRestores()
+	if err != nil && !errors.Is(err, atrest.ErrLocked) {
+		return err
+	}
+	type rec struct {
+		ID       string    `json:"id"`
+		Name     string    `json:"name,omitempty"`
+		Cwd      string    `json:"cwd,omitempty"`
+		Headless bool      `json:"headless,omitempty"`
+		Fg       string    `json:"fg,omitempty"`
+		FgArgs   []string  `json:"fg_args,omitempty"`
+		Conv     string    `json:"conv,omitempty"`
+		SavedAt  time.Time `json:"saved_at"`
+	}
+	out := make([]rec, 0, len(all))
+	for _, r := range all {
+		out = append(out, rec{r.ID, r.Name, r.Cwd, r.Headless, r.Fg, r.FgArgs, r.Conv, r.SavedAt})
+	}
+	b, _ := json.MarshalIndent(out, "", "  ")
+	fmt.Println(string(b))
+	return err
 }
