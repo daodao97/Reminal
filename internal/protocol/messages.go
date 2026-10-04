@@ -35,16 +35,11 @@ const (
 	TypeResume       MessageType = "resume"
 	TypeAgentOnline  MessageType = "agent_online"
 	TypeAgentOffline MessageType = "agent_offline"
-	// TypeKexInit is the viewer's opening message of the PIN-authenticated
-	// X25519 handshake. Carries the viewer's ephemeral public key, blinded
-	// by XOR-ing with HKDF(PIN). ExID is a random per-handshake
-	// correlation ID the viewer picks; the agent echoes it in TypeKexResp
-	// so the originating viewer can recognise the response among the
-	// agent's broadcasts. See internal/crypto/kex.go for the construction.
+	// TypeKexInit and TypeKexResp were the PIN handshake before 3.15.6.
+	// Retired: an agent no longer answers kex_init (a viewer that sends it is
+	// told to update), and nothing sends kex_resp. The names stay so the
+	// relays keep forwarding them to those agents, which say so.
 	TypeKexInit MessageType = "kex_init"
-	// TypeKexResp is the agent's reply to a TypeKexInit. Carries the
-	// agent's blinded ephemeral public key plus the wrapped session key
-	// (AES-256-GCM under HKDF(ECDH-shared, salt=ex_id)).
 	TypeKexResp MessageType = "kex_resp"
 	// TypePakeInit starts a PIN-authenticated handshake: the viewer's CPace
 	// element (Data) and a fresh exchange id (ExID). See internal/crypto/cpace.go.

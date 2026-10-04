@@ -145,7 +145,7 @@ func runFakeAgent(t *testing.T, sessionID, pin string, sessionKey []byte, snapsh
 				Wrap: base64.StdEncoding.EncodeToString(wrapped),
 			}
 			if seals {
-				resp.Seal = ag.sealInfoFor(m.Frames, key, exID)
+				resp.Seal = ag.sealInfoFor(m.Frames, key, exID, m.Src)
 			}
 			_ = conn.WriteJSON(resp)
 		case protocol.TypeResize:

@@ -182,16 +182,19 @@ type Agent struct {
 	writeMu sync.Mutex // serializes WS writes; safe across sender/reader goroutines
 	seal    sealState  // sealed session frames (sealedframes.go)
 
-	// kex throttle. Each kex_init we answer is exactly one online PIN guess
-	// (the viewer-side blinding means a forged handshake can test only one
-	// candidate — see crypto/kex.go), so a token bucket here bounds an active
-	// relay's brute-force of the 6-digit PIN. This replaces the relay's old
-	// 5-strike lockout, which we removed because the relay no longer sees the
-	// PIN at all (it can't, without becoming able to MITM the EKE).
+	// PIN-handshake allowance. Each pake_init we answer is one online PIN
+	// guess (CPace, crypto/cpace.go: a handshake tests one candidate), so a
+	// token bucket here bounds guessing. The relay sees no PIN and keeps no
+	// lockout of its own; it only paces handshakes per address.
 	kexMu         sync.Mutex
 	kexTokens     float64
 	kexLongTokens float64                  // the long-term allowance; see kexLongBurst
 	kexSrc        map[string]*kexSrcBucket // per-source share; see allowKexFrom
+	kexProven     map[string]time.Time     // sources that proved the PIN; see markProvenSource
+	kexLastSrc    string                   // the two most recent distinct sources (otherSourceSeen)
+	kexLastAt     time.Time
+	kexPrevSrc    string
+	kexPrevAt     time.Time
 	kexLast       time.Time
 
 	// Owner handshakes get their own allowance. An own_init is not a PIN
@@ -3331,18 +3334,34 @@ const (
 // allowKex reports whether we should answer another PIN handshake right now,
 // taking one token from each allowance if so. A refused attempt is dropped
 // silently (the viewer sees a handshake timeout and can retry later).
-// Per-source share of the PIN-handshake allowance. A relay that tags each
+// Per-source pacing of the PIN-handshake allowance. A relay that tags each
 // handshake with its source (Message.Src) lets the agent tell sources apart.
-// The share applies only when the machine-wide long-term allowance is below
-// half and another source has been seen recently: then a source that has used
-// its share (kexSrcBurst, refilled at half the machine-wide rate)
-// waits, so one source cannot use up what is left. A source on its own always
-// gets everything the machine-wide allowance gives. Untagged handshakes have
-// no share.
+//
+// A source is PROVEN once a sealed frame opens on a stream its handshake was
+// issued: that needs the session key, so the PIN (or an owner key). Proven
+// sources are remembered (kexProvenMax, least recently used dropped) until the
+// agent process ends with its session key.
+//
+// With the machine-wide allowance comfortable, every source draws from it
+// alone. Under pressure, with another source about:
+//   - part of each bucket (kexReserve) is kept for proven sources: an unproven
+//     one is refused once a bucket is down to that reserve;
+//   - an unproven source has its own small share (kexSrcNewBurst, growing to
+//     kexSrcBurst once proven) refilled at half the machine-wide rate, so one
+//     source cannot take every token as it comes back.
+//
+// What stays true: a FIRST-time PIN user during a many-address attack can
+// still be made to wait, because nothing tells them apart from the attack
+// before they have proved the PIN once. Owner (PIN-free) devices are not
+// affected; that is the answer for anyone who needs guaranteed access.
+// Untagged handshakes have no share of their own and count as unproven.
 const (
-	kexSrcBurst   = 10
-	kexSrcRefill  = 2 * kexLongRefill
-	kexSrcSources = 1024
+	kexSrcBurst    = 10
+	kexSrcNewBurst = 4
+	kexSrcRefill   = 2 * kexLongRefill
+	kexSrcSources  = 1024
+	kexProvenMax   = 64
+	kexReserve     = 1.0 / 3
 )
 
 type kexSrcBucket struct {
@@ -3350,15 +3369,52 @@ type kexSrcBucket struct {
 	at     time.Time
 }
 
+// noteSource remembers the two most recent distinct sources, so
+// otherSourceSeen is a constant-time check. Callers hold kexMu.
+func (a *Agent) noteSource(src string, now time.Time) {
+	if src != a.kexLastSrc {
+		a.kexPrevSrc, a.kexPrevAt = a.kexLastSrc, a.kexLastAt
+		a.kexLastSrc = src
+	}
+	a.kexLastAt = now
+}
+
 // otherSourceSeen reports whether a source other than src asked within the
 // share's refill window. Callers hold kexMu.
 func (a *Agent) otherSourceSeen(src string, now time.Time) bool {
-	for k, o := range a.kexSrc {
-		if k != src && now.Sub(o.at) < kexSrcBurst*kexSrcRefill {
-			return true
-		}
+	const window = kexSrcBurst * kexSrcRefill
+	if a.kexLastSrc != "" && a.kexLastSrc != src && now.Sub(a.kexLastAt) < window {
+		return true
 	}
-	return false
+	return a.kexPrevSrc != "" && a.kexPrevSrc != src && now.Sub(a.kexPrevAt) < window
+}
+
+// markProvenSource records that src proved the PIN. "" is nothing.
+func (a *Agent) markProvenSource(src string) {
+	if src == "" {
+		return
+	}
+	a.kexMu.Lock()
+	defer a.kexMu.Unlock()
+	if a.kexProven == nil {
+		a.kexProven = map[string]time.Time{}
+	}
+	if _, ok := a.kexProven[src]; !ok && len(a.kexProven) >= kexProvenMax {
+		var oldest string
+		var at time.Time
+		for k, t := range a.kexProven {
+			if oldest == "" || t.Before(at) {
+				oldest, at = k, t
+			}
+		}
+		delete(a.kexProven, oldest)
+	}
+	a.kexProven[src] = time.Now()
+}
+
+func (a *Agent) isProvenSource(src string) bool {
+	_, ok := a.kexProven[src]
+	return ok
 }
 
 // allowKex reports whether to answer another PIN handshake now.
@@ -3382,15 +3438,22 @@ func (a *Agent) allowKexFrom(now time.Time, src string) (ok bool, retry time.Dur
 	}
 	a.kexLast = now
 
+	proven := src != "" && a.isProvenSource(src)
+	pressure := a.kexLongTokens < kexLongBurst/2
 	var b *kexSrcBucket
 	if src != "" {
+		a.noteSource(src, now)
 		if a.kexSrc == nil {
 			a.kexSrc = map[string]*kexSrcBucket{}
 		}
+		share := float64(kexSrcNewBurst)
+		if proven {
+			share = kexSrcBurst
+		}
 		if b = a.kexSrc[src]; b == nil && len(a.kexSrc) < kexSrcSources {
-			b = &kexSrcBucket{tokens: kexSrcBurst, at: now}
+			b = &kexSrcBucket{tokens: share, at: now}
 			a.kexSrc[src] = b
-		} else if b == nil && len(a.kexSrc) >= kexSrcSources {
+		} else if b == nil {
 			for k, o := range a.kexSrc {
 				if now.Sub(o.at) >= kexSrcBurst*kexSrcRefill {
 					delete(a.kexSrc, k)
@@ -3398,17 +3461,26 @@ func (a *Agent) allowKexFrom(now time.Time, src string) (ok bool, retry time.Dur
 			}
 		}
 		if b != nil {
-			b.tokens = min(kexSrcBurst, b.tokens+now.Sub(b.at).Seconds()/kexSrcRefill.Seconds())
+			b.tokens = min(share, b.tokens+now.Sub(b.at).Seconds()/kexSrcRefill.Seconds())
 			b.at = now
-			if a.kexLongTokens < kexLongBurst/2 && b.tokens < 1 && a.otherSourceSeen(src, now) {
+			if pressure && b.tokens < 1 && a.otherSourceSeen(src, now) {
 				return false, time.Duration((1 - b.tokens) * float64(kexSrcRefill))
 			}
 		}
 	}
-	if a.kexTokens < 1 || a.kexLongTokens < 1 {
-		wait := time.Duration((1 - a.kexTokens) * float64(kexRefill))
-		if w := time.Duration((1 - a.kexLongTokens) * float64(kexLongRefill)); w > wait {
+	// What an unproven source may draw down to; a proven one may use it all.
+	floorShort, floorLong := 1.0, 1.0
+	if !proven && pressure && a.otherSourceSeen(src, now) {
+		floorShort += kexBurst * kexReserve
+		floorLong += kexLongBurst * kexReserve
+	}
+	if a.kexTokens < floorShort || a.kexLongTokens < floorLong {
+		wait := time.Duration((floorShort - a.kexTokens) * float64(kexRefill))
+		if w := time.Duration((floorLong - a.kexLongTokens) * float64(kexLongRefill)); w > wait {
 			wait = w
+		}
+		if wait < time.Second {
+			wait = time.Second
 		}
 		return false, wait
 	}
@@ -3515,7 +3587,7 @@ func (a *Agent) handlePakeInit(conn *websocket.Conn, exIDHex, dataB64 string, fr
 		ExID: exIDHex,
 		Data: base64.StdEncoding.EncodeToString(mine),
 		Wrap: base64.StdEncoding.EncodeToString(wrapped),
-		Seal: a.sealInfoFor(frames, key, exID),
+		Seal: a.sealInfoFor(frames, key, exID, src),
 	})
 }
 
@@ -3604,7 +3676,7 @@ func (a *Agent) handleOwnerInit(conn *websocket.Conn, msg protocol.Message) {
 		MachinePub: base64.StdEncoding.EncodeToString(machinePub),
 		MachineSig: base64.StdEncoding.EncodeToString(machineSig),
 		Wrap:       base64.StdEncoding.EncodeToString(wrapped),
-		Seal:       a.sealInfoFor(msg.Frames, shared, exID),
+		Seal:       a.sealInfoFor(msg.Frames, shared, exID, msg.Src),
 	})
 }
 

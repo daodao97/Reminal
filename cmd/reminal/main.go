@@ -2652,7 +2652,7 @@ func runConnect(target, pinArg string, owner bool) error {
 		}
 		// Only "incorrect PIN" is recoverable in-process; everything else
 		// (locked out, session gone, network) propagates immediately.
-		if attempt < maxAttempts && strings.Contains(err.Error(), "incorrect PIN") {
+		if attempt < maxAttempts && (strings.Contains(err.Error(), "incorrect PIN") || strings.Contains(err.Error(), "PIN mismatch")) {
 			fmt.Fprintf(os.Stderr, "%v — try again (%d/%d).\n", err, attempt, maxAttempts)
 			resolvedPin = "" // force re-prompt on next iteration
 			continue

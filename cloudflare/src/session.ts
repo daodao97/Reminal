@@ -205,20 +205,25 @@ export class SessionRoom {
       return new Response(null, { status: 101, webSocket: client });
     }
 
-    if (role === "agent" || role === "tunnel") {
-      await this.state.storage.deleteAlarm();
+    // The expiry alarm is cancelled once this connection authenticates
+    // (handleAuth), not here: a connection that never does must not keep an
+    // empty room alive. A room that has nothing authenticated yet gets its
+    // expiry armed now, so a socket that never authenticates cannot hold a
+    // brand-new room open either.
+    if ((role === "agent" || role === "tunnel") && !this.authedAgent() && !this.authedTunnel()) {
+      await this.armExpiry();
     }
-
     return new Response(null, { status: 101, webSocket: client });
   }
 
   async webSocketMessage(ws: WebSocket, message: string | ArrayBuffer) {
     const attachment = ws.deserializeAttachment() as Attachment;
+    if (attachment.rejected) return; // told its error and closing; nothing to send it
 
     // A proxied WebSocket visitor: forward the frame verbatim to the agent,
     // before any control-message parsing (these are opaque app frames).
     if (attachment.role === "visitor") {
-      const tunnel = this.getSocket("tunnel");
+      const tunnel = this.authedTunnel();
       if (!tunnel || tunnel.readyState !== WebSocket.OPEN) {
         try { ws.close(1011, "reminal: tunnel offline"); } catch { /* already closing */ }
         return;
@@ -264,9 +269,19 @@ export class SessionRoom {
         }
 
         if (attachment.role === "viewer") {
-          // A message names its type only as "type": the agent reads field
-          // names without regard to case, and this room counts by the exact one.
-          if (Object.keys(parsed).some((k) => k !== "type" && k.toLowerCase() === "type")) return;
+          // A message names its type only as "type", and its source tag only
+          // as "src": the agent reads field names without regard to case (and
+          // the last spelling wins), and this room acts by the exact ones.
+          if (Object.keys(parsed).some((k) => (k !== "type" && k.toLowerCase() === "type") || (k !== "src" && /^[sSſ][rR][cC]$/.test(k)))) return;
+          // The source tag is this room's to set, never the client's: set on
+          // the handshakes that carry one, removed from everything else.
+          if (parsed.type === "own_init") {
+            parsed.src = attachment.src ?? "";
+            message = JSON.stringify(parsed);
+          } else if (parsed.type !== "pake_init" && parsed.type !== "kex_init" && parsed.src !== undefined) {
+            delete parsed.src;
+            message = JSON.stringify(parsed);
+          }
           if (parsed.type === "pake_init" || parsed.type === "kex_init") {
             parsed.src = attachment.src ?? "";
             if (this.agentPresent()) {
@@ -334,8 +349,12 @@ export class SessionRoom {
 
     if (attachment.role === "agent") {
       // An agent socket that never authenticated, or one replaced by another
-      // that has, leaving changes nothing for the viewers.
-      if (!attachment.authed || this.authedAgent(ws)) return;
+      // that has, leaving changes nothing for the viewers. If none is left at
+      // all, the room's expiry starts (or keeps) counting.
+      if (!attachment.authed || this.authedAgent(ws)) {
+        if (!this.authedAgent(ws) && !this.authedTunnel()) await this.armExpiry();
+        return;
+      }
       for (const v of this.getSockets("viewer")) {
         const att = v.deserializeAttachment() as Attachment;
         if (att?.authed && v.readyState === WebSocket.OPEN) {
@@ -357,6 +376,9 @@ export class SessionRoom {
         }));
       }
     } else if (attachment.role === "tunnel") {
+      // A tunnel socket that never authenticated, or one replaced by another
+      // that has, leaving changes nothing for the visitors.
+      if (!attachment.authed || this.authedTunnel(ws)) return;
       // Fail any in-flight tunnel requests so visitors get a clear signal
       // rather than hanging until the per-request timeout. A request already
       // streaming (controller set) can't change its status any more — its
@@ -389,7 +411,7 @@ export class SessionRoom {
       await this.state.storage.setAlarm(Date.now() + this.orphanTTL);
     } else if (attachment.role === "visitor") {
       // Visitor hung up: tell the agent to close the backend connection.
-      const tunnel = this.getSocket("tunnel");
+      const tunnel = this.authedTunnel();
       if (tunnel?.readyState === WebSocket.OPEN && attachment.streamId) {
         // Carry the browser's close code + reason so the backend learns why the
         // visitor left, instead of just seeing the socket vanish.
@@ -410,7 +432,14 @@ export class SessionRoom {
   }
 
   async alarm() {
-    if (this.getSocket("agent") || this.getSocket("tunnel")) return;
+    // Only an authenticated agent or tunnel keeps the room. Sockets that
+    // never authenticated are closed with it.
+    if (this.authedAgent() || this.authedTunnel()) return;
+    for (const role of ["agent", "tunnel"]) {
+      for (const s of this.getSockets(role)) {
+        try { s.close(4001, "authentication required"); } catch { /* already closing */ }
+      }
+    }
     for (const v of this.getSockets("viewer")) {
       if (v.readyState === WebSocket.OPEN) {
         v.send(JSON.stringify({ type: "closed", error: "agent session expired" }));
@@ -514,6 +543,7 @@ export class SessionRoom {
       if (attachment.role === "agent") {
         await this.state.storage.put("agentAuthed", true);
       }
+      await this.state.storage.deleteAlarm();
       // The visitor gate's attempt count is its own; reconnecting leaves it.
       // Remember who this room belongs to, for after it is cleared.
       const owner = await credentialHashes(
@@ -721,7 +751,7 @@ export class SessionRoom {
       }
     }
 
-    const tunnel = this.getSocket("tunnel");
+    const tunnel = this.authedTunnel();
     if (!tunnel || tunnel.readyState !== WebSocket.OPEN) {
       return new Response("reminal: tunnel offline\n", { status: 503 });
     }
@@ -934,7 +964,7 @@ export class SessionRoom {
     }
 
     // Forward to the tunnel WS.
-    const tunnel = this.getSocket("tunnel");
+    const tunnel = this.authedTunnel();
     if (!tunnel || tunnel.readyState !== WebSocket.OPEN) {
       return new Response("reminal: tunnel offline\n", {
         status: 503,
@@ -1391,8 +1421,27 @@ export class SessionRoom {
     return salt;
   }
 
+  // armExpiry sets the room's expiry unless one at least as near is set. A
+  // used room keeps a far-off alarm for its owner record (OWNER_KEEP_MS); that
+  // must not count as expiry being armed. alarm() restores it afterwards.
+  private async armExpiry() {
+    const at = await this.state.storage.getAlarm();
+    const due = Date.now() + this.orphanTTL;
+    if (at === null || at > due) await this.state.storage.setAlarm(due);
+  }
+
   private agentPresent(): boolean {
     return this.authedAgent() !== null;
+  }
+
+  // authedTunnel is the open tunnel socket that has authenticated (other than
+  // except), or null. Only that one receives visitors' traffic.
+  private authedTunnel(except?: WebSocket): WebSocket | null {
+    for (const t of this.getSockets("tunnel")) {
+      if (t === except || t.readyState !== WebSocket.OPEN) continue;
+      if ((t.deserializeAttachment() as Attachment)?.authed) return t;
+    }
+    return null;
   }
 
   // authedAgent is the open agent socket that has authenticated (other than
@@ -1462,8 +1511,14 @@ async function addressTag(ip: string, salt: string): Promise<string | undefined>
 // addressGroup is the address, or the /64 an IPv6 address is in.
 export function addressGroup(ip: string): string {
   if (!ip.includes(":")) return ip;
-  const mapped = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/i.exec(ip);
-  if (mapped) return mapped[1];
+  // IPv4-mapped IPv6, in any of its spellings, groups by the IPv4 address.
+  const dotted = /^(?:0*:)*(?:0*:)?ffff:(\d+\.\d+\.\d+\.\d+)$/i.exec(ip) ?? /^::ffff:(\d+\.\d+\.\d+\.\d+)$/i.exec(ip);
+  if (dotted) return dotted[1];
+  const hexMapped = /^(?:0*:)*(?:0*:)?ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/i.exec(ip);
+  if (hexMapped) {
+    const hi = parseInt(hexMapped[1], 16), lo = parseInt(hexMapped[2], 16);
+    return [hi >> 8, hi & 255, lo >> 8, lo & 255].join(".");
+  }
   const [head, tail = ""] = ip.split("::");
   const h = head ? head.split(":") : [];
   const t = tail ? tail.split(":") : [];

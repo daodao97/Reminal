@@ -122,12 +122,14 @@ func TestAddressGroupByIPv6Prefix(t *testing.T) {
 	end := strings.Index(s[start:], "\n}\n")
 	fn := strings.Replace(s[start:start+end+2], "export function addressGroup(ip: string): string {", "function addressGroup(ip) {", 1)
 	cases := map[string]string{
-		"203.0.113.7":             "203.0.113.7",
-		"2001:db8:1:2:aaaa::1":    "2001:db8:1:2::/64",
-		"2001:db8:1:2:ffff::9999": "2001:db8:1:2::/64",
-		"2001:db8::1":             "2001:db8:0:0::/64",
-		"::1":                     "0:0:0:0::/64",
-		"::ffff:203.0.113.7":      "203.0.113.7",
+		"203.0.113.7":                "203.0.113.7",
+		"2001:db8:1:2:aaaa::1":       "2001:db8:1:2::/64",
+		"2001:db8:1:2:ffff::9999":    "2001:db8:1:2::/64",
+		"2001:db8::1":                "2001:db8:0:0::/64",
+		"::1":                        "0:0:0:0::/64",
+		"::ffff:203.0.113.7":         "203.0.113.7",
+		"0:0:0:0:0:ffff:203.0.113.7": "203.0.113.7",
+		"::ffff:cb00:7107":           "203.0.113.7",
 	}
 	for in, want := range cases {
 		out, err := exec.Command(node, "-e", fn+"\nprocess.stdout.write(addressGroup("+jsString(in)+"))").CombinedOutput()
