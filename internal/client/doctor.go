@@ -269,6 +269,8 @@ func checkAtRestKey() (level, string) {
 		return levelOK, "none yet (made at the first save)"
 	case ks.Missing:
 		return levelFail, "the at-rest key this machine saves with is missing from disk; running sessions still hold it — restart nothing; run `reminal doctor --repair-key`"
+	case ks.MaybeMissing:
+		return levelFail, "the at-rest key this machine saves with can't be found in the " + ks.Source + " right now; if sessions are running they still hold it — restart nothing; run `reminal doctor --repair-key`"
 	case ks.FileOnDesktop:
 		return levelWarn, "kept in a file in ~/.reminal although this is a desktop login (made outside the keystore, over SSH or by a test); the daemon moves it into the keystore once that answers"
 	}
@@ -283,7 +285,7 @@ func RepairAtRestKey() error {
 	if ks.Source == "" {
 		return errors.New("no at-rest key is recorded here (atrest.json missing); nothing to repair")
 	}
-	if !ks.Missing {
+	if !ks.MissingKeyLikely() {
 		fmt.Println("  The at-rest key is in place; nothing to repair.")
 		return nil
 	}

@@ -705,3 +705,61 @@ func TestWriteExclusiveFallback(t *testing.T) {
 		t.Fatal("replaced")
 	}
 }
+
+// The keystore variant of the heal: the entry vanishes from under a process
+// that holds the key; its next Seal (and an Open that hits its cache) confirms
+// with the store and puts the entry back. A process without the key calls it
+// missing, never gone, and mints nothing.
+func TestCurrentKeyHealedIntoKeystore(t *testing.T) {
+	dir := isolate(t)
+	f := &fakeStore{}
+	useFake(f)
+	blob, err := Seal("restore", "ABCD2345", []byte("x"))
+	if err != nil || Backend() != "keychain" {
+		t.Fatalf("seal: %v backend %q", err, Backend())
+	}
+	gone := func() { f.mu.Lock(); f.key = nil; f.mu.Unlock() }
+	has := func() bool { f.mu.Lock(); defer f.mu.Unlock(); return f.key != nil }
+	due := func() { keyMu.Lock(); lastConfirm[dir] = time.Time{}; keyMu.Unlock() }
+
+	// The holder (this process, cache filled) heals on its next Seal.
+	gone()
+	due()
+	if _, err := Seal("restore", "ABCD2345", []byte("y")); err != nil {
+		t.Fatalf("holder seal: %v", err)
+	}
+	if !has() || f.puts != 2 {
+		t.Fatalf("entry not written back by Seal (has=%v puts=%d)", has(), f.puts)
+	}
+	// ...and on an Open that hits its cache.
+	gone()
+	due()
+	if _, err := Open("restore", "ABCD2345", blob); err != nil {
+		t.Fatalf("holder open: %v", err)
+	}
+	if !has() || f.puts != 3 {
+		t.Fatalf("entry not written back by Open (has=%v puts=%d)", has(), f.puts)
+	}
+	// Within the minute the store is not asked again (one lookup a minute).
+	gone()
+	if _, err := Seal("restore", "ABCD2345", []byte("z")); err != nil {
+		t.Fatal(err)
+	}
+	if has() {
+		t.Fatal("confirmed more than once a minute")
+	}
+	// A process without the key: missing, not gone, nothing minted.
+	resetCache()
+	if _, err := Open("restore", "ABCD2345", blob); !errors.Is(err, ErrCurrentKeyMissing) {
+		t.Fatalf("fresh process open: %v", err)
+	}
+	if _, err := Seal("restore", "ABCD2345", []byte("w")); !errors.Is(err, ErrCurrentKeyMissing) {
+		t.Fatalf("fresh process seal: %v", err)
+	}
+	if f.puts != 3 {
+		t.Fatalf("puts %d: something minted over the missing key", f.puts)
+	}
+	if ks := KeyState(); !ks.MaybeMissing || ks.Missing || !ks.MissingKeyLikely() {
+		t.Fatalf("KeyState %+v, want MaybeMissing", ks)
+	}
+}

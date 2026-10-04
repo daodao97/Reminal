@@ -104,8 +104,11 @@ func confirmCurrent(dir string, m *meta, id [idLen]byte) {
 	}
 	if isOS {
 		got, err := st.get()
-		if err != nil || len(got) == keyLen { // locked, or still there
-			return
+		if err == nil && len(got) == keyLen {
+			return // still there
+		}
+		if !errors.Is(err, errNotFound) {
+			return // locked or unreachable: nothing to conclude
 		}
 		// Answered "not found" (confirmed by the canary): put it back.
 	}
@@ -196,8 +199,14 @@ func RestoreKey(keyHex string) error {
 
 // KeyStatus is what `reminal doctor` says about the sealing key.
 type KeyStatus struct {
-	Source  string // "", "file", "keychain", "dpapi", "secret-service"
-	Missing bool   // atrest.json names a key its store does not hold (definitive for the key file)
+	Source string // "", "file", "keychain", "dpapi", "secret-service"
+	// Missing: atrest.json names a key its store does not hold. Definitive
+	// for stores that are files (the key file, the DPAPI blob).
+	Missing bool
+	// MaybeMissing: a keychain or keyring answered "not found" to a lookup
+	// that, being a check, wrote no canary to confirm it; it could also be a
+	// keychain outside this login session.
+	MaybeMissing bool
 	// FileOnDesktop: the key is a file although this is a real login user on
 	// macOS or Windows — it was minted outside the GUI keystore (over SSH,
 	// or by a test binary) and the daemon moves it in once the keystore
@@ -205,7 +214,7 @@ type KeyStatus struct {
 	FileOnDesktop bool
 }
 
-// Status reports the sealing key's state without writing anything.
+// KeyState reports the sealing key's state without writing anything.
 func KeyState() KeyStatus {
 	var s KeyStatus
 	dir, err := Dir()
@@ -219,13 +228,39 @@ func KeyState() KeyStatus {
 		return s
 	}
 	s.Source = m.Source
-	if m.Source == "file" {
+	switch m.Source {
+	case "file":
 		if _, err := os.Lstat(fileStore{dir: dir}.path()); err != nil {
 			s.Missing = true
 		}
 		if osStoreUsable() && osStoreFor(dir, "") != nil && hasDesktopKeystore {
 			s.FileOnDesktop = true
 		}
+	case "dpapi":
+		if st, ok := storeAt(dir, m).(interface{ path() string }); ok {
+			if _, err := os.Lstat(st.path()); err != nil {
+				s.Missing = true
+			}
+		}
+	default: // keychain, secret-service: a lookup, no canary
+		st := storeAt(dir, m)
+		if st == nil || osLocked() {
+			return s
+		}
+		canaryOn = false
+		was := lockedUntil
+		_, err := st.get()
+		canaryOn = true
+		lockedUntil = was
+		if errors.Is(err, ErrLocked) || errors.Is(err, errNotFound) {
+			// Without the canary a "not found" reads as locked, and a locked
+			// keystore cannot be told from a deleted entry here; both say
+			// "can't be found right now", and a repair is harmless either way.
+			s.MaybeMissing = true
+		}
 	}
 	return s
 }
+
+// MissingKeyLikely is Missing or MaybeMissing: enough to try a repair.
+func (s KeyStatus) MissingKeyLikely() bool { return s.Missing || s.MaybeMissing }
