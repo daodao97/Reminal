@@ -4,11 +4,15 @@
 package client
 
 import (
+	"bufio"
+	"strings"
+
 	"bytes"
 	"crypto/ed25519"
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"golang.org/x/term"
 	"os"
 	"sync"
 	"time"
@@ -67,8 +71,11 @@ func (v *Viewer) checkMachineIdentity(machinePub ed25519.PublicKey) error {
 		return nil
 	}
 	machines, err := ListOwnedMachines()
-	if err != nil {
-		machines = nil // unreadable: treat as none, and ask
+	// Unreadable: treat as none and ask, but still say that a machine already
+	// in use would not have asked.
+	unreadable := err != nil
+	if unreadable {
+		machines = nil
 	}
 	for _, m := range machines {
 		if bytes.Equal(m.Key, machinePub) {
@@ -92,7 +99,7 @@ func (v *Viewer) checkMachineIdentity(machinePub ed25519.PublicKey) error {
 		}
 		return fmt.Errorf("owner: session %s is on your machine %s, but a different machine answered — not connecting", v.sessionID, name)
 	}
-	if !v.askTrustMachine(machinePub, len(machines) > 0) {
+	if !v.askTrustMachine(machinePub, len(machines) > 0 || unreadable) {
 		return errMachineNotConfirmed
 	}
 	_, _ = RecordMachineKey(v.sessionID, machinePub) // best-effort
@@ -104,7 +111,19 @@ func (v *Viewer) checkMachineIdentity(machinePub ed25519.PublicKey) error {
 // and so is having no terminal to ask on.
 func (v *Viewer) askTrustMachine(machinePub ed25519.PublicKey, haveMachines bool) bool {
 	if v.promptIn == nil {
-		return false
+		// Before the terminal is raw (the first connection), ask on the
+		// terminal itself when there is one; with no terminal, nobody can say yes.
+		if !term.IsTerminal(int(os.Stdin.Fd())) {
+			return false
+		}
+		fmt.Fprintf(os.Stderr, "\n  This device has not connected to this machine before.\n  Machine: %s\n", MachineID(machinePub))
+		if haveMachines {
+			fmt.Fprint(os.Stderr, "  If you expected one of the machines you already use, answer n.\n")
+		}
+		fmt.Fprint(os.Stderr, "  Connect, and remember it? [y/N] ")
+		line, _ := bufio.NewReader(os.Stdin).ReadString('\n')
+		line = strings.TrimSpace(line)
+		return line == "y" || line == "Y"
 	}
 	// Only keys pressed after the question count: drop anything typed before.
 	for drained := false; !drained; {

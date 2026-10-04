@@ -26,7 +26,7 @@ func sealedPair(t *testing.T) (*Agent, *Viewer) {
 	shared := make([]byte, 32)
 	_, _ = rand.Read(shared)
 	exID := []byte("0123456789abcdef")
-	info := a.sealInfoFor(1, shared, exID)
+	info := a.sealInfoFor(1, shared, exID, "")
 	if info == "" {
 		t.Fatal("agent issued no seal info")
 	}
@@ -203,7 +203,7 @@ func TestAgentKeepsStreamsInUse(t *testing.T) {
 	a, v := sealedPair(t)
 	shared := make([]byte, 32)
 	for i := 0; i < maxStreams+10; i++ {
-		_ = a.sealInfoFor(1, shared, []byte("0123456789abcdef"))
+		_ = a.sealInfoFor(1, shared, []byte("0123456789abcdef"), "")
 		if i%100 == 0 {
 			if _, ok, _ := a.admit(fromViewer(t, v, protocol.Message{Type: protocol.TypeData, Data: "k"})); !ok {
 				t.Fatalf("stream in use refused after %d newer handshakes", i)
@@ -266,7 +266,7 @@ func TestViewerRefusesFramesFromBeforeItJoined(t *testing.T) {
 	_, _ = rand.Read(shared)
 	exID := []byte("0123456789abcdef")
 	v := &Viewer{box: box}
-	if err := v.setSeal(key, shared, exID, a.sealInfoFor(1, shared, exID)); err != nil {
+	if err := v.setSeal(key, shared, exID, a.sealInfoFor(1, shared, exID, "")); err != nil {
 		t.Fatal(err)
 	}
 	if _, ok, _ := v.admitIn(earlier); ok {

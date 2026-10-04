@@ -6,17 +6,17 @@ package client
 // Rendezvous is the end-to-end transfer used by `reminal copy` / `reminal
 // paste`. Unlike send/download (scoped to one PTY session's viewers), a
 // rendezvous pairs a source on one machine with a paste on any other,
-// brokered by a blind relay that only ever sees blinded public keys and
-// ciphertext. The short code the user carries between terminals IS the
-// shared secret: it blinds the X25519 exchange exactly the way the session
-// PIN does in crypto/kex.go, so the relay can neither derive the key nor
-// brute-force the code offline (there is no stored ciphertext — the source
-// must be online, and a wrong guess is one loud, rate-limited attempt).
+// brokered by a relay that only ever sees CPace elements and ciphertext. The
+// short code the user carries between terminals IS the shared secret: it is
+// the CPace password (crypto/cpace.go), exactly as the session PIN is for a
+// session, so the relay can neither derive the key nor brute-force the code
+// offline (there is no stored ciphertext — the source must be online, and a
+// wrong guess is one loud, rate-limited attempt).
 //
 // Wire flow (frames relayed verbatim, source connects first and waits):
 //
-//	paste  → KexInit     {Data: blinded paste pubkey, ExID}
-//	source → KexResp     {Data: blinded source pubkey, ExID, Wrap: wrapped transfer key}
+//	paste  → PakeInit    {Data: paste's CPace element, ExID}
+//	source → PakeResp    {Data: source's CPace element, ExID, Wrap: wrapped transfer key}
 //	paste  → KexConfirm  {Data: box(label)}            # proves paste has the key
 //	source → Data×N      {Data: box(chunk JSON)}       # only after confirm verifies
 //	(paste counts chunks; complete when it has Total of them)

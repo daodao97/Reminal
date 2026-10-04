@@ -51,6 +51,12 @@ type Viewer struct {
 	promptEsc <-chan struct{}
 	// seal is this connection's sealed-frame state (sealedviewer.go).
 	seal viewerSeal
+	// preconn is the first connection, made by Run before the terminal goes
+	// raw; runConnection takes it instead of dialing.
+	preconn *established
+	// notReadySince is when the relay first answered "session not ready" in
+	// the current run of attempts (see notReadyGrace); zero once connected.
+	notReadySince time.Time
 
 	// Atomics first for 64-bit alignment on 32-bit architectures.
 	lastSeq       uint64
@@ -153,6 +159,39 @@ func (v *Viewer) Run() error {
 		return fmt.Errorf("stdin is not a terminal")
 	}
 
+	// The first connection, handshake included, is made before the terminal
+	// goes raw and before anything reads stdin: a wrong PIN comes back as a
+	// plain error, and whoever asked for the PIN can ask again on a terminal
+	// nobody else is reading. Anything short of that (no network, a relay
+	// that asks us to wait, a dropped socket) is retried here, with the same
+	// pacing as a reconnect later; Ctrl-C stops it.
+	v.notify("Connecting…  (Ctrl-C to stop)")
+	for backoff := initialBackoff; ; {
+		est, err := v.establish()
+		if err == nil {
+			v.preconn = est
+			break
+		}
+		var fatal *fatalErr
+		if errors.As(err, &fatal) {
+			return fatal.err
+		}
+		wait := backoff
+		var rl *rateLimitedError
+		if errors.As(err, &rl) {
+			if wait = rl.retryAfter; wait < rateLimitMinWait {
+				wait = rateLimitMinWait
+			}
+			v.notify(humanize(err)) // says the wait itself
+		} else {
+			v.notify(fmt.Sprintf("%s Reconnecting in %v…", humanize(err), wait))
+		}
+		time.Sleep(wait)
+		if backoff *= 2; backoff > maxBackoff {
+			backoff = maxBackoff
+		}
+	}
+
 	oldState, err := term.MakeRaw(fd)
 	if err != nil {
 		return fmt.Errorf("enable raw mode: %w", err)
@@ -235,9 +274,7 @@ func (v *Viewer) Run() error {
 		default:
 		}
 
-		if first {
-			v.notify("Connecting…  (press Ctrl-] to disconnect)")
-		} else {
+		if !first {
 			v.notify("Reconnecting…")
 		}
 
@@ -381,50 +418,19 @@ func (v *Viewer) runConnection(stdinCh <-chan []byte, winCh <-chan os.Signal, in
 			err = fmt.Errorf("recovered from panic in viewer connection handler: %v", r)
 		}
 	}()
-	dialStart := time.Now()
-	conn, local, resp, err := v.dial()
-	if err != nil {
-		if resp != nil && resp.StatusCode == 429 {
-			return &rateLimitedError{retryAfter: parseRetryAfter(resp.Header.Get("Retry-After"))}
-		}
-		return fmt.Errorf("dial: %w", err)
-	}
-	if local {
-		v.everLocal = true // remember this is a same-machine session (see runViewer)
-	}
-	conn.SetReadLimit(maxRelayMessageBytes) // untrusted peer — bound frame size
-	dialTime := time.Since(dialStart)
-	defer conn.Close()
-
-	// The relay auth (viewer proves the session is live, gets AuthOK) only
-	// exists on the relay path. A local attach connects straight to the agent's
-	// socket, so there is no relay to answer it — skip it. The PIN/owner
-	// handshake below (negotiateSessionKey) is the real end-to-end gate and runs
-	// identically either way, so a local attach still needs the correct PIN.
-	if !local {
-		if err := v.authenticate(conn); err != nil {
-			// Auth failures are fatal — wrong PIN, locked out, mismatched session.
-			return &fatalErr{err: err}
-		}
-	}
-
 	// The owner handshake may need to ask whether to trust a machine this
-	// device has not connected to before; nothing else reads stdin yet.
+	// device has not connected to before; on a reconnect it asks through the
+	// raw-mode reader.
 	v.promptIn, v.promptEsc = stdinCh, escapeCh
-	negotiate := v.negotiateSessionKey
-	if v.owner {
-		negotiate = v.negotiateSessionKeyOwner
+	est := v.preconn
+	v.preconn = nil
+	if est == nil {
+		if est, err = v.establish(); err != nil {
+			return err
+		}
 	}
-	if err := negotiate(conn); err != nil {
-		// EKE failures are fatal when the cause is "wrong PIN" (the
-		// AES-GCM unwrap tag rejects). For network/transient failures
-		// we'd ideally reconnect, but since we can't tell them apart
-		// from the wrap error alone, surface as fatal so the user
-		// sees the right message; the auto-reconnect loop in Run()
-		// kicks in for genuinely-transient cases (the conn would
-		// close before we reach this point).
-		return &fatalErr{err: err}
-	}
+	conn, dialTime := est.conn, est.dialTime
+	defer conn.Close()
 
 	// One-time "Connected …" line on the first successful connect. Trust
 	// signal (encryption named explicitly), diagnostic (handshake time so
@@ -529,6 +535,81 @@ const ownerKexTimeout = 4 * time.Second
 // that must be surfaced, not downgraded.
 var ErrNotOwner = errors.New("this device isn't a recognised owner of the machine")
 
+// notReadyGrace is how long "session not ready" from the relay is retried
+// before it is taken to mean the session is not there: long enough for a
+// machine's own reconnect backoff to run its course after a relay outage,
+// short enough that a mistyped id still fails soon.
+const notReadyGrace = 2 * maxBackoff
+
+func isNotReady(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "session not ready") || strings.Contains(msg, "session not found or not ready")
+}
+
+// established is a connection that has passed the relay's check and the
+// end-to-end handshake, ready for the session.
+type established struct {
+	conn     *websocket.Conn
+	dialTime time.Duration
+}
+
+// establish dials, authenticates with the relay and runs the end-to-end
+// handshake. A wrong PIN or a refused machine comes back as a fatalErr.
+func (v *Viewer) establish() (*established, error) {
+	dialStart := time.Now()
+	conn, local, resp, err := v.dial()
+	if err != nil {
+		if resp != nil && resp.StatusCode == 429 {
+			return nil, &rateLimitedError{retryAfter: parseRetryAfter(resp.Header.Get("Retry-After"))}
+		}
+		return nil, fmt.Errorf("dial: %w", err)
+	}
+	if local {
+		v.everLocal = true // remember this is a same-machine session (see runViewer)
+	}
+	conn.SetReadLimit(maxRelayMessageBytes) // untrusted peer — bound frame size
+	dialTime := time.Since(dialStart)
+
+	// The relay auth (viewer proves the session is live, gets AuthOK) only
+	// exists on the relay path. A local attach connects straight to the agent's
+	// socket, so there is no relay to answer it — skip it. The PIN/owner
+	// handshake below is the real end-to-end gate and runs identically either
+	// way, so a local attach still needs the correct PIN.
+	if !local {
+		if err := v.authenticate(conn); err != nil {
+			conn.Close()
+			// "Not ready" is the relay back before the machine has reconnected
+			// to it (its own backoff runs to maxBackoff): temporary for a while,
+			// then a session that is not there. Anything else is fatal — wrong
+			// PIN, locked out, mismatched session.
+			if isNotReady(err) {
+				if v.notReadySince.IsZero() {
+					v.notReadySince = time.Now()
+				}
+				if time.Since(v.notReadySince) < notReadyGrace {
+					return nil, err
+				}
+			}
+			return nil, &fatalErr{err: err}
+		}
+	}
+	v.notReadySince = time.Time{}
+	negotiate := v.negotiateSessionKey
+	if v.owner {
+		negotiate = v.negotiateSessionKeyOwner
+	}
+	if err := negotiate(conn); err != nil {
+		conn.Close()
+		// A wrong PIN fails the unwrap; a refused machine fails the owner
+		// check. Both are fatal: reconnecting would repeat them.
+		return nil, &fatalErr{err: err}
+	}
+	return &established{conn: conn, dialTime: dialTime}, nil
+}
+
 // negotiateSessionKey runs the v2 PIN-authenticated X25519 handshake.
 // Replaces the deterministic deriveKey(sessionID, pin) used in v1,
 // which gave a relay-recorded ciphertext frame only ~20 bits of
@@ -580,15 +661,13 @@ func (v *Viewer) negotiateSessionKey(conn *websocket.Conn) error {
 			if msg.ExID != exIDHex {
 				continue
 			}
-			if busyWaits >= 2 {
+			wait := time.Duration(msg.RetryMS) * time.Millisecond
+			if busyWaits >= 2 || wait > time.Minute {
 				return fmt.Errorf("this machine is busy — try again in a few minutes")
 			}
 			busyWaits++
-			wait := time.Duration(msg.RetryMS) * time.Millisecond
 			if wait < time.Second {
 				wait = time.Second
-			} else if wait > 30*time.Second {
-				wait = 30 * time.Second
 			}
 			v.notify(fmt.Sprintf("Busy — trying again in %ds", int(wait.Seconds())))
 			time.Sleep(wait)

@@ -4464,7 +4464,9 @@
         cb(found.length ? found.map(k => ({
           text: k.url,
           range: { start: { x: k.start.col + 1, y: k.start.row + from + 1 }, end: { x: k.end.col + 1, y: k.end.row + from + 1 } },
-          activate: (ev, text) => { window.open(text, '_blank', 'noopener,noreferrer'); },
+          // reminalLinks only finds http(s); checked again here so nothing else
+          // can ever be opened from the terminal.
+          activate: (ev, text) => { if (/^https?:\/\//i.test(text)) window.open(text, '_blank', 'noopener,noreferrer'); },
         })) : undefined);
       },
     });
@@ -5164,7 +5166,7 @@
       return u;
     }
 
-    // KEX_TIMEOUT_MS bounds how long we wait for the agent's kex_resp
+    // KEX_TIMEOUT_MS bounds how long we wait for the agent's pake_resp
     // before assuming the message got dropped (relay blip, agent stall)
     // and retrying. Without this the viewer would hang forever on a
     // black screen with no error if the response went missing.
@@ -5342,7 +5344,7 @@
       kexTimer = setTimeout(() => {
         kexTimer = 0;
         if (cryptoKey) return; // raced with a late response
-        dbg('✗ KEX TIMEOUT after ' + KEX_TIMEOUT_MS + 'ms (no matching kex_resp)');
+        dbg('✗ KEX TIMEOUT after ' + KEX_TIMEOUT_MS + 'ms (no matching pake_resp)');
         kexAttempts.clear();
         kexExID = '';
         if (ws && ws.readyState === WebSocket.OPEN) {
@@ -5392,10 +5394,8 @@
       if (wrapped.length < 12 + 16) throw new Error('wrap too short');
       const wrapNonce = wrapped.slice(0, 12);
       const wrapCT = wrapped.slice(12);
-      // AES-GCM tag failure here means the agent and we derived
-      // different wrap keys, which (given the ECDH shared agreed)
-      // means the PIN mask diverged — i.e. wrong PIN or an active
-      // relay MITM that guessed the PIN wrong on this attempt.
+      // AES-GCM tag failure here means the agent and we derived different
+      // keys from CPace: a wrong PIN on one side or the other.
       const sessionKeyRaw = new Uint8Array(
         await crypto.subtle.decrypt(
           { name: 'AES-GCM', iv: wrapNonce }, wrapKey, wrapCT
@@ -5603,13 +5603,15 @@
       } finally { kexInFlight = false; }
     }
 
-    // One owner answer is checked at a time: a retried handshake can bring a
-    // second answer while the first is still being checked or confirmed.
-    let ownerChecking = false;
+    // One owner answer per connection is checked at a time: a retried
+    // handshake can bring a second answer while the first is still being
+    // checked or confirmed. A new connection is not held up by the old one's.
+    let ownerCheckingSock = null;
     async function completeOwner(msg) {
-      if (ownerChecking) return;
-      ownerChecking = true;
-      try { await completeOwnerChecked(msg); } finally { ownerChecking = false; }
+      if (ownerCheckingSock === ws) return;
+      const sock = ws;
+      ownerCheckingSock = sock;
+      try { await completeOwnerChecked(msg); } finally { if (ownerCheckingSock === sock) ownerCheckingSock = null; }
     }
     async function completeOwnerChecked(msg) {
       const att = ownerAttempts.get(msg.ex_id);
@@ -7548,7 +7550,7 @@
       if (!ws || ws.readyState !== WebSocket.OPEN) return;
       if (msg.type === 'data' || msg.type === 'resize') {
         // Drop rather than leak plaintext: cryptoKey is only null
-        // during the brief window between auth_ok and kex_resp, when
+        // during the brief window between auth_ok and pake_resp, when
         // the user shouldn't be able to type anyway (the terminal
         // isn't focused yet). Sending unencrypted would just get
         // dropped on the agent side after a failed Decrypt, but
@@ -8376,6 +8378,7 @@
     }
 
     async function handleMessage(msg) {
+      const msgSock = ws; // the connection this message arrived on
       if (msg.type === 'sealed') {
         if (!sealState) {
           // The agent seals, but this connection's handshake answer said it
@@ -8420,8 +8423,9 @@
         case 'own_busy':
           // Not a refusal: the machine is over its handshake allowance and has
           // asked us to come back. Waiting is the whole fix — the old silence
-          // here read as "you are not an owner".
-          if (cryptoKey) break;
+          // here read as "you are not an owner". Only an answer to one of our
+          // own attempts counts.
+          if (cryptoKey || !ownerAttempts.has(msg.ex_id)) break;
           if (ownerBusyTries < OWNER_BUSY_RETRIES) {
             ownerBusyTries++;
             const wait = Math.min(Math.max(Number(msg.retry_ms) || OWNER_RETRY_MS, 250), 5000);
@@ -8436,6 +8440,7 @@
           try {
             await completeOwner(msg);
           } catch (e) {
+            if (ws !== msgSock) break; // an older connection's answer; this one is unaffected
             if (kexTimer) { clearTimeout(kexTimer); kexTimer = 0; }
             if (ownerTimer) { clearTimeout(ownerTimer); ownerTimer = 0; }
             setStatus('Owner connect failed: ' + e.message, 'error');
@@ -8471,6 +8476,7 @@
             // no session key, and replaces this with "Handshake timed out" —
             // so the one message that says what is actually wrong survived
             // about nine seconds and then became a message about the network.
+            if (ws !== msgSock) break; // an older connection's answer; this one is unaffected
             if (kexTimer) { clearTimeout(kexTimer); kexTimer = 0; }
             if (ownerTimer) { clearTimeout(ownerTimer); ownerTimer = 0; }
             setStatus('Handshake failed: PIN mismatch', 'error');
@@ -8506,12 +8512,15 @@
             renderRecents();
             if (!wasLive) {
               // Agent (re)attached — it may be a fresh process, so any session
-              // key we hold is stale; drop it and (re)handshake. Do NOT clear
-              // kexAttempts: the optimistic kex_init from auth_ok is likely still
-              // outstanding, and keeping it means EITHER reply can complete the
-              // handshake — the whole point of the multi-attempt fix.
+              // key we hold is stale; drop it and (re)handshake. On "connected"
+              // the handshake sent at auth_ok reached this agent and either
+              // reply may complete it, so the attempts stay. On "agent_online"
+              // the agent was away: an answer to an earlier attempt could only
+              // come from the process that left, with a key that is gone, so
+              // those attempts are dropped and only a new one counts.
               cryptoKey = null;
               sealState = null;
+              if (msg.type === 'agent_online') { kexAttempts.clear(); ownerAttempts.clear(); kexExID = ''; ownerCheckingSock = null; }
               retryWebRTC('agent reattach', 0); // renegotiate P2P with the (possibly new) agent
               // Only when the kex_init auth_ok already sent cannot serve.
               // "connected" is the relay stating the agent was there as we
@@ -8603,6 +8612,9 @@
         }
         case 'new_session': {
           if (!cryptoKey) break;
+          // Only the answer to a request this tab made; the host broadcasts
+          // it to every viewer, and an unasked-for one must not connect us.
+          if (!creatingSession) break;
           try {
             const bytes = await decrypt(cryptoKey, msg.data);
             const payload = JSON.parse(new TextDecoder().decode(bytes));

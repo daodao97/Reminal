@@ -97,15 +97,21 @@ func sourceTag(group string) string {
 // agent, tagging it with its source. retry is how long to wait when it does
 // not. Anything else passes untouched.
 func (s *Server) admitHandshake(sessionID string, role protocol.Role, conn *websocket.Conn, msg *protocol.Message) (ok bool, retry time.Duration) {
-	if role != protocol.RoleViewer || (msg.Type != protocol.TypePakeInit && msg.Type != protocol.TypeKexInit) {
+	if role != protocol.RoleViewer {
 		return true, 0
 	}
-	addr, _ := clientAddrs.Load(conn)
-	a, _ := addr.(string)
-	if a == "" {
-		a = remoteHost(conn)
+	switch msg.Type {
+	case protocol.TypePakeInit, protocol.TypeKexInit:
+	case protocol.TypeOwnerInit:
+		// Not paced here (owner handshakes have their own allowance at the
+		// agent), but the source tag is the relay's to set, never the client's.
+		msg.Src = sourceTag(addressGroup(s.clientAddr(conn)))
+		return true, 0
+	default:
+		msg.Src = ""
+		return true, 0
 	}
-	group := addressGroup(a)
+	group := addressGroup(s.clientAddr(conn))
 	msg.Src = sourceTag(group)
 	if !s.agentConnected(sessionID) {
 		return true, 0 // nobody to spend an allowance on; the agent is away
@@ -132,8 +138,10 @@ func (s *Server) takeHandshake(key string, now time.Time) (bool, time.Duration) 
 	b, ok := s.handshakes[key]
 	if !ok {
 		// A full bucket is the same as no entry, so once the table is large
-		// drop the ones that have refilled.
-		if len(s.handshakes) > 4096 {
+		// drop the ones that have refilled: at most once a minute, so a
+		// large table is not rescanned on every new address.
+		if len(s.handshakes) > 4096 && now.Sub(s.hsPruned) > time.Minute {
+			s.hsPruned = now
 			for k, o := range s.handshakes {
 				if now.Sub(o.at) >= handshakeBurst*handshakeRefill {
 					delete(s.handshakes, k)
@@ -158,6 +166,15 @@ func (s *Server) takeHandshake(key string, now time.Time) (bool, time.Duration) 
 // pakeBusy is the answer to a paced handshake.
 func pakeBusy(msg protocol.Message, retry time.Duration) protocol.Message {
 	return protocol.Message{Type: protocol.TypePakeBusy, ExID: msg.ExID, RetryMS: int(retry / time.Millisecond)}
+}
+
+func (s *Server) clientAddr(conn *websocket.Conn) string {
+	if addr, ok := clientAddrs.Load(conn); ok {
+		if a, _ := addr.(string); a != "" {
+			return a
+		}
+	}
+	return remoteHost(conn)
 }
 
 func remoteHost(conn *websocket.Conn) string {

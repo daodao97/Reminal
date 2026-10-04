@@ -24,6 +24,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"sort"
 	"strings"
@@ -110,6 +111,10 @@ type hookSpec struct {
 	extra  map[string]any // top-level keys to ensure (e.g. Cursor's {"version":1})
 	events []hookEvent    // event → state mappings (an agent may lack some states)
 	shape  hookShape
+	// cleanTop: also take our entries out of event lists at the top of the
+	// file, where an earlier reminal put them (Antigravity's hooks live under
+	// a name; left at the top, they make agy reject the whole file).
+	cleanTop bool
 }
 
 // hookCommand is the shell command an agent runs on an event. The reminal path
@@ -161,6 +166,27 @@ func applyHooks(spec *hookSpec, home, exe string, remove bool) error {
 		return nil // nothing installed
 	}
 
+	if spec.cleanTop {
+		for ev, v := range root {
+			list, ok := v.([]any)
+			if !ok {
+				continue
+			}
+			kept := list[:0:0]
+			for _, item := range list {
+				if m, ok := item.(map[string]any); ok && ourHookEntry(m) {
+					continue
+				}
+				kept = append(kept, item)
+			}
+			if len(kept) == 0 {
+				delete(root, ev)
+			} else {
+				root[ev] = kept
+			}
+		}
+	}
+
 	// Walk to the hooks object, creating levels only when installing.
 	node := root
 	for _, k := range spec.key {
@@ -180,10 +206,8 @@ func applyHooks(spec *hookSpec, home, exe string, remove bool) error {
 		// Drop any prior reminal entry for this event (idempotent + removal).
 		kept := list[:0:0]
 		for _, item := range list {
-			if m, ok := item.(map[string]any); ok {
-				if _, mine := m[hookMarker]; mine {
-					continue
-				}
+			if m, ok := item.(map[string]any); ok && ourHookEntry(m) {
+				continue
 			}
 			kept = append(kept, item)
 		}
@@ -223,6 +247,59 @@ func backupOnce(path string, raw []byte) error {
 		return nil
 	}
 	return atomicfile.Write(path+".bak", raw, 0o600)
+}
+
+// reminalHookCmdRe is the whole command of one of our hook entries and nothing
+// else: reminal's path (bare, or quoted when it has spaces; .exe on Windows),
+// then `hook <state>`. A person's hook that merely mentions reminal, or runs
+// our command and then something more, is not ours.
+var reminalHookCmdRe = regexp.MustCompile("^\\s*(?:'(?:[^']*/)?reminal(?:\\.exe)?'|\"(?:[^\"$`]*[/\\\\])?reminal(?:\\.exe)?\"|(?:[^\\s'\"$`;&|<>()]*[/\\\\])?reminal(?:\\.exe)?) hook (?:working|input|done|notify)\\s*$")
+
+// ourHookEntry says whether a config entry is one of ours: tagged with
+// hookMarker, or, since an agent may rewrite its settings and drop keys it
+// does not know (Claude Code does, on sign-in), running only reminal's hook
+// commands. Untagged ones were added again on every integrate, and every hook
+// then fired twice.
+func ourHookEntry(m map[string]any) bool {
+	if _, mine := m[hookMarker]; mine {
+		return true
+	}
+	// An untagged entry is ours only if it is exactly what we write: a flat
+	// {command}, or a group of {type, command} hooks with at most an empty
+	// matcher. Anything a person added to it (a timeout, a matcher) makes it
+	// theirs.
+	if c, ok := m["command"].(string); ok {
+		return len(m) == 1 && reminalHookCmdRe.MatchString(c)
+	}
+	hs, ok := m["hooks"].([]any)
+	if !ok || len(hs) == 0 {
+		return false
+	}
+	for k, v := range m {
+		if k == "hooks" {
+			continue
+		}
+		if k == "matcher" {
+			if s, _ := v.(string); s == "" {
+				continue
+			}
+		}
+		return false
+	}
+	for _, h := range hs {
+		hm, ok := h.(map[string]any)
+		if !ok || len(hm) > 2 {
+			return false
+		}
+		if t, has := hm["type"]; has && t != "command" {
+			return false
+		}
+		c, _ := hm["command"].(string)
+		if !reminalHookCmdRe.MatchString(c) {
+			return false
+		}
+	}
+	return true
 }
 
 // hookEntry builds one config entry in the agent's expected shape, tagged with
@@ -279,6 +356,16 @@ func agentTargets() []agentTarget {
 			cliRemove: []string{"mcp", "remove", mcpServerName},
 			checkFile: ".gemini/config/mcp_config.json", checkKey: []string{"mcpServers"},
 			resume: "agy --continue",
+			// Its hooks (~/.gemini/config/hooks.json): each set under a name of
+			// its own, as flat {command} entries — agy rejects the whole file if
+			// events sit at its top. It has no event for waiting on the person.
+			hooks: &hookSpec{
+				file: ".gemini/config/hooks.json", key: []string{mcpServerName}, shape: shapeFlat, cleanTop: true,
+				events: []hookEvent{
+					{"PreInvocation", "working"}, // a turn begins
+					{"Stop", "done"},             // turn finished
+				},
+			},
 		},
 		{
 			// opencode's `mcp add` is interactive, so drive its config instead.

@@ -62,11 +62,16 @@ type peer struct {
 }
 
 type room struct {
-	agent   *peer
-	viewers []*peer
-	auth    authState
-	cleanup *time.Timer
-	mu      sync.Mutex
+	agent *peer
+	// pendingAgents are agent connections that have not authenticated yet.
+	// Any number may wait; the first to prove the credential becomes r.agent
+	// and the rest are told they were superseded. A connection that never
+	// authenticates therefore never keeps the real agent out.
+	pendingAgents []*peer
+	viewers       []*peer
+	auth          authState
+	cleanup       *time.Timer
+	mu            sync.Mutex
 }
 
 type Server struct {
@@ -83,6 +88,7 @@ type Server struct {
 	// (handshakeAllowed).
 	hsMu       sync.Mutex
 	handshakes map[string]*addrBucket
+	hsPruned   time.Time
 	// Room lifetimes; fields so a test can shorten them on its own Server.
 	// Zero means the default (orphanTTL, ownerKeep).
 	orphanWait time.Duration
@@ -233,6 +239,15 @@ func (s *Server) handleSessionConn(sessionID string, role protocol.Role, conn *w
 				return
 			}
 			p.authed = true
+			if role == protocol.RoleAgent {
+				// This connection proved the credential: it is the agent now.
+				// Whatever held the slot before is a stale socket of the same
+				// agent (a reconnect after a drop), or never authenticated.
+				for _, old := range r.superseded(p) {
+					s.writeTo(old, protocol.Message{Type: protocol.TypeError, Error: "superseded by a fresh agent connection"})
+					go old.conn.Close()
+				}
+			}
 			authed = true // loosen this conn's read deadline to the liveness budget
 			// Compute presence flags for notifications after unlock.
 			agentOnline := r.agent != nil && r.agent.authed
@@ -278,9 +293,31 @@ func (s *Server) handleSessionConn(sessionID string, role protocol.Role, conn *w
 				s.writeTo(p, pakeBusy(msg, retry))
 				continue
 			}
-			s.forward(sessionID, role, msg)
+			s.forward(sessionID, role, conn, msg)
 		}
 	}
+}
+
+// superseded makes p the room's agent and returns the connections it
+// replaces: the previous agent, if any, and the other pending ones. Also
+// cancels a pending expiry. Callers hold r.mu.
+func (r *room) superseded(p *peer) []*peer {
+	var old []*peer
+	if r.agent != nil && r.agent != p {
+		old = append(old, r.agent)
+	}
+	for _, a := range r.pendingAgents {
+		if a != p {
+			old = append(old, a)
+		}
+	}
+	r.pendingAgents = nil
+	r.agent = p
+	if r.cleanup != nil {
+		r.cleanup.Stop()
+		r.cleanup = nil
+	}
+	return old
 }
 
 // peer returns the agent peer when role == RoleAgent. Callers wanting all
@@ -301,6 +338,11 @@ func (r *room) peerByConn(role protocol.Role, conn *websocket.Conn) *peer {
 	if role == protocol.RoleAgent {
 		if r.agent != nil && r.agent.conn == conn {
 			return r.agent
+		}
+		for _, a := range r.pendingAgents {
+			if a.conn == conn {
+				return a
+			}
 		}
 		return nil
 	}
@@ -409,16 +451,11 @@ func (s *Server) handleLegacyConn(conn *websocket.Conn) {
 
 		switch msg.Type {
 		case protocol.TypeRegister:
-			if registered {
-				continue
-			}
-			sessionID = msg.SessionID
-			role = protocol.RoleAgent
-			if ok, reason := s.attach(sessionID, role, conn); !ok {
-				s.sendError(conn, reason)
-				return
-			}
-			registered = true
+			// Agents register on /ws/<session>/agent and prove a credential
+			// there. Nothing on this path can authenticate an agent any more,
+			// so one is not accepted here at all.
+			s.sendError(conn, "update reminal: agents no longer register here")
+			return
 
 		case protocol.TypeJoin:
 			if registered {
@@ -450,7 +487,7 @@ func (s *Server) handleLegacyConn(conn *websocket.Conn) {
 					s.write(conn, pakeBusy(msg, retry))
 					continue
 				}
-				s.forward(sessionID, role, msg)
+				s.forward(sessionID, role, conn, msg)
 			}
 		}
 	}
@@ -488,14 +525,7 @@ func (s *Server) attach(sessionID string, role protocol.Role, conn *websocket.Co
 	p := &peer{conn: conn, role: role}
 	switch role {
 	case protocol.RoleAgent:
-		if r.agent != nil {
-			return false, "another agent is already connected to this session"
-		}
-		r.agent = p
-		if r.cleanup != nil {
-			r.cleanup.Stop()
-			r.cleanup = nil
-		}
+		r.pendingAgents = append(r.pendingAgents, p)
 	case protocol.RoleViewer:
 		// Allow viewer to connect as long as the room was set up by an
 		// authenticated agent — even if the agent is briefly offline.
@@ -518,6 +548,17 @@ func (s *Server) detach(sessionID string, role protocol.Role, conn *websocket.Co
 	r.mu.Lock()
 	switch role {
 	case protocol.RoleAgent:
+		for i, a := range r.pendingAgents {
+			if a.conn == conn {
+				r.pendingAgents = append(r.pendingAgents[:i], r.pendingAgents[i+1:]...)
+				break
+			}
+		}
+		if r.agent == nil || r.agent.conn != conn {
+			// A connection that never became the agent, or was superseded:
+			// nothing changes for the viewers.
+			break
+		}
 		r.agent = nil
 		for _, v := range r.viewers {
 			if v.authed {
@@ -525,7 +566,7 @@ func (s *Server) detach(sessionID string, role protocol.Role, conn *websocket.Co
 			}
 		}
 		// Schedule TTL cleanup. If the agent reattaches before it fires,
-		// attach() cancels this timer.
+		// its authentication cancels this timer.
 		if r.cleanup != nil {
 			r.cleanup.Stop()
 		}
@@ -546,14 +587,14 @@ func (s *Server) detach(sessionID string, role protocol.Role, conn *websocket.Co
 			})
 		}
 	}
-	empty := r.agent == nil && len(r.viewers) == 0 && r.cleanup == nil
+	empty := r.agent == nil && len(r.pendingAgents) == 0 && len(r.viewers) == 0 && r.cleanup == nil
 	r.mu.Unlock()
 
 	if empty {
 		s.mu.Lock()
 		if existing, ok := s.rooms[sessionID]; ok && existing == r {
 			r.mu.Lock()
-			stillEmpty := r.agent == nil && len(r.viewers) == 0 && r.cleanup == nil
+			stillEmpty := r.agent == nil && len(r.pendingAgents) == 0 && len(r.viewers) == 0 && r.cleanup == nil
 			r.mu.Unlock()
 			if stillEmpty {
 				delete(s.rooms, sessionID)
@@ -631,7 +672,7 @@ func (s *Server) notifyPeer(sessionID string, role protocol.Role, msg protocol.M
 	}
 }
 
-func (s *Server) forward(sessionID string, from protocol.Role, msg protocol.Message) {
+func (s *Server) forward(sessionID string, from protocol.Role, conn *websocket.Conn, msg protocol.Message) {
 	r := s.getRoom(sessionID)
 	if r == nil {
 		return
@@ -645,6 +686,12 @@ func (s *Server) forward(sessionID string, from protocol.Role, msg protocol.Mess
 	var targets []*peer
 	switch from {
 	case protocol.RoleAgent:
+		// Only the agent's own connection speaks for the agent; one that is
+		// still waiting to authenticate does not.
+		if r.agent == nil || r.agent.conn != conn {
+			r.mu.Unlock()
+			return
+		}
 		// Broadcast agent output to every authed viewer.
 		for _, v := range r.viewers {
 			if v.authed {
