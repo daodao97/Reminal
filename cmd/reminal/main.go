@@ -676,7 +676,7 @@ func main() {
 			}
 			return
 		case "own":
-			if err := runOwn(); err != nil {
+			if err := runOwn(os.Args[2:]); err != nil {
 				fmt.Fprintf(os.Stderr, "error: %v\n", err)
 				os.Exit(1)
 			}
@@ -2633,7 +2633,11 @@ func runConnect(target, pinArg string, owner bool) error {
 		// Only a "device not recognised" failure quietly falls back to a PIN. A
 		// hard refusal (bad machine signature / changed machine identity) is a
 		// security event — surface it instead of silently asking for a PIN.
-		if !errors.Is(err, client.ErrNotOwner) {
+		// An owner key that can't be read right now (a locked keychain over
+		// SSH) is said once, then the PIN path is offered.
+		if errors.Is(err, client.ErrOwnerKeyLocked) || errors.Is(err, client.ErrOwnerKeyUnreadable) {
+			fmt.Fprintf(os.Stderr, "%v\n  Connecting with the session's PIN instead.\n", err)
+		} else if !errors.Is(err, client.ErrNotOwner) {
 			return err
 		}
 	}

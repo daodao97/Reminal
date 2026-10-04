@@ -645,6 +645,11 @@ func Backend() string {
 	}
 	m, err := readMeta(dir)
 	if err != nil {
+		// No (readable) atrest.json, but a key file in use: an older build's
+		// key, or the fallback taken while the keystore was not answering.
+		if _, serr := os.Lstat(fileStore{dir: dir}.path()); serr == nil {
+			return "file"
+		}
 		return ""
 	}
 	return m.Source
@@ -661,7 +666,10 @@ func Status() string {
 	keyMu.Lock()
 	defer keyMu.Unlock()
 	canaryOn = false // a check writes nothing
-	defer func() { canaryOn = true }()
+	// Without the canary a "not found" reads as locked; that must not put
+	// the store on the back-off list for the real reads that follow.
+	wasLocked := lockedUntil
+	defer func() { canaryOn = true; lockedUntil = wasLocked }()
 	m, err := readMeta(dir)
 	if errors.Is(err, os.ErrNotExist) {
 		return "ok"
@@ -691,6 +699,10 @@ func Seal(kind, id string, plaintext []byte) ([]byte, error) {
 		return nil, err
 	}
 	keyMu.Lock()
+	if unavailableForTest {
+		keyMu.Unlock()
+		return nil, ErrLocked
+	}
 	k, kid, src, err := sealingKey(dir)
 	keyMu.Unlock()
 	if err != nil {
@@ -713,6 +725,10 @@ func Open(kind, id string, blob []byte) ([]byte, error) {
 	var bid [idLen]byte
 	copy(bid[:], blob[len(magic)+2:len(magic)+2+idLen])
 	keyMu.Lock()
+	if unavailableForTest {
+		keyMu.Unlock()
+		return nil, ErrLocked
+	}
 	k, err := openingKey(dir, bid, blob[len(magic)+1])
 	keyMu.Unlock()
 	if err != nil {
@@ -893,4 +909,31 @@ func SweepTemps(dir string, age time.Duration) {
 			_ = os.Remove(filepath.Join(dir, e.Name()))
 		}
 	}
+}
+
+// UnavailableForTest makes every Seal and Open answer ErrLocked, as a
+// keystore that will not answer does. For tests of callers.
+func UnavailableForTest(on bool) {
+	keyMu.Lock()
+	unavailableForTest = on
+	keyMu.Unlock()
+}
+
+var unavailableForTest bool
+
+// OpenQuiet is Open for a check that must write nothing: a keystore's "not
+// found" is not confirmed with a throwaway entry, so it reads as locked, and
+// the store is not put on the back-off list for the real reads that follow.
+func OpenQuiet(kind, id string, blob []byte) ([]byte, error) {
+	keyMu.Lock()
+	canaryOn = false
+	was := lockedUntil
+	keyMu.Unlock()
+	defer func() {
+		keyMu.Lock()
+		canaryOn = true
+		lockedUntil = was
+		keyMu.Unlock()
+	}()
+	return Open(kind, id, blob)
 }

@@ -628,6 +628,9 @@ func restoreAtStart() {
 		atrest.SweepTemps(dir, 10*time.Minute)
 	}
 	session.QuarantinedRestores() // prune past their keep
+	if dir, err := reminalDir(); err == nil {
+		atrest.PruneQuarantine(dir) // a set-aside owner key, same keep
+	}
 	if os.Getenv("REMINAL_NO_RESTORE") == "1" {
 		return
 	}

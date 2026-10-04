@@ -258,3 +258,9 @@ func SwitchChannel(manifestURL, want string) (string, error) {
 	}
 	return rs[0].Version, nil
 }
+
+// LatestTag asks this build's channel for its newest release tag ("v3.6.4";
+// "" when it has none). For callers that only want to compare, such as
+// `reminal doctor`: the same answer `reminal upgrade` would act on, never a
+// second lookup that could name another channel's release.
+func LatestTag(ctx context.Context) (string, error) { return channel.Latest(ctx) }

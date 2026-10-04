@@ -5,13 +5,11 @@ package client
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
-	"strings"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -20,6 +18,7 @@ import (
 	"reminal/internal/config"
 	"reminal/internal/protocol"
 	"reminal/internal/session"
+	"reminal/internal/updater"
 )
 
 // Doctor runs a series of environment checks and prints a color-coded report.
@@ -81,7 +80,27 @@ func allChecks(currentVersion string) []check {
 		{"Active session", checkActiveSession},
 		{"Config dir", checkConfigDir},
 		{"Saved sessions", checkSavedSessions},
+		{"Owner key", checkOwnerKey},
 	}
+}
+
+// checkOwnerKey reports how this device's owner identity is kept.
+func checkOwnerKey() (level, string) {
+	switch OwnerKeyState() {
+	case "none":
+		return levelOK, "none yet (made by `reminal own`)"
+	case "sealed":
+		return levelOK, "encrypted on disk"
+	case "plain":
+		return levelWarn, "not yet encrypted; it is encrypted at its next use"
+	case "locked":
+		// A check probes nothing, so a locked keystore and a removed key look
+		// the same here; owner commands themselves tell them apart.
+		return levelWarn, "encrypted, but its keystore can't be reached right now or no longer has the key; owner commands say which, and `reminal own reset` is the way out if it never comes back"
+	case "conflict":
+		return levelFail, "device_ed25519 and device_ed25519.sealed hold different keys; move the one you don't want aside, or `reminal own reset`"
+	}
+	return levelFail, "can't be opened; owner commands will fail. `reminal own reset` makes a new identity (re-enrol it on each machine)"
 }
 
 // checkSavedSessions says where the key sealing saved sessions lives, and
@@ -96,11 +115,10 @@ func checkSavedSessions() (level, string) {
 	if where == "" {
 		where = "none saved yet"
 	} else {
-		switch atrest.Status() {
-		case "locked":
+		// A check writes nothing, so "locked" and "gone" cannot be told
+		// apart on every OS; one sentence covers both.
+		if st := atrest.Status(); st == "locked" || st == "gone" {
 			where += ", which can't be reached right now or no longer has the key (saving with a key file meanwhile)"
-		case "gone":
-			where += ", but that key is no longer there; a new one is made at the next save"
 		}
 	}
 	if n := session.QuarantinedRestores(); n > 0 {
@@ -125,33 +143,19 @@ func checkVersion(current string) (level, string) {
 	if current == "" || current == "dev" {
 		return levelWarn, "dev build — version check skipped"
 	}
+	// The channel this build follows answers, the same way `reminal upgrade`
+	// asks it: a build on another line of releases is compared against its
+	// own feed, not the public one.
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, "GET",
-		"https://api.github.com/repos/harshalgajjar/Reminal/releases/latest", nil)
+	tag, err := updater.LatestTag(ctx)
 	if err != nil {
-		return levelWarn, fmt.Sprintf("v%s (couldn't check GitHub: %v)", current, err)
+		return levelWarn, fmt.Sprintf("v%s (couldn't check for updates: %v)", current, err)
 	}
-	req.Header.Set("Accept", "application/vnd.github+json")
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return levelWarn, fmt.Sprintf("v%s (couldn't reach GitHub: %v)", current, err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return levelWarn, fmt.Sprintf("v%s (GitHub returned %s)", current, resp.Status)
-	}
-	var rel struct {
-		TagName string `json:"tag_name"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&rel); err != nil {
-		return levelWarn, fmt.Sprintf("v%s (couldn't parse GitHub response)", current)
-	}
-	latest := strings.TrimPrefix(rel.TagName, "v")
-	if latest == current {
+	if tag == "" || !updater.Newer(current, tag) {
 		return levelOK, fmt.Sprintf("v%s (latest)", current)
 	}
-	return levelWarn, fmt.Sprintf("v%s — newer available: %s (run `reminal upgrade`)", current, rel.TagName)
+	return levelWarn, fmt.Sprintf("v%s — newer available: %s (run `reminal upgrade`)", current, tag)
 }
 
 func checkRelay() (level, string) {
