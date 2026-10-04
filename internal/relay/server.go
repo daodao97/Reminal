@@ -118,6 +118,7 @@ func (s *Server) HandleWS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	conn.SetReadLimit(1 << 20)
+	noteClientAddr(conn, r)
 	go s.handleLegacyConn(conn)
 }
 
@@ -136,8 +137,10 @@ func (s *Server) HandleSessionWS(w http.ResponseWriter, r *http.Request, session
 		return
 	}
 	conn.SetReadLimit(1 << 20)
+	noteClientAddr(conn, r)
 
 	if ok, reason := s.attach(sessionID, peerRole, conn); !ok {
+		forgetClientAddr(conn)
 		s.sendError(conn, reason)
 		conn.Close()
 		return
@@ -157,7 +160,8 @@ func (s *Server) HandleSessionWS(w http.ResponseWriter, r *http.Request, session
 var forwardableTypes = map[protocol.MessageType]bool{
 	protocol.TypeData: true, protocol.TypeResize: true, protocol.TypeResume: true,
 	protocol.TypeKexInit: true, protocol.TypeKexResp: true,
-	protocol.TypePakeInit: true, protocol.TypePakeResp: true, protocol.TypeSealed: true,
+	protocol.TypePakeInit: true, protocol.TypePakeResp: true, protocol.TypePakeBusy: true,
+	protocol.TypeSealed:    true,
 	protocol.TypeOwnerInit: true, protocol.TypeOwnerResp: true, protocol.TypeOwnerBusy: true,
 	protocol.TypeDirQuery: true, protocol.TypeDirResp: true, protocol.TypeDirRename: true,
 	protocol.TypeDirRevokeSelf: true, protocol.TypeDirKill: true, protocol.TypeDirIntegrate: true,
@@ -185,6 +189,7 @@ func (s *Server) handleSessionConn(sessionID string, role protocol.Role, conn *w
 	// so only this connection drops (its deferred conn.Close/detach still run).
 	defer func() { _ = recover() }()
 	defer conn.Close()
+	defer forgetClientAddr(conn)
 	defer s.detach(sessionID, role, conn)
 
 	authed := false
@@ -268,9 +273,11 @@ func (s *Server) handleSessionConn(sessionID string, role protocol.Role, conn *w
 		switch {
 		case msg.Type == protocol.TypePing:
 			s.writeTo(p, protocol.Message{Type: protocol.TypePong})
-		case !s.handshakeAllowed(sessionID, role, conn, msg):
-			s.writeTo(p, protocol.Message{Type: protocol.TypeError, Error: tooManyHandshakes})
 		case forwardableTypes[msg.Type]:
+			if ok, retry := s.admitHandshake(sessionID, role, conn, &msg); !ok {
+				s.writeTo(p, pakeBusy(msg, retry))
+				continue
+			}
 			s.forward(sessionID, role, msg)
 		}
 	}
@@ -377,6 +384,7 @@ func (s *Server) handleLegacyConn(conn *websocket.Conn) {
 	// Per-connection goroutine; a panic must not crash the relay for everyone else.
 	defer func() { _ = recover() }()
 	defer conn.Close()
+	defer forgetClientAddr(conn)
 
 	var registered bool
 	var sessionID string
@@ -438,8 +446,8 @@ func (s *Server) handleLegacyConn(conn *websocket.Conn) {
 			// had silently fallen behind — missing new_session, window, app, and
 			// webrtc types).
 			if registered && forwardableTypes[msg.Type] {
-				if !s.handshakeAllowed(sessionID, role, conn, msg) {
-					s.sendError(conn, tooManyHandshakes)
+				if ok, retry := s.admitHandshake(sessionID, role, conn, &msg); !ok {
+					s.write(conn, pakeBusy(msg, retry))
 					continue
 				}
 				s.forward(sessionID, role, msg)

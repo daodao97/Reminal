@@ -23,14 +23,19 @@ import (
 // with an encrypted snapshot frame. The read must return that scrollback, ANSI
 // stripped — and it must NOT send any resize, since a viewer size would be min'd
 // into the live PTY geometry and could shrink the real user's terminal.
+// Run against a machine from before sealed frames and against one that seals:
+// a reader that never opened sealed frames got nothing from the second.
 func TestReadTranscriptPIN(t *testing.T) {
 	isolateHome(t)
 	startTestRelay(t)
+	t.Run("older machine", func(t *testing.T) { testReadTranscriptPIN(t, "READPINX", false) })
+	t.Run("sealing machine", func(t *testing.T) { testReadTranscriptPIN(t, "READPINS", true) })
+}
 
+func testReadTranscriptPIN(t *testing.T, sessionID string, seals bool) {
 	const (
-		sessionID = "READPINX"
-		pin       = "246810"
-		wantLine  = "hello from the fake agent"
+		pin      = "246810"
+		wantLine = "hello from the fake agent"
 	)
 	sessionKey := make([]byte, 32)
 	for i := range sessionKey {
@@ -43,7 +48,7 @@ func TestReadTranscriptPIN(t *testing.T) {
 
 	var sawResize atomic.Bool
 	agentReady := make(chan struct{})
-	go runFakeAgent(t, sessionID, pin, sessionKey, snapshot, &sawResize, agentReady)
+	go runFakeAgent(t, sessionID, pin, sessionKey, snapshot, seals, &sawResize, agentReady)
 	<-agentReady
 
 	text, truncated, err := ReadTranscriptPIN(sessionID, pin)
@@ -73,7 +78,7 @@ func TestReadTranscriptPIN(t *testing.T) {
 // answers the viewer's EKE with the fixed sessionKey, and on TypeResume paints the
 // snapshot as an encrypted TypeData frame. It records whether the viewer ever sent
 // a resize.
-func runFakeAgent(t *testing.T, sessionID, pin string, sessionKey []byte, snapshot string, sawResize *atomic.Bool, ready chan struct{}) {
+func runFakeAgent(t *testing.T, sessionID, pin string, sessionKey []byte, snapshot string, seals bool, sawResize *atomic.Bool, ready chan struct{}) {
 	t.Helper()
 	box, err := crypto.NewBox(sessionKey)
 	if err != nil {
@@ -81,6 +86,8 @@ func runFakeAgent(t *testing.T, sessionID, pin string, sessionKey []byte, snapsh
 		close(ready)
 		return
 	}
+	// A sealing machine answers with the real agent's own sealing code.
+	ag := &Agent{sessionKey: sessionKey, box: box}
 	wsURL := config.SessionWS(sessionID, string(protocol.RoleAgent))
 	conn, _, derr := websocket.DefaultDialer.Dial(wsURL, nil)
 	if derr != nil {
@@ -131,21 +138,42 @@ func runFakeAgent(t *testing.T, sessionID, pin string, sessionKey []byte, snapsh
 				continue
 			}
 			wrapped, _ := crypto.WrapSessionKey(key, exID, sessionKey)
-			_ = conn.WriteJSON(protocol.Message{
+			resp := protocol.Message{
 				Type: protocol.TypePakeResp,
 				ExID: m.ExID,
 				Data: base64.StdEncoding.EncodeToString(mine),
 				Wrap: base64.StdEncoding.EncodeToString(wrapped),
-			})
+			}
+			if seals {
+				resp.Seal = ag.sealInfoFor(m.Frames, key, exID)
+			}
+			_ = conn.WriteJSON(resp)
 		case protocol.TypeResize:
 			sawResize.Store(true)
+		case protocol.TypeSealed:
+			if m.Inner == protocol.TypeResize {
+				sawResize.Store(true)
+			}
 		case protocol.TypeResume:
 			enc, err := box.Encrypt([]byte(snapshot))
 			if err != nil {
 				t.Errorf("encrypt snapshot: %v", err)
 				return
 			}
-			_ = conn.WriteJSON(protocol.Message{Type: protocol.TypeData, Data: enc, Seq: 1})
+			out := protocol.Message{Type: protocol.TypeData, Data: enc, Seq: 1}
+			if !seals {
+				_ = conn.WriteJSON(out)
+				continue
+			}
+			ag.writeMu.Lock()
+			ag.seal.outCtr++
+			raw, err := ag.sealedFrame(ag.frameKeys(), out, ag.seal.outCtr)
+			ag.writeMu.Unlock()
+			if err != nil {
+				t.Errorf("seal snapshot: %v", err)
+				return
+			}
+			_ = conn.WriteMessage(websocket.TextMessage, raw)
 		}
 	}
 }

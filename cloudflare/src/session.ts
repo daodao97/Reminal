@@ -3,13 +3,14 @@ import type { Attachment, TunnelMeta } from "./types";
 const MAX_ATTEMPTS = 5;
 
 // PIN handshakes are paced per address: a room passes on at most
-// HANDSHAKE_BURST from one address, then one per HANDSHAKE_REFILL_MS, a share
-// of the machine's own allowance and more than a person connecting and
-// reconnecting needs. Same numbers as the Go relay
-// (internal/relay/handshakelimit.go).
-const HANDSHAKE_BURST = 6;
-const HANDSHAKE_REFILL_MS = 10 * 60 * 1000;
-const TOO_MANY_HANDSHAKES = "too many connection attempts from your network — try again in a few minutes";
+// HANDSHAKE_BURST from one address (IPv6: one /64), then one per
+// HANDSHAKE_REFILL_MS, counted only while the machine is connected. A paced
+// handshake is answered with pake_busy (try again shortly), which a viewer
+// that predates it ignores. Each forwarded handshake carries `src`, an opaque
+// tag for its source, so the machine can keep a share of its own allowance
+// per source. Same numbers as the Go relay (internal/relay/handshakelimit.go).
+const HANDSHAKE_BURST = 10;
+const HANDSHAKE_REFILL_MS = 60 * 1000;
 const LOCKOUT_MS = 5 * 60 * 1000;
 
 // How long a room is kept alive after the agent disconnects, giving the
@@ -193,7 +194,7 @@ export class SessionRoom {
 
     const pair = new WebSocketPair();
     const [client, server] = Object.values(pair);
-    const src = role === "viewer" ? await addressTag(request.headers.get("cf-connecting-ip") ?? "") : undefined;
+    const src = role === "viewer" ? await addressTag(request.headers.get("cf-connecting-ip") ?? "", await this.tagSalt()) : undefined;
     server.serializeAttachment({ role, authed: false, src } satisfies Attachment);
     this.state.acceptWebSocket(server);
 
@@ -236,6 +237,9 @@ export class SessionRoom {
       return;
     }
 
+    // Viewers send JSON text; a binary frame from one is not a message.
+    if (attachment.role === "viewer" && typeof message !== "string") return;
+
     if (typeof message === "string") {
       let parsed: any = null;
       try {
@@ -259,10 +263,21 @@ export class SessionRoom {
           return;
         }
 
-        if (attachment.role === "viewer" && (parsed.type === "pake_init" || parsed.type === "kex_init")
-            && !(await this.allowHandshake(attachment.src))) {
-          ws.send(JSON.stringify({ type: "error", error: TOO_MANY_HANDSHAKES }));
-          return;
+        if (attachment.role === "viewer") {
+          // A message names its type only as "type": the agent reads field
+          // names without regard to case, and this room counts by the exact one.
+          if (Object.keys(parsed).some((k) => k !== "type" && k.toLowerCase() === "type")) return;
+          if (parsed.type === "pake_init" || parsed.type === "kex_init") {
+            parsed.src = attachment.src ?? "";
+            if (this.agentPresent()) {
+              const retry = await this.takeHandshake(attachment.src);
+              if (retry > 0) {
+                ws.send(JSON.stringify({ type: "pake_busy", ex_id: parsed.ex_id, retry_ms: retry }));
+                return;
+              }
+            }
+            message = JSON.stringify(parsed);
+          }
         }
 
         // ---- Tunnel-specific control messages ----
@@ -307,10 +322,8 @@ export class SessionRoom {
         }
       }
     } else if (attachment.role === "viewer") {
-      const agent = this.getSocket("agent");
-      if (agent?.readyState === WebSocket.OPEN) {
-        agent.send(message);
-      }
+      // Only to an agent that has authenticated, as the Go relay does.
+      this.authedAgent()?.send(message);
     }
     // tunnel sockets don't pass through opaque messages.
   }
@@ -320,6 +333,9 @@ export class SessionRoom {
     if (attachment.rejected) return;
 
     if (attachment.role === "agent") {
+      // An agent socket that never authenticated, or one replaced by another
+      // that has, leaving changes nothing for the viewers.
+      if (!attachment.authed || this.authedAgent(ws)) return;
       for (const v of this.getSockets("viewer")) {
         const att = v.deserializeAttachment() as Attachment;
         if (att?.authed && v.readyState === WebSocket.OPEN) {
@@ -332,8 +348,8 @@ export class SessionRoom {
       if (remaining.length === 0) {
         await this.state.storage.put("viewerAuthed", false);
       }
-      const agent = this.getSocket("agent");
-      if (agent?.readyState === WebSocket.OPEN) {
+      const agent = this.authedAgent();
+      if (agent) {
         agent.send(JSON.stringify({
           type: "closed",
           error: "viewer disconnected",
@@ -531,11 +547,10 @@ export class SessionRoom {
     ws.serializeAttachment({ role: "viewer", authed: true, src: attachment.src } satisfies Attachment);
     ws.send(JSON.stringify({ type: "auth_ok" }));
 
-    const agent = this.getSocket("agent");
-    if (agent?.readyState === WebSocket.OPEN) {
+    const agent = this.authedAgent();
+    if (agent) {
       ws.send(JSON.stringify({ type: "connected" }));
-      const att = agent.deserializeAttachment() as Attachment;
-      if (att?.authed) {
+      {
         agent.send(JSON.stringify({
           type: "connected",
           count: this.getSockets("viewer").filter(v => {
@@ -1337,20 +1352,57 @@ export class SessionRoom {
     return out;
   }
 
-  // allowHandshake takes one PIN handshake from the address src. Kept in
+  // takeHandshake takes one PIN handshake from the address tag src, and
+  // returns 0, or how many milliseconds until one is available. Kept in
   // storage, not memory, because the room sleeps between messages.
-  private async allowHandshake(src?: string): Promise<boolean> {
-    if (!src) return true;
+  private async takeHandshake(src?: string): Promise<number> {
+    if (!src) return 0;
     const key = "hs:" + src;
     const now = Date.now();
-    const b = (await this.state.storage.get<{ t: number; at: number }>(key)) ?? { t: HANDSHAKE_BURST, at: now };
+    const stored = await this.state.storage.get<{ t: number; at: number }>(key);
+    if (!stored && Math.random() < 0.05) await this.pruneHandshakes(now);
+    const b = stored ?? { t: HANDSHAKE_BURST, at: now };
     const tokens = Math.min(HANDSHAKE_BURST, b.t + (now - b.at) / HANDSHAKE_REFILL_MS);
     if (tokens < 1) {
       await this.state.storage.put(key, { t: tokens, at: now });
-      return false;
+      return Math.ceil((1 - tokens) * HANDSHAKE_REFILL_MS);
     }
     await this.state.storage.put(key, { t: tokens - 1, at: now });
-    return true;
+    return 0;
+  }
+
+  // pruneHandshakes drops counts that have refilled completely.
+  private async pruneHandshakes(now: number) {
+    const all = await this.state.storage.list<{ t: number; at: number }>({ prefix: "hs:" });
+    const stale: string[] = [];
+    for (const [k, v] of all) {
+      if (v.t + (now - v.at) / HANDSHAKE_REFILL_MS >= HANDSHAKE_BURST) stale.push(k);
+    }
+    if (stale.length) await this.state.storage.delete(stale);
+  }
+
+  // tagSalt is this room's random salt for address tags.
+  private async tagSalt(): Promise<string> {
+    let salt = await this.state.storage.get<string>("hsSalt");
+    if (!salt) {
+      salt = [...crypto.getRandomValues(new Uint8Array(16))].map((b) => b.toString(16).padStart(2, "0")).join("");
+      await this.state.storage.put("hsSalt", salt);
+    }
+    return salt;
+  }
+
+  private agentPresent(): boolean {
+    return this.authedAgent() !== null;
+  }
+
+  // authedAgent is the open agent socket that has authenticated (other than
+  // except), or null.
+  private authedAgent(except?: WebSocket): WebSocket | null {
+    for (const a of this.getSockets("agent")) {
+      if (a === except || a.readyState !== WebSocket.OPEN) continue;
+      if ((a.deserializeAttachment() as Attachment)?.authed) return a;
+    }
+    return null;
   }
 
   private async loadMeta() {
@@ -1399,12 +1451,24 @@ async function credentialHashes(token: string, pinHash: string): Promise<string[
   return out;
 }
 
-// addressTag is what a room keeps of a viewer's address: enough to count its
-// handshakes, not the address itself.
-async function addressTag(ip: string): Promise<string | undefined> {
+// addressTag is what a room keeps of a viewer's address: a salted hash of the
+// address, or of its /64 for IPv6, enough to count its handshakes.
+async function addressTag(ip: string, salt: string): Promise<string | undefined> {
   if (!ip) return undefined;
-  const d = await crypto.subtle.digest("SHA-256", new TextEncoder().encode("reminal-hs:" + ip));
+  const d = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(salt + "|" + addressGroup(ip)));
   return [...new Uint8Array(d)].slice(0, 12).map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+// addressGroup is the address, or the /64 an IPv6 address is in.
+export function addressGroup(ip: string): string {
+  if (!ip.includes(":")) return ip;
+  const mapped = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/i.exec(ip);
+  if (mapped) return mapped[1];
+  const [head, tail = ""] = ip.split("::");
+  const h = head ? head.split(":") : [];
+  const t = tail ? tail.split(":") : [];
+  const full = ip.includes("::") ? [...h, ...Array(8 - h.length - t.length).fill("0"), ...t] : h;
+  return full.slice(0, 4).map((x) => (parseInt(x || "0", 16) || 0).toString(16)).join(":") + "::/64";
 }
 
 async function hmacHex(keyHex: string, message: string): Promise<string> {

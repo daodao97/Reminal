@@ -12,7 +12,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/gorilla/websocket"
 
@@ -76,11 +78,19 @@ func ownerHandshake(t *testing.T, url, sessionID, answer string) (asked bool, er
 	defer conn.Close()
 	v := &Viewer{sessionID: sessionID, owner: true}
 	if answer != "" {
-		in := make(chan []byte, 1)
-		in <- []byte(answer)
+		// A key pressed before the question is not an answer; this one comes
+		// after it, as a person's would. A stray key is typed first to check.
+		in := make(chan []byte, 2)
+		in <- []byte("x")
+		var answered atomic.Bool
+		go func() {
+			time.Sleep(300 * time.Millisecond)
+			answered.Store(true)
+			in <- []byte(answer)
+		}()
 		v.promptIn = in
 		v.promptEsc = make(chan struct{})
-		defer func() { asked = len(in) == 0 }()
+		defer func() { asked = answered.Load() && len(in) == 0 }()
 	}
 	return false, v.negotiateSessionKeyOwner(conn)
 }
@@ -179,5 +189,24 @@ func TestOwnerConnectPinnedSessionRefusesOtherKey(t *testing.T) {
 	_, other := machineKeyPair(t)
 	if _, err := ownerHandshake(t, answeringMachine(t, "OLDSESS1", other), "OLDSESS1", "y"); err == nil || !strings.Contains(err.Error(), "identity changed") {
 		t.Fatalf("pinned session answered by another key: %v", err)
+	}
+}
+
+// A machine this device pinned for another session, before trust was held per
+// machine, is recognised on a new session without asking, and recorded.
+func TestOwnerConnectMachinePinnedForAnotherSession(t *testing.T) {
+	isolateHome(t)
+	stubSessionHome(t, nil)
+	pub, priv := machineKeyPair(t)
+	if _, err := RecordMachineKey("OLDSESS9", pub); err != nil {
+		t.Fatal(err)
+	}
+	asked, err := ownerHandshake(t, answeringMachine(t, "NEWSESS9", priv), "NEWSESS9", "n")
+	if err != nil || asked {
+		t.Fatalf("machine pinned for another session: asked=%v err=%v", asked, err)
+	}
+	ms, _ := ListOwnedMachines()
+	if len(ms) != 1 || !ms[0].Key.Equal(pub) {
+		t.Fatal("machine was not recorded as one this device trusts")
 	}
 }

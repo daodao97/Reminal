@@ -107,6 +107,13 @@ func (v *Viewer) readSnapshotOnce() (string, bool, error) {
 		if json.Unmarshal(raw, &msg) != nil {
 			continue
 		}
+		msg, ok, serr := v.admitIn(msg)
+		if serr != nil {
+			return "", false, serr
+		}
+		if !ok {
+			continue
+		}
 		switch msg.Type {
 		case protocol.TypeData:
 			pt, derr := v.box.Decrypt(msg.Data)

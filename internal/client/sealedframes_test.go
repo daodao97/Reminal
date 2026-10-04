@@ -139,21 +139,76 @@ func TestAgentRefusesAStreamNoHandshakeIssued(t *testing.T) {
 }
 
 // A viewer from before sealed frames still works, and the agent writes both
-// forms while it is attached. Messages the agent wrote are not input.
-func TestAgentOlderViewerAndItsEchoes(t *testing.T) {
+// forms while it is attached.
+func TestAgentOlderViewer(t *testing.T) {
 	a, _ := sealedPair(t)
 	legacy, _ := a.box.Encrypt([]byte(`{"cols":80,"rows":24}`))
 	_, ok, legacyNow := a.admit(protocol.Message{Type: protocol.TypeResize, Data: legacy})
 	if !ok || !legacyNow || !a.seal.legacy.Load() {
 		t.Fatalf("older viewer's message: ok=%v legacyNow=%v", ok, legacyNow)
 	}
-	ownOutput, _ := a.box.Encrypt([]byte("echo hi\r"))
-	a.rememberEcho(ownOutput)
-	if _, ok, _ := a.admit(protocol.Message{Type: protocol.TypeData, Data: ownOutput}); ok {
-		t.Fatal("agent's own unsealed output accepted as input")
-	}
 	if _, ok, _ := a.admit(protocol.Message{Type: protocol.TypeData, Data: "bm90IG91cnM="}); ok {
-		t.Fatal("a message that is not encrypted with the session key was accepted")
+		t.Fatal("a message not encrypted with the session key was accepted")
+	}
+}
+
+// The agent's own earlier-form messages carry a marked nonce and are not
+// input, in any base64 spelling.
+func TestAgentOwnEarlierFormIsNotInput(t *testing.T) {
+	a, _ := sealedPair(t)
+	enc, _ := a.box.Encrypt([]byte("echo hi\r"))
+	raw, err := a.legacyForm(a.frameKeys(), protocol.Message{Type: protocol.TypeData, Data: enc})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var m protocol.Message
+	_ = json.Unmarshal(raw, &m)
+	if _, ok, _ := a.admit(m); ok {
+		t.Fatal("agent's own earlier-form message accepted as input")
+	}
+	m.Data = m.Data[:8] + "\n" + m.Data[8:]
+	if _, ok, _ := a.admit(m); ok {
+		t.Fatal("agent's own earlier-form message accepted with a line break in it")
+	}
+}
+
+// An earlier-form message is accepted once.
+func TestAgentEarlierFormOnce(t *testing.T) {
+	a, _ := sealedPair(t)
+	enc, _ := a.box.Encrypt([]byte("x"))
+	if _, ok, _ := a.admit(protocol.Message{Type: protocol.TypeData, Data: enc}); !ok {
+		t.Fatal("first delivery refused")
+	}
+	if _, ok, _ := a.admit(protocol.Message{Type: protocol.TypeData, Data: enc}); ok {
+		t.Fatal("same earlier-form message accepted twice")
+	}
+}
+
+// A handshake that does not ask for sealed frames is a viewer that reads only
+// the earlier form, so the agent writes both from then on.
+func TestAgentHandshakeWithoutFramesWritesBoth(t *testing.T) {
+	a, _ := sealedPair(t)
+	a.handshakeWithout(1)
+	if a.seal.legacy.Load() {
+		t.Fatal("a sealing handshake switched to both forms")
+	}
+	a.handshakeWithout(0)
+	if !a.seal.legacy.Load() {
+		t.Fatal("an older handshake did not switch to both forms")
+	}
+}
+
+// A stream in use is not the one dropped when the table is full.
+func TestAgentKeepsStreamsInUse(t *testing.T) {
+	a, v := sealedPair(t)
+	shared := make([]byte, 32)
+	for i := 0; i < maxStreams+10; i++ {
+		_ = a.sealInfoFor(1, shared, []byte("0123456789abcdef"))
+		if i%100 == 0 {
+			if _, ok, _ := a.admit(fromViewer(t, v, protocol.Message{Type: protocol.TypeData, Data: "k"})); !ok {
+				t.Fatalf("stream in use refused after %d newer handshakes", i)
+			}
+		}
 	}
 }
 
@@ -168,12 +223,12 @@ func TestAgentRefusesUnsealedWhenAllViewersSeal(t *testing.T) {
 	}
 }
 
-// An older client asks for lists bare. That is answered, in the form it can
-// read, and changes nothing else.
-func TestAgentAnswersAnOlderClientsBareRequest(t *testing.T) {
+// A bare request for a list is answered, and does not change which form the
+// agent writes.
+func TestAgentAnswersABareRequest(t *testing.T) {
 	a, _ := sealedPair(t)
 	_, ok, legacyNow := a.admit(protocol.Message{Type: protocol.TypeDirQuery})
-	if !ok || !legacyNow {
+	if !ok || legacyNow || a.seal.legacy.Load() {
 		t.Fatalf("bare list request: ok=%v legacyNow=%v", ok, legacyNow)
 	}
 }

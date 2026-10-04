@@ -79,3 +79,74 @@ func TestKexLongTermAllowance(t *testing.T) {
 		}
 	}
 }
+
+// One source on its own gets exactly what the machine-wide allowance gives:
+// tagging it never makes it wait longer.
+func TestKexSourceShareAloneMatchesMachineWide(t *testing.T) {
+	run := func(src string) int {
+		a := &Agent{}
+		base := time.Now()
+		n := 0
+		for i := 0; i < 180; i++ { // a handshake a minute for three hours
+			if ok, _ := a.allowKexFrom(base.Add(time.Duration(i)*time.Minute), src); ok {
+				n++
+			}
+		}
+		return n
+	}
+	if tagged, untagged := run("A"), run(""); tagged != untagged {
+		t.Fatalf("one tagged source got %d handshakes, untagged got %d", tagged, untagged)
+	}
+}
+
+// Once the machine-wide allowance is low, a source past its share waits and
+// another source is still served.
+func TestKexSourceShareUnderPressure(t *testing.T) {
+	a := &Agent{}
+	now := time.Now()
+	a.allowKexFrom(now, "B") // B is about too
+	for i := 0; i < 7; i++ {
+		if ok, _ := a.allowKexFrom(now, "A"); !ok {
+			t.Fatalf("A refused at %d within the burst", i)
+		}
+	}
+	// Spread the rest out so the short-term bucket is not what refuses.
+	at := now
+	for i := 0; i < 20; i++ {
+		at = at.Add(kexRefill)
+		a.allowKexFrom(at, "A")
+	}
+	at = at.Add(kexRefill)
+	ok, retry := a.allowKexFrom(at, "A")
+	if ok || retry <= 0 {
+		t.Fatalf("A past its share under pressure: ok=%v retry=%v", ok, retry)
+	}
+	if ok, _ := a.allowKexFrom(at.Add(kexRefill), "B"); !ok {
+		t.Fatal("another source was refused while the machine still had allowance")
+	}
+}
+
+// Two sources over three hours, one asking every 10 s and one every 3 min:
+// the second keeps getting answered, with no long run of refusals.
+func TestKexSteadySourceKeepsBeingAnswered(t *testing.T) {
+	a := &Agent{}
+	base := time.Now()
+	got, longestGap := 0, time.Duration(0)
+	last := base
+	for sec := 0; sec < 3*3600; sec += 10 {
+		now := base.Add(time.Duration(sec) * time.Second)
+		a.allowKexFrom(now, "frequent")
+		if sec%180 != 0 {
+			continue
+		}
+		if ok, _ := a.allowKexFrom(now, "steady"); ok {
+			got++
+			last = now
+		} else if g := now.Sub(last); g > longestGap {
+			longestGap = g
+		}
+	}
+	if got < 30 || longestGap > 15*time.Minute {
+		t.Fatalf("steady source: %d of 60 answered, longest gap %v", got, longestGap)
+	}
+}

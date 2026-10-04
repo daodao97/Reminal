@@ -5139,6 +5139,7 @@
     // trigger from double-firing.) Set synchronously at the top of sendKexInit.
     let kexInFlight = false;
     let pakeTimeouts = 0;       // consecutive unanswered handshakes on this page
+    let pakeBusyTries = 0;      // pake_busy answers since the last completed handshake
 
 
     // u8ToBase64 / base64ToU8 mirror the encrypt/decrypt helpers'
@@ -5362,6 +5363,7 @@
 
     async function completeKex(msg) {
       const att = kexAttempts.get(msg.ex_id);
+      const kexSock = ws;
       if (!att || cryptoKey) {
         // Not one of our outstanding attempts (the relay fans agent replies out
         // to every viewer), or we're already done — ignore.
@@ -5399,12 +5401,17 @@
           { name: 'AES-GCM', iv: wrapNonce }, wrapKey, wrapCT
         )
       );
-      sealState = await openSealInfo(shared, att.exIDBytes, msg.seal, sessionKeyRaw);
-      cryptoKey = await crypto.subtle.importKey(
+      const st = await openSealInfo(shared, att.exIDBytes, msg.seal, sessionKeyRaw);
+      const key = await crypto.subtle.importKey(
         'raw', sessionKeyRaw, { name: 'AES-GCM' }, false, ['encrypt', 'decrypt']
       );
+      // Install the key only for the connection and attempt it was made for.
+      if (ws !== kexSock || cryptoKey || kexAttempts.get(msg.ex_id) !== att) return;
+      sealState = st;
+      cryptoKey = key;
       dbg('✓ handshake complete — session key set' + (sealState ? ', sealed frames' : ''));
       pakeTimeouts = 0;
+      pakeBusyTries = 0;
       reportSizeNow();
       // Burn ALL ephemeral material (every outstanding attempt) — nothing
       // downstream needs it, and holding on makes a long-running tab a juicier
@@ -5505,6 +5512,13 @@
       const owned = await loadOwnedMachines();
       const keys = Object.keys(owned);
       if (keys.some(k => sameKey(k, machineB64))) { await pinMachine(sid, machineB64); return; }
+      // A key this browser pinned for another session, before trust was held
+      // per machine, is a machine it already trusts.
+      if (await pinnedForAnySession(machineB64)) {
+        await pinMachine(sid, machineB64);
+        try { await recordOwnedMachineWeb(machineB64); } catch (_) {}
+        return;
+      }
       // The answer is in hand; the lookup and the question below can outlast
       // the handshake's own timers, which would otherwise retry over them.
       if (ownerTimer) { clearTimeout(ownerTimer); ownerTimer = 0; }
@@ -5519,6 +5533,19 @@
         throw new Error('not connected — this browser has not connected to that machine before, and it was not confirmed');
       }
       await pinMachine(sid, machineB64);
+    }
+    async function pinnedForAnySession(machineB64) {
+      try {
+        const db = await openOwnDB();
+        const keys = await new Promise((res, rej) => {
+          const t = db.transaction('keys', 'readonly').objectStore('keys').getAllKeys();
+          t.onsuccess = () => res(t.result || []); t.onerror = () => rej(t.error);
+        });
+        for (const k of keys) {
+          if (typeof k === 'string' && k.startsWith('mach:') && sameKey((await idbGet(db, k)) || '', machineB64)) return true;
+        }
+      } catch (_) {}
+      return false;
     }
     // Which of this browser's machines hosts sid, asked over their directory
     // channels.
@@ -5587,6 +5614,7 @@
     async function completeOwnerChecked(msg) {
       const att = ownerAttempts.get(msg.ex_id);
       if (!att || cryptoKey) return;
+      const sock = ws, sid = sessionId;
       const agentEph = base64ToU8(msg.data || '');
       const machinePub = base64ToU8(msg.machine_pub || '');
       const machineSig = base64ToU8(msg.machine_sig || '');
@@ -5601,6 +5629,9 @@
       //    session before, or any machine it has connected to as an owner.
       const machineB64 = u8ToBase64(machinePub);
       await checkMachineIdentity(sessionId, machineB64);
+      // The check can take a while (a lookup, a question). Carry on only if
+      // this is still the connection and the attempt it was for.
+      if (ws !== sock || sessionId !== sid || cryptoKey || ownerAttempts.get(msg.ex_id) !== att) return;
       // 3. Same wrapped-session-key path as the PIN handshake.
       const shared = await att.eph.deriveShared(agentEph);
       const sharedKey = await crypto.subtle.importKey('raw', shared, 'HKDF', false, ['deriveBits']);
@@ -5612,8 +5643,12 @@
       if (wrapped.length < 12 + 16) throw new Error('wrap too short');
       const sessionKeyRaw = new Uint8Array(await crypto.subtle.decrypt(
         { name: 'AES-GCM', iv: wrapped.slice(0, 12) }, wrapKey, wrapped.slice(12)));
-      sealState = await openSealInfo(shared, att.exIDBytes, msg.seal, sessionKeyRaw);
-      cryptoKey = await crypto.subtle.importKey('raw', sessionKeyRaw, { name: 'AES-GCM' }, false, ['encrypt', 'decrypt']);
+      const st = await openSealInfo(shared, att.exIDBytes, msg.seal, sessionKeyRaw);
+      const key = await crypto.subtle.importKey('raw', sessionKeyRaw, { name: 'AES-GCM' }, false, ['encrypt', 'decrypt']);
+      // Install the key only for the connection and attempt it was made for.
+      if (ws !== sock || sessionId !== sid || cryptoKey || ownerAttempts.get(msg.ex_id) !== att) return;
+      sealState = st;
+      cryptoKey = key;
       dbg('✓ owner handshake complete — PIN-free' + (sealState ? ', sealed frames' : ''));
       reportSizeNow();
       ownerAttempts.clear();
@@ -5692,6 +5727,20 @@
     }
     async function forgetOwnedMachineWeb(machineB64) {
       await withOwnedMachines(m => { delete m[machineB64]; });
+      // And the sessions it was pinned for, or the next owner connect would
+      // trust it again from those pins.
+      try {
+        const db = await openOwnDB();
+        const keys = await new Promise((res, rej) => {
+          const t = db.transaction('keys', 'readonly').objectStore('keys').getAllKeys();
+          t.onsuccess = () => res(t.result || []); t.onerror = () => rej(t.error);
+        });
+        for (const k of keys) {
+          if (typeof k === 'string' && k.startsWith('mach:') && sameKey((await idbGet(db, k)) || '', machineB64)) {
+            await new Promise((res) => { const t = db.transaction('keys', 'readwrite').objectStore('keys').delete(k); t.onsuccess = t.onerror = () => res(); });
+          }
+        }
+      } catch (_) {}
       renderMachines();
     }
 
@@ -7254,7 +7303,7 @@
     // once. An agent that predates them never says so, and nothing changes.
     const UNSEALED = new Set(['auth', 'auth_ok', 'register', 'join', 'connected', 'error',
       'ping', 'pong', 'closed', 'resume', 'agent_online', 'agent_offline', 'kex_init',
-      'kex_resp', 'pake_init', 'pake_resp', 'own_init', 'own_resp', 'own_busy', 'sealed']);
+      'kex_resp', 'pake_init', 'pake_resp', 'pake_busy', 'own_init', 'own_resp', 'own_busy', 'sealed']);
     const sealable = (t) => !!t && !UNSEALED.has(t);
     let sealState = null; // this connection's: { a2v, v2a, stream, outCtr, inLast }
     let sealSendChain = Promise.resolve();
@@ -8221,6 +8270,7 @@
       connectBtn.textContent = 'Cancel';
 
       const dialStart = Date.now();
+      pakeBusyTries = 0; // each connection gets its own few retries
       ws = new WebSocket(relayURL(sessionId));
       {
         const rawSend = ws.send.bind(ws);
@@ -8395,6 +8445,19 @@
           }
           startSessionFlow();
           break;
+        case 'pake_busy': {
+          // The relay or the machine is pacing PIN handshakes. Wait as asked,
+          // then start a fresh handshake on this socket; a few times at most.
+          if (!kexAttempts.has(msg.ex_id) || cryptoKey) break;
+          if (kexTimer) { clearTimeout(kexTimer); kexTimer = 0; }
+          kexAttempts.delete(msg.ex_id);
+          if (++pakeBusyTries > 3) { setStatus('This machine is busy — try again in a few minutes', 'error'); break; }
+          const wait = Math.min(Math.max(Number(msg.retry_ms) || 0, 1000), 90000);
+          setStatus('Busy — trying again in ' + Math.ceil(wait / 1000) + 's', 'warn connecting');
+          const sock = ws;
+          setTimeout(() => { if (ws === sock && !cryptoKey) sendKexInit().catch(() => {}); }, wait);
+          break;
+        }
         case 'pake_resp':
           try {
             await completeKex(msg);

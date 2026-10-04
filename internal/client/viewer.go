@@ -543,16 +543,18 @@ func (v *Viewer) negotiateSessionKey(conn *websocket.Conn) error {
 		return fmt.Errorf("handshake: %w", err)
 	}
 	v.resetSeal()
-	if err := v.writeMsg(conn, protocol.Message{
+	initMsg := protocol.Message{
 		Type:   protocol.TypePakeInit,
 		ExID:   exIDHex,
 		Data:   base64.StdEncoding.EncodeToString(mine),
 		Frames: 1,
-	}); err != nil {
+	}
+	if err := v.writeMsg(conn, initMsg); err != nil {
 		return fmt.Errorf("handshake: send: %w", err)
 	}
 
 	deadline := time.Now().Add(kexTimeout)
+	busyWaits := 0
 	for {
 		_ = conn.SetReadDeadline(deadline)
 		_, raw, err := conn.ReadMessage()
@@ -572,6 +574,28 @@ func (v *Viewer) negotiateSessionKey(conn *websocket.Conn) error {
 		switch msg.Type {
 		case protocol.TypeError:
 			return fmt.Errorf("%s", msg.Error)
+		case protocol.TypePakeBusy:
+			// The relay is pacing PIN handshakes from this network: wait as
+			// asked, then send the same handshake again.
+			if msg.ExID != exIDHex {
+				continue
+			}
+			if busyWaits >= 2 {
+				return fmt.Errorf("this machine is busy — try again in a few minutes")
+			}
+			busyWaits++
+			wait := time.Duration(msg.RetryMS) * time.Millisecond
+			if wait < time.Second {
+				wait = time.Second
+			} else if wait > 30*time.Second {
+				wait = 30 * time.Second
+			}
+			v.notify(fmt.Sprintf("Busy — trying again in %ds", int(wait.Seconds())))
+			time.Sleep(wait)
+			if err := v.writeMsg(conn, initMsg); err != nil {
+				return fmt.Errorf("handshake: send: %w", err)
+			}
+			deadline = time.Now().Add(kexTimeout)
 		case protocol.TypePakeResp:
 			if msg.ExID != exIDHex {
 				continue // another viewer's handshake
