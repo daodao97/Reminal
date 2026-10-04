@@ -9,6 +9,9 @@ export type Attachment = {
   // through `reminal expose`. It correlates the visitor's socket with the
   // backend connection the agent dialed, so frames route to the right peer.
   streamId?: string;
+  // src, on a viewer socket, is a hash of the address it connected from,
+  // for counting its PIN handshakes (SessionRoom.allowHandshake).
+  src?: string;
 };
 
 // TunnelMeta is persisted in DO storage once the tunnel agent registers
