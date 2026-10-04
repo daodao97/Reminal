@@ -23,7 +23,8 @@ import (
 // window, display capture" — although reminal is allowed to record the screen.
 // Every window and desktop view then fails. Toggling the permission or
 // restarting reminal does not help, because the fault is inside replayd;
-// restarting replayd does, and launchd starts a fresh one at once. Seen on
+// restarting replayd does: launchd starts a fresh one the next time a capture
+// asks for it. Seen on
 // macOS 14.8 on 2026-10-03, after replayd had been up for days.
 //
 // So when a capture fails with exactly that error, and reminal's own preflight
@@ -137,7 +138,8 @@ func parsePIDs(out string) []int {
 
 // killPID stops a process outright. replayd ignores a plain termination
 // request and launchd refuses to kickstart it ("Operation not permitted"), but
-// a forced stop works and launchd starts a fresh one immediately.
+// a forced stop works. launchd starts a fresh replayd when the next capture
+// asks for one, which is the session's own retry.
 func killPID(pid int) error {
 	p, err := os.FindProcess(pid)
 	if err != nil {
