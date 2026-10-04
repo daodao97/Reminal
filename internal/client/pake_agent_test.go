@@ -41,7 +41,7 @@ func viewerHalf(t *testing.T, a *Agent, pin string) ([]byte, bool) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	a.handlePakeInit(conn, exHex, base64.StdEncoding.EncodeToString(mine))
+	a.handlePakeInit(conn, exHex, base64.StdEncoding.EncodeToString(mine), 0)
 	reply, ok := nextOwnerMsg(t, got)
 	if !ok {
 		t.Fatal("the agent did not answer the handshake")

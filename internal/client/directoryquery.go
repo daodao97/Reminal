@@ -80,7 +80,16 @@ func (r dirQueryReq) empty() bool {
 // encryption box. The caller owns the connection and MUST Close it. Shared by
 // queryDirectory (list/search), SpawnOnMachine (new_session), and KillOnMachine
 // (dir_kill).
-func dialDirectoryOwner(machinePub ed25519.PublicKey, timeout time.Duration) (*websocket.Conn, *crypto.Box, error) {
+// dirConn is a machine-channel connection: the socket, and once the owner
+// handshake is done, its session key and sealed-frame state. writeDir and
+// readDir seal and open through it.
+type dirConn struct {
+	*websocket.Conn
+	box  *crypto.Box
+	seal viewerSeal
+}
+
+func dialDirectoryOwner(machinePub ed25519.PublicKey, timeout time.Duration) (*dirConn, *crypto.Box, error) {
 	if len(machinePub) != ed25519.PublicKeySize {
 		return nil, nil, fmt.Errorf("machine key must be %d bytes", ed25519.PublicKeySize)
 	}
@@ -97,10 +106,11 @@ func dialDirectoryOwner(machinePub ed25519.PublicKey, timeout time.Duration) (*w
 	// `reminal machines` (which waits on every query) for ~45s instead of ~6s.
 	dialer := *websocket.DefaultDialer
 	dialer.HandshakeTimeout = timeout
-	conn, _, err := dialer.Dial(wsURL, nil)
+	raw, _, err := dialer.Dial(wsURL, nil)
 	if err != nil {
 		return nil, nil, ErrDirUnreachable
 	}
+	conn := &dirConn{Conn: raw}
 	// The relay is untrusted, and `reminal machines` opens one of these per owned
 	// machine in parallel — cap the read so a malicious relay can't OOM us with an
 	// oversized frame (it just fails to that machine). Matches the relay's own cap.
@@ -138,17 +148,17 @@ func dialDirectoryOwner(machinePub ed25519.PublicKey, timeout time.Duration) (*w
 		Data:      base64.StdEncoding.EncodeToString(viewerEph),
 		DevicePub: base64.StdEncoding.EncodeToString(devicePub),
 		DeviceSig: base64.StdEncoding.EncodeToString(sig),
+		Frames:    1,
 	}); err != nil {
 		conn.Close()
 		return nil, nil, err
 	}
 
-	box, err := readOwnerResp(conn, dirID, exHex, exID, viewerEph, devicePub, machinePub, eph)
-	if err != nil {
+	if err := readOwnerResp(conn, dirID, exHex, exID, viewerEph, devicePub, machinePub, eph); err != nil {
 		conn.Close()
 		return nil, nil, err
 	}
-	return conn, box, nil
+	return conn, conn.box, nil
 }
 
 // queryDirectory is QueryDirectory with optional search / one-session dump.
@@ -330,11 +340,11 @@ func KillOnMachine(machinePub ed25519.PublicKey, sessionID string, timeout time.
 // the machine key we already know (stronger than the connect path's trust-on-
 // first-use — here an impostor signing with any other key simply fails), and
 // returns the established encryption box.
-func readOwnerResp(conn *websocket.Conn, dirID, exHex string, exID, viewerEph, devicePub, machinePub []byte, eph *ecdh.PrivateKey) (*crypto.Box, error) {
+func readOwnerResp(conn *dirConn, dirID, exHex string, exID, viewerEph, devicePub, machinePub []byte, eph *ecdh.PrivateKey) error {
 	for {
 		var msg protocol.Message
 		if err := readDir(conn, &msg); err != nil {
-			return nil, err
+			return err
 		}
 		// The host BROADCASTS own_resp to every viewer on the channel, so when
 		// more than one owner queries the same machine at once we'll also see the
@@ -346,60 +356,92 @@ func readOwnerResp(conn *websocket.Conn, dirID, exHex string, exID, viewerEph, d
 		}
 		agentEph, err := base64.StdEncoding.DecodeString(msg.Data)
 		if err != nil || len(agentEph) != crypto.PubKeyBytes {
-			return nil, fmt.Errorf("directory: bad agent key")
+			return fmt.Errorf("directory: bad agent key")
 		}
 		machineSig, err := base64.StdEncoding.DecodeString(msg.MachineSig)
 		if err != nil {
-			return nil, fmt.Errorf("directory: bad machine signature")
+			return fmt.Errorf("directory: bad machine signature")
 		}
 		// Verify against the machine key we already hold. Any other signer fails.
 		if !crypto.VerifyOwner(ed25519.PublicKey(machinePub),
 			crypto.OwnerServerTranscript(dirID, viewerEph, agentEph, devicePub, machinePub), machineSig) {
-			return nil, fmt.Errorf("directory: machine signature invalid — refusing")
+			return fmt.Errorf("directory: machine signature invalid — refusing")
 		}
 		// The self-reported key must also be the one we expect (defence in depth;
 		// the signature check above already binds it).
 		if rep, err := base64.StdEncoding.DecodeString(msg.MachinePub); err != nil || !bytes.Equal(rep, machinePub) {
-			return nil, fmt.Errorf("directory: unexpected machine identity")
+			return fmt.Errorf("directory: unexpected machine identity")
 		}
 		peerKey, err := crypto.PeerPublicKey(agentEph)
 		if err != nil {
-			return nil, fmt.Errorf("directory: invalid agent key")
+			return fmt.Errorf("directory: invalid agent key")
 		}
 		shared, err := eph.ECDH(peerKey)
 		if err != nil {
-			return nil, fmt.Errorf("directory: ecdh: %w", err)
+			return fmt.Errorf("directory: ecdh: %w", err)
 		}
 		wrapped, err := base64.StdEncoding.DecodeString(msg.Wrap)
 		if err != nil {
-			return nil, fmt.Errorf("directory: bad wrap")
+			return fmt.Errorf("directory: bad wrap")
 		}
 		sessionKey, err := crypto.UnwrapSessionKey(shared, exID, wrapped)
 		if err != nil {
-			return nil, fmt.Errorf("directory: session key unwrap failed")
+			return fmt.Errorf("directory: session key unwrap failed")
 		}
-		return crypto.NewBox(sessionKey)
+		box, err := crypto.NewBox(sessionKey)
+		if err != nil {
+			return err
+		}
+		seal, err := newViewerSeal(sessionKey, shared, exID, msg.Seal)
+		if err != nil {
+			return err
+		}
+		conn.box, conn.seal = box, seal
+		return nil
 	}
 }
 
-func writeDir(conn *websocket.Conn, msg protocol.Message) error {
-	data, err := json.Marshal(msg)
+func writeDir(conn *dirConn, msg protocol.Message) error {
+	data, err := conn.seal.out(conn.box, msg)
 	if err != nil {
 		return err
+	}
+	if data == nil {
+		if data, err = json.Marshal(msg); err != nil {
+			return err
+		}
 	}
 	_ = conn.SetWriteDeadline(time.Now().Add(wsWriteWait))
 	return conn.WriteMessage(websocket.TextMessage, data)
 }
 
-func readDir(conn *websocket.Conn, out *protocol.Message) error {
+func readDir(conn *dirConn, out *protocol.Message) error {
 	for {
 		_, raw, err := conn.ReadMessage()
 		if err != nil {
 			return err
 		}
-		if err := json.Unmarshal(raw, out); err != nil {
+		var msg protocol.Message
+		if err := json.Unmarshal(raw, &msg); err != nil {
 			continue
 		}
+		if conn.box == nil {
+			// Before our handshake: the channel is shared, so other owners'
+			// sealed traffic goes by; none of it is ours to read.
+			if msg.Type == protocol.TypeSealed {
+				continue
+			}
+		} else {
+			m, ok, err := conn.seal.in(conn.box, msg)
+			if err != nil {
+				return err
+			}
+			if !ok {
+				continue
+			}
+			msg = m
+		}
+		*out = msg
 		if out.Type == protocol.TypeError {
 			return fmt.Errorf("%s", out.Error)
 		}
@@ -407,7 +449,7 @@ func readDir(conn *websocket.Conn, out *protocol.Message) error {
 	}
 }
 
-func waitAuthOK(conn *websocket.Conn) error {
+func waitAuthOK(conn *dirConn) error {
 	for {
 		var msg protocol.Message
 		if err := readDir(conn, &msg); err != nil {

@@ -164,7 +164,17 @@ This section is the one a security reviewer should read most carefully.
 ### 5.1 Terminal, window, and desktop sessions — end-to-end encrypted
 
 Session payloads are sealed with AES-256-GCM under the session key
-(`internal/crypto/box.go`) before they reach the relay. The relay sees:
+(`internal/crypto/box.go`) before they reach the relay.
+
+When both ends support it (agent and viewer 3.15.7 or later), each message is
+sealed as a frame (`internal/crypto/frames.go`): one key per direction, derived
+from the session key, and the message's type, its sender's stream, its position in
+that stream, and its scrollback sequence number bound in as associated data. Each
+handshake gives the viewer its own stream and tells it where the agent's counter
+stands, encrypted under the handshake's key. A frame is accepted once, in order,
+in the direction and as the type it was sent. An end that predates frames is
+answered in the earlier form; while such a viewer is attached the agent writes both
+forms, and does not take its own earlier-form messages back as input. The relay sees:
 
 - The session ID (it needs it to route).
 - Frame sizes and timing.

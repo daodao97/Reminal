@@ -52,6 +52,12 @@ const (
 	// TypePakeResp answers it: the agent's element (Data) and the session key
 	// wrapped under the key both sides derive (Wrap).
 	TypePakeResp MessageType = "pake_resp"
+
+	// TypeSealed wraps a session message once both ends support it: the
+	// inner type, the sender's stream and counter, and the scrollback seq
+	// are all bound into its encryption (crypto/frames.go). Peers that
+	// predate it ignore it.
+	TypeSealed MessageType = "sealed"
 	// TypeOwnerInit is an enrolled device's opening message of a PIN-free
 	// (owner) connect: its raw ephemeral X25519 key (Data), its owner public
 	// key (DevicePub), and a signature (DeviceSig) proving it controls that key
@@ -384,7 +390,45 @@ type Message struct {
 	// RetryMS is how long a TypeOwnerBusy asks the device to wait before it
 	// tries the handshake again, in milliseconds.
 	RetryMS int `json:"retry_ms,omitempty"`
+	// Sealed frames (TypeSealed). Inner is the wrapped message's type, Stream
+	// the sender's stream (0 for the agent), Ctr its position in that stream.
+	Inner  MessageType `json:"inner,omitempty"`
+	Stream uint32      `json:"stream,omitempty"`
+	Ctr    uint64      `json:"ctr,omitempty"`
+	// Frames, on a viewer's pake_init / own_init, says it can use sealed
+	// frames (1). Seal, on the agent's answer, is the encrypted stream and
+	// counter it is to use (crypto.SealSealInfo); absent from an agent that
+	// predates sealed frames.
+	Frames int    `json:"frames,omitempty"`
+	Seal   string `json:"seal,omitempty"`
 }
+
+// unsealed are the messages that are never wrapped in TypeSealed: the relay's
+// own, the handshakes that set up the session key, keepalives, and resume
+// (which carries nothing but a number).
+var unsealed = map[MessageType]bool{
+	TypeAuth: true, TypeAuthOK: true, TypeRegister: true, TypeJoin: true,
+	TypeConnected: true, TypeError: true, TypePing: true, TypePong: true,
+	TypeClosed: true, TypeResume: true, TypeAgentOnline: true, TypeAgentOffline: true,
+	TypeKexInit: true, TypeKexResp: true, TypePakeInit: true, TypePakeResp: true,
+	TypeOwnerInit: true, TypeOwnerResp: true, TypeOwnerBusy: true,
+	TypeSealed: true,
+}
+
+// ReadOnlyRequest reports whether a message of type t, sent with no payload,
+// only asks for something to be sent back: a client from before sealed frames
+// sends these bare, and answering one changes nothing.
+func ReadOnlyRequest(t MessageType) bool {
+	switch t {
+	case TypeDirQuery, TypeWindowList, TypeAppList, TypeHostInfo, TypeChangelog:
+		return true
+	}
+	return false
+}
+
+// Sealable reports whether a session message of type t travels sealed when
+// both ends support it.
+func Sealable(t MessageType) bool { return t != "" && !unsealed[t] }
 
 // DirSession is one live session as reported by a machine's directory host. It
 // deliberately OMITS the PIN — an owner reaches sessions PIN-free, and the PIN

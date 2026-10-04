@@ -55,6 +55,9 @@ attempt to impersonate either party.
 *Mitigations:*
 
 - Payloads are opaque ciphertext; the relay holds no session key.
+- Between ends that both support sealed frames, each message's type, direction,
+  stream, and position are bound into its encryption (architecture §5.1). A
+  viewer from before sealed frames keeps the earlier form until it is updated.
 - The relay performs **no PIN verification and never receives the PIN**. This is a
   deliberate capability refusal: a relay able to check a PIN could brute-force it
   offline and could take part in the exchange as either side

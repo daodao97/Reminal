@@ -5330,6 +5330,7 @@
         type: 'pake_init',
         ex_id: exID,
         data: u8ToBase64(cp.mine),
+        frames: 1,
       }));
       dbg('▶ pake_init sent ex=' + exID.slice(0, 6) + ' agentLive=' + agentLive + ' (outstanding=' + kexAttempts.size + ')');
       // Arm a watchdog: if completeKex doesn't clear it within
@@ -5398,10 +5399,11 @@
           { name: 'AES-GCM', iv: wrapNonce }, wrapKey, wrapCT
         )
       );
+      sealState = await openSealInfo(shared, att.exIDBytes, msg.seal, sessionKeyRaw);
       cryptoKey = await crypto.subtle.importKey(
         'raw', sessionKeyRaw, { name: 'AES-GCM' }, false, ['encrypt', 'decrypt']
       );
-      dbg('✓ handshake complete — session key set');
+      dbg('✓ handshake complete — session key set' + (sealState ? ', sealed frames' : ''));
       pakeTimeouts = 0;
       reportSizeNow();
       // Burn ALL ephemeral material (every outstanding attempt) — nothing
@@ -5556,6 +5558,7 @@
           data: u8ToBase64(viewerEph),
           device_pub: u8ToBase64(dk.pubRaw),
           device_sig: u8ToBase64(sig),
+          frames: 1,
         }));
         if (ownerTimer) clearTimeout(ownerTimer);
         ownerTimer = setTimeout(() => {
@@ -5609,8 +5612,9 @@
       if (wrapped.length < 12 + 16) throw new Error('wrap too short');
       const sessionKeyRaw = new Uint8Array(await crypto.subtle.decrypt(
         { name: 'AES-GCM', iv: wrapped.slice(0, 12) }, wrapKey, wrapped.slice(12)));
+      sealState = await openSealInfo(shared, att.exIDBytes, msg.seal, sessionKeyRaw);
       cryptoKey = await crypto.subtle.importKey('raw', sessionKeyRaw, { name: 'AES-GCM' }, false, ['encrypt', 'decrypt']);
-      dbg('✓ owner handshake complete — PIN-free');
+      dbg('✓ owner handshake complete — PIN-free' + (sealState ? ', sealed frames' : ''));
       reportSizeNow();
       ownerAttempts.clear();
       if (ownerTimer) { clearTimeout(ownerTimer); ownerTimer = 0; }
@@ -5741,12 +5745,16 @@
           if (err) reject(err); else resolve(val);
         };
         const timer = setTimeout(() => done(new Error('timeout')), opts.timeout || 6000);
+        const ch = { seal: null, key: null };
+        const sealer = sealSocket(sock, ch);
         sock.onerror = () => done(new Error('unreachable'));
         sock.onclose = () => done(new Error('unreachable'));
         sock.onopen = () => sock.send(JSON.stringify({ type: 'auth' }));
         sock.onmessage = async (ev) => {
           let msg; try { msg = JSON.parse(ev.data); } catch (_) { return; }
           try {
+            msg = await admitDirMsg(ch, sealer, msg);
+            if (!msg) return;
             if (msg.type === 'error') return done(new Error('unreachable'));
             if (state === 'auth') {
               if (msg.type !== 'auth_ok') return;
@@ -5756,7 +5764,7 @@
               const tr = await ownerTranscript('reminal-owner-cli-v1', dirID, [eph.pub, dk.pubRaw]);
               const sig = new Uint8Array(await crypto.subtle.sign({ name: 'Ed25519' }, dk.privateKey, tr));
               att = { eph, exIDBytes, exID, viewerEph: eph.pub, devicePubRaw: dk.pubRaw };
-              sock.send(JSON.stringify({ type: 'own_init', ex_id: exID, data: u8ToBase64(eph.pub), device_pub: u8ToBase64(dk.pubRaw), device_sig: u8ToBase64(sig) }));
+              sock.send(JSON.stringify({ type: 'own_init', ex_id: exID, data: u8ToBase64(eph.pub), device_pub: u8ToBase64(dk.pubRaw), device_sig: u8ToBase64(sig), frames: 1 }));
               state = 'own';
               return;
             }
@@ -5778,7 +5786,9 @@
               const wrapped = base64ToU8(msg.wrap || '');
               if (wrapped.length < 28) return done(new Error('wrap too short'));
               const skRaw = new Uint8Array(await crypto.subtle.decrypt({ name: 'AES-GCM', iv: wrapped.slice(0, 12) }, wrapKey, wrapped.slice(12)));
+              ch.seal = await openSealInfo(shared, att.exIDBytes, msg.seal, skRaw);
               box = await crypto.subtle.importKey('raw', skRaw, { name: 'AES-GCM' }, false, ['encrypt', 'decrypt']);
+              ch.key = box;
               if (opts.spawn) {
                 att.reqId = Math.random().toString(36).slice(2);
                 const enc = await encrypt(box, JSON.stringify({ name: opts.spawnName || '', cwd: opts.spawnCwd || '', req_id: att.reqId }));
@@ -6829,6 +6839,8 @@
       let hs = 'auth', att = null;
       w.sock = sock;
       const timer = setTimeout(() => { if (w.sock === sock && w.state === 'opening') { try { sock.close(); } catch (_) {} } }, 6000);
+      const ch = { seal: null, key: null };
+      const sealer = sealSocket(sock, ch);
       sock.onopen = () => sock.send(JSON.stringify({ type: 'auth' }));
       sock.onerror = () => {};
       sock.onclose = () => { clearTimeout(timer); if (w.sock === sock) warmFail(w); };
@@ -6836,6 +6848,8 @@
         if (w.sock !== sock) return; // superseded
         let msg; try { msg = JSON.parse(ev.data); } catch (_) { return; }
         try {
+          msg = await admitDirMsg(ch, sealer, msg);
+          if (!msg) return;
           if (msg.type === 'error') { try { sock.close(); } catch (_) {} return; }
           if (hs === 'auth') {
             if (msg.type !== 'auth_ok') return;
@@ -6845,7 +6859,7 @@
             const tr = await ownerTranscript('reminal-owner-cli-v1', dirID, [eph.pub, dk.pubRaw]);
             const sig = new Uint8Array(await crypto.subtle.sign({ name: 'Ed25519' }, dk.privateKey, tr));
             att = { eph, exIDBytes, exID, viewerEph: eph.pub, devicePubRaw: dk.pubRaw };
-            sock.send(JSON.stringify({ type: 'own_init', ex_id: exID, data: u8ToBase64(eph.pub), device_pub: u8ToBase64(dk.pubRaw), device_sig: u8ToBase64(sig) }));
+            sock.send(JSON.stringify({ type: 'own_init', ex_id: exID, data: u8ToBase64(eph.pub), device_pub: u8ToBase64(dk.pubRaw), device_sig: u8ToBase64(sig), frames: 1 }));
             hs = 'own';
             return;
           }
@@ -6867,7 +6881,9 @@
             const wrapped = base64ToU8(msg.wrap || '');
             if (wrapped.length < 28) throw new Error('wrap too short');
             const skRaw = new Uint8Array(await crypto.subtle.decrypt({ name: 'AES-GCM', iv: wrapped.slice(0, 12) }, wrapKey, wrapped.slice(12)));
+            ch.seal = await openSealInfo(shared, att.exIDBytes, msg.seal, skRaw);
             w.box = await crypto.subtle.importKey('raw', skRaw, { name: 'AES-GCM' }, false, ['encrypt', 'decrypt']);
+            ch.key = w.box;
             clearTimeout(timer);
             hs = 'ready'; w.state = 'open'; w.fails = 0;
             warmSend(b64, w); // first poll right away — don't wait for the tick
@@ -7221,11 +7237,142 @@
     }
 
     async function decrypt(key, encoded) {
+      // A sealed frame arrives already opened (unsealIn); pass it through.
+      if (encoded && encoded.__plain) return encoded.__plain;
       const raw = Uint8Array.from(atob(encoded), c => c.charCodeAt(0));
       const nonce = raw.slice(0, 12);
       const ct = raw.slice(12);
       const pt = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: nonce }, key, ct);
       return new Uint8Array(pt);
+    }
+
+    // ===== Sealed frames (internal/crypto/frames.go) =====
+    // Once the agent's handshake answer says it supports them, every session
+    // message travels sealed: its type, its direction, our stream and counter,
+    // and its seq are bound into the encryption, with one key per direction. A
+    // frame then opens only as the message it was sent as, the way it was sent,
+    // once. An agent that predates them never says so, and nothing changes.
+    const UNSEALED = new Set(['auth', 'auth_ok', 'register', 'join', 'connected', 'error',
+      'ping', 'pong', 'closed', 'resume', 'agent_online', 'agent_offline', 'kex_init',
+      'kex_resp', 'pake_init', 'pake_resp', 'own_init', 'own_resp', 'own_busy', 'sealed']);
+    const sealable = (t) => !!t && !UNSEALED.has(t);
+    let sealState = null; // this connection's: { a2v, v2a, stream, outCtr, inLast }
+    let sealSendChain = Promise.resolve();
+    let sealRecvChain = Promise.resolve();
+    async function frameKeyFrom(sessionKeyRaw, info) {
+      const ikm = await crypto.subtle.importKey('raw', sessionKeyRaw, 'HKDF', false, ['deriveBits']);
+      const bits = await crypto.subtle.deriveBits({ name: 'HKDF', hash: 'SHA-256', salt: new Uint8Array(0), info: utf8(info) }, ikm, 256);
+      return crypto.subtle.importKey('raw', bits, { name: 'AES-GCM' }, false, ['encrypt', 'decrypt']);
+    }
+    function u32be(n) { return new Uint8Array([(n >>> 24) & 255, (n >>> 16) & 255, (n >>> 8) & 255, n & 255]); }
+    function u64be(n) {
+      const b = new Uint8Array(8);
+      let v = BigInt(n);
+      for (let i = 7; i >= 0; i--) { b[i] = Number(v & 0xffn); v >>= 8n; }
+      return b;
+    }
+    function frameAAD(dir, inner, stream, ctr, seq) {
+      const t = utf8(inner);
+      return concatBytes(utf8('reminal-frame-v1'), new Uint8Array([dir]), u32be(t.length), t, u32be(stream), u64be(ctr), u64be(seq));
+    }
+    // The handshake answer's seal info: our stream, and the agent counter it
+    // has already passed. Encrypted under the handshake's own key, so it is
+    // what the agent sent. null when the agent predates sealed frames.
+    async function openSealInfo(shared, exIDBytes, sealed, sessionKeyRaw) {
+      if (!sealed) return null;
+      const ikm = await crypto.subtle.importKey('raw', shared, 'HKDF', false, ['deriveBits']);
+      const bits = await crypto.subtle.deriveBits({ name: 'HKDF', hash: 'SHA-256', salt: exIDBytes, info: utf8('reminal-seal-info-v1') }, ikm, 256);
+      const k = await crypto.subtle.importKey('raw', bits, { name: 'AES-GCM' }, false, ['decrypt']);
+      const raw = base64ToU8(sealed);
+      const pt = new Uint8Array(await crypto.subtle.decrypt({ name: 'AES-GCM', iv: raw.slice(0, 12), additionalData: exIDBytes }, k, raw.slice(12)));
+      if (pt.length !== 12) throw new Error('bad seal info');
+      const dv = new DataView(pt.buffer);
+      return {
+        a2v: await frameKeyFrom(sessionKeyRaw, 'reminal-frame-v1 agent-to-viewer'),
+        v2a: await frameKeyFrom(sessionKeyRaw, 'reminal-frame-v1 viewer-to-agent'),
+        stream: dv.getUint32(0), inLast: Number(dv.getBigUint64(4)), outCtr: 0,
+      };
+    }
+    // makeSealer seals and opens frames for one socket's handshake state
+    // (getState) and session key (getKey): send() takes what would have been
+    // sent as it is, open() takes a sealed frame and gives back the message it
+    // carries, or null to drop it. Both keep arrival order.
+    function makeSealer(getState, getKey) {
+      let sendChain = Promise.resolve(), recvChain = Promise.resolve();
+      return {
+        send(rawSend, text) {
+          const st = getState();
+          if (!st) { rawSend(text); return; }
+          sendChain = sendChain.then(async () => {
+            if (st !== getState()) return; // a newer handshake: this one's messages are moot
+            let msg = null;
+            try { msg = JSON.parse(text); } catch (_) {}
+            if (!msg || !sealable(msg.type)) { rawSend(text); return; }
+            let kind = 0, payload = new Uint8Array(0);
+            if (msg.data) {
+              try { payload = await decrypt(getKey(), msg.data); kind = 1; }
+              catch (_) { payload = utf8(String(msg.data)); kind = 2; }
+            }
+            const ctr = ++st.outCtr;
+            const seq = typeof msg.seq === 'number' ? msg.seq : 0;
+            const nonce = crypto.getRandomValues(new Uint8Array(12));
+            const ct = new Uint8Array(await crypto.subtle.encrypt(
+              { name: 'AES-GCM', iv: nonce, additionalData: frameAAD(2, msg.type, st.stream, ctr, seq) },
+              st.v2a, concatBytes(new Uint8Array([kind]), payload)));
+            const out = { type: 'sealed', inner: msg.type, stream: st.stream, ctr, data: u8ToBase64(concatBytes(nonce, ct)) };
+            if (seq) out.seq = seq;
+            rawSend(JSON.stringify(out));
+          }).catch(() => {});
+        },
+        open(msg) {
+          const st = getState();
+          recvChain = recvChain.then(async () => {
+            if (!st || st !== getState() || !sealable(msg.inner)) return null;
+            const ctr = Number(msg.ctr) || 0;
+            const seq = typeof msg.seq === 'number' ? msg.seq : 0;
+            if (ctr <= st.inLast) return null;
+            try {
+              const raw = base64ToU8(msg.data || '');
+              const pt = new Uint8Array(await crypto.subtle.decrypt(
+                { name: 'AES-GCM', iv: raw.slice(0, 12), additionalData: frameAAD(1, msg.inner, 0, ctr, seq) },
+                st.a2v, raw.slice(12)));
+              if (!pt.length || pt[0] > 2 || ctr <= st.inLast) return null;
+              st.inLast = ctr;
+              const out = { type: msg.inner };
+              if (typeof msg.seq === 'number') out.seq = msg.seq;
+              if (pt[0] === 1) out.data = { __plain: pt.slice(1) };
+              else if (pt[0] === 2) out.data = new TextDecoder().decode(pt.slice(1));
+              return out;
+            } catch (_) { return null; }
+          }).catch(() => null);
+          return recvChain;
+        },
+      };
+    }
+    // The session socket's: everything sent on it passes through sessionSend.
+    const sessionSealer = makeSealer(() => sealState, () => cryptoKey);
+    const sessionSend = (rawSend, text) => sessionSealer.send(rawSend, text);
+    const unsealIn = (msg) => sessionSealer.open(msg);
+    // sealSocket puts a machine-channel socket's sends through a sealer and
+    // returns that sealer; its handshake state and key live on ch.
+    function sealSocket(sock, ch) {
+      const sealer = makeSealer(() => ch.seal, () => ch.key);
+      const rawSend = sock.send.bind(sock);
+      sock.send = (text) => sealer.send((t) => { try { rawSend(t); } catch (_) {} }, text);
+      return sealer;
+    }
+    // admitDirMsg is what a machine-channel socket does with each message
+    // before acting on it: the message to act on, null to drop it, or throws
+    // when the machine seals but this socket's handshake answer said it does
+    // not.
+    async function admitDirMsg(ch, sealer, msg) {
+      if (msg.type === 'sealed') {
+        if (!ch.key) return null; // another owner's traffic, before our handshake
+        if (!ch.seal) throw new Error('connection interrupted');
+        return await sealer.open(msg);
+      }
+      if (ch.seal && sealable(msg.type)) return null; // the copy for clients that predate sealing
+      return msg;
     }
 
     function relayURL(sessionId) {
@@ -8010,6 +8157,7 @@
       // cryptoKey is established asynchronously by the EKE handshake
       // (see sendKexInit / completeKex) inside openSocket → ws.onmessage.
       cryptoKey = null;
+      sealState = null;
       sessionInput.value = sessionId;
       history.replaceState(null, '', '?s=' + sessionId);
       openSocket();
@@ -8044,6 +8192,7 @@
       // restarted, or it's simply a different K). Clear so we never
       // accidentally encrypt/decrypt with stale material.
       cryptoKey = null;
+      sealState = null;
       kexAttempts.clear();
       kexExID = '';
       kexInFlight = false;
@@ -8073,6 +8222,10 @@
 
       const dialStart = Date.now();
       ws = new WebSocket(relayURL(sessionId));
+      {
+        const rawSend = ws.send.bind(ws);
+        ws.send = (text) => sessionSend((t) => { try { rawSend(t); } catch (_) {} }, text);
+      }
       const dialingWs = ws;
       cancelDial();
       dialTimer = setTimeout(() => {
@@ -8173,6 +8326,22 @@
     }
 
     async function handleMessage(msg) {
+      if (msg.type === 'sealed') {
+        if (!sealState) {
+          // The agent seals, but this connection's handshake answer said it
+          // did not. Start over.
+          if (cryptoKey) {
+            dbg('sealed frame without a sealed handshake — reconnecting');
+            setStatus('Reconnecting…', 'warn');
+            try { ws.close(); } catch (_) {}
+          }
+          return;
+        }
+        msg = await unsealIn(msg);
+        if (!msg) return;
+      } else if (sealState && sealable(msg.type)) {
+        return; // the unsealed copy the agent writes for viewers that predate sealing
+      }
       if (DEBUG) dbg('◀ ' + msg.type + (msg.ex_id ? ' ex=' + String(msg.ex_id).slice(0, 6) : ''));
       switch (msg.type) {
         case 'auth_ok':
@@ -8279,6 +8448,7 @@
               // outstanding, and keeping it means EITHER reply can complete the
               // handshake — the whole point of the multi-attempt fix.
               cryptoKey = null;
+              sealState = null;
               retryWebRTC('agent reattach', 0); // renegotiate P2P with the (possibly new) agent
               // Only when the kex_init auth_ok already sent cannot serve.
               // "connected" is the relay stating the agent was there as we
