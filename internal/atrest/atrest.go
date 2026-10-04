@@ -920,3 +920,20 @@ func UnavailableForTest(on bool) {
 }
 
 var unavailableForTest bool
+
+// OpenQuiet is Open for a check that must write nothing: a keystore's "not
+// found" is not confirmed with a throwaway entry, so it reads as locked, and
+// the store is not put on the back-off list for the real reads that follow.
+func OpenQuiet(kind, id string, blob []byte) ([]byte, error) {
+	keyMu.Lock()
+	canaryOn = false
+	was := lockedUntil
+	keyMu.Unlock()
+	defer func() {
+		keyMu.Lock()
+		canaryOn = true
+		lockedUntil = was
+		keyMu.Unlock()
+	}()
+	return Open(kind, id, blob)
+}

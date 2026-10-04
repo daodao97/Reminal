@@ -352,7 +352,17 @@ replaces it on its own, since a new identity would make the device a stranger to
 every machine it owns. Only `reminal own reset` makes a new one. The key a 3.15.11
 or earlier version wrote in the clear is encrypted at its first use by a newer
 version, and the old file is left holding a placeholder line that older versions
-refuse to parse, so a downgrade cannot quietly mint a second identity either.
+refuse to parse, so a downgrade cannot quietly mint a second identity either. If
+both files end up holding different valid keys (an older version made one after a
+downgrade, or one was restored from a backup), reminal changes neither and says so.
+
+Two consequences are new relative to 3.15.11. Because the key that seals the owner
+key lives in the Keychain or in DPAPI, copying `~/.reminal` to another machine, or
+resetting the login Keychain or the Windows profile, no longer carries the owner
+identity with it: the device gets a new one with `reminal own reset` and is enrolled
+again on each machine. And the protection holds once that sealing key is in the OS
+keystore: a first run over SSH, with the keychain locked, leaves the fallback key
+file beside the sealed owner key until the keychain answers and the key is moved in.
 
 The machine's identity key (`machine_ed25519`) stays a 0600 file, like an SSH host
 key: it proves which machine a device is talking to and opens nothing, the

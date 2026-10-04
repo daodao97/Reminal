@@ -5,6 +5,7 @@ package main
 
 import (
 	"fmt"
+	"os"
 	"sort"
 	"strings"
 	"sync"
@@ -73,6 +74,13 @@ func listMachines() error {
 			continue
 		}
 		remote = append(remote, m)
+	}
+	// Reaching the others needs this device's owner key. When it cannot be
+	// read, every machine below would just show as offline; say why, once.
+	if len(remote) > 0 {
+		if err := client.OwnerKeyProblem(); err != nil {
+			fmt.Fprintf(os.Stderr, "  %s\n", cRed(err.Error()))
+		}
 	}
 
 	// Reach every enrolled machine's directory channel in parallel — one

@@ -92,9 +92,11 @@ func checkOwnerKey() (level, string) {
 	case "sealed":
 		return levelOK, "encrypted on disk"
 	case "plain":
-		return levelWarn, "from an older version, not yet encrypted; it is encrypted at its next use"
+		return levelWarn, "not yet encrypted; it is encrypted at its next use"
 	case "locked":
 		return levelWarn, "encrypted, but its keystore isn't answering right now; owner commands wait until it does"
+	case "conflict":
+		return levelFail, "device_ed25519 and device_ed25519.sealed hold different keys; move the one you don't want aside, or `reminal own reset`"
 	}
 	return levelFail, "can't be opened; owner commands will fail. `reminal own reset` makes a new identity (re-enrol it on each machine)"
 }
