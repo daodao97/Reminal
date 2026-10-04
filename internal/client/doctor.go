@@ -112,11 +112,10 @@ func checkSavedSessions() (level, string) {
 	if where == "" {
 		where = "none saved yet"
 	} else {
-		switch atrest.Status() {
-		case "locked":
+		// A check writes nothing, so "locked" and "gone" cannot be told
+		// apart on every OS; one sentence covers both.
+		if st := atrest.Status(); st == "locked" || st == "gone" {
 			where += ", which can't be reached right now or no longer has the key (saving with a key file meanwhile)"
-		case "gone":
-			where += ", but that key is no longer there; a new one is made at the next save"
 		}
 	}
 	if n := session.QuarantinedRestores(); n > 0 {

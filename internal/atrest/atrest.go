@@ -645,6 +645,11 @@ func Backend() string {
 	}
 	m, err := readMeta(dir)
 	if err != nil {
+		// No (readable) atrest.json, but a key file in use: an older build's
+		// key, or the fallback taken while the keystore was not answering.
+		if _, serr := os.Lstat(fileStore{dir: dir}.path()); serr == nil {
+			return "file"
+		}
 		return ""
 	}
 	return m.Source
