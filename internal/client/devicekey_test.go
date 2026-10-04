@@ -114,7 +114,9 @@ func TestDeviceKeyLockedNeverMints(t *testing.T) {
 	if k2, err := loadOrCreateDeviceKey(); err != nil || !k2.Equal(k) {
 		t.Fatalf("after unlock: %v", err)
 	}
-	// An older plain key while locked: still works, still plain.
+	// An older plain key while the keystore gives nothing at all (only
+	// UnavailableForTest does this; a real locked keystore falls back to the
+	// key file and seals at once): still works, still plain.
 	isolateReminalHome(t)
 	atrest.ResetCacheForTest()
 	dir, _ = reminalDir()
@@ -228,6 +230,15 @@ func TestAdvJunkSealedBesideValidPlain(t *testing.T) {
 		if OwnerKeyState() != "sealed" {
 			t.Fatalf("%q: state %s", junk, OwnerKeyState())
 		}
+	}
+	// The unopenable sealed files were set aside, not written over.
+	q, _ := os.ReadDir(filepath.Join(dir, "quarantine"))
+	var names []string
+	for _, e := range q {
+		names = append(names, e.Name())
+	}
+	if n := strings.Count(strings.Join(names, " "), "device_ed25519.sealed"); n != 2 {
+		t.Fatalf("quarantine holds %v, want two set-aside sealed copies", names)
 	}
 }
 

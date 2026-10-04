@@ -193,10 +193,12 @@ func resolve(st diskState) (ed25519.PrivateKey, action, error) {
 		}
 	case errors.Is(st.sealedErr, atrest.ErrLocked):
 		if st.plainKind == plainValid {
-			// A full identity in the clear (a migration that did not get
-			// to the sentinel): usable now; it is sealed once the keystore
-			// answers again. Whether it is the sealed key cannot be told
-			// yet, so nothing is written.
+			// A full identity in the clear beside a sealed copy that cannot
+			// be opened yet: usable now, and nothing is written, since
+			// whether the two are the same key cannot be told until the
+			// keystore answers. (A plain key with NO sealed copy is sealed
+			// at once whatever the keystore does: atrest falls back to its
+			// key file.)
 			return st.plain, actNone, nil
 		}
 		return nil, actNone, ErrOwnerKeyLocked
@@ -245,6 +247,7 @@ func apply(want action) error {
 			return err
 		}
 		key, act, err := resolve(st)
+		_ = os.Remove(st.sealedP + ".new") // a crash mid-seal; stale once anything else resolved
 		if err != nil || act != want {
 			return err
 		}
@@ -288,6 +291,14 @@ func sealLocked(priv ed25519.PrivateKey) error {
 	if pt, err := atrest.Open(deviceKeyKind, deviceKeyID, back); err != nil || string(pt) != string(priv) {
 		_ = os.Remove(tmp)
 		return fmt.Errorf("sealed owner key does not read back")
+	}
+	// Whatever sat at .sealed could not be opened here, but a well-formed
+	// blob whose key has gone would open again if the keychain came back (a
+	// Time Machine restore of the login keychain): set it aside, as saved
+	// sessions are, rather than write over it.
+	if _, err := os.Lstat(sp); err == nil {
+		dir := filepath.Dir(sp)
+		_ = atrest.Quarantine(dir, "device_ed25519", "owner key: the sealed copy could not be opened and was remade from the plain key", sp)
 	}
 	if err := os.Rename(tmp, sp); err != nil {
 		_ = os.Remove(tmp)

@@ -96,7 +96,7 @@ func checkOwnerKey() (level, string) {
 	case "locked":
 		// A check probes nothing, so a locked keystore and a removed key look
 		// the same here; owner commands themselves tell them apart.
-		return levelWarn, "encrypted, but its keystore can't be reached right now or no longer has the key; owner commands say which"
+		return levelWarn, "encrypted, but its keystore can't be reached right now or no longer has the key; owner commands say which, and `reminal own reset` is the way out if it never comes back"
 	case "conflict":
 		return levelFail, "device_ed25519 and device_ed25519.sealed hold different keys; move the one you don't want aside, or `reminal own reset`"
 	}
