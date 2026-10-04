@@ -75,7 +75,8 @@ attempt to impersonate either party.
 refuse to route. **Plaintext visibility into `reminal expose` traffic**, which is
 not end-to-end encrypted (architecture §5.3). First-connection TOFU on the owner
 path: a relay that is malicious at the very first connection between a device and a
-machine can insert itself before any key is pinned.
+machine can insert itself before any key is pinned, if the person confirms the
+machine it presents.
 
 ### A3 — Attacker who knows the session ID but not the PIN
 

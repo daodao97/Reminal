@@ -5489,6 +5489,47 @@
     async function pinMachine(sid, pubB64) {
       try { const db = await openOwnDB(); await idbPut(db, 'mach:' + sid, pubB64); } catch (_) {}
     }
+    // Trust is held per machine, not per session. A machine this browser has
+    // connected to as an owner is recognised by its key on any of its sessions.
+    // A key it has not seen is accepted only when the session is not on one of
+    // its machines, and the person confirms it. Mirrors machinetrust.go.
+    const sameKey = (a, b) => b64URLToStd(a) === b64URLToStd(b);
+    async function checkMachineIdentity(sid, machineB64) {
+      const pinned = await getPinnedMachine(sid);
+      if (pinned) {
+        if (pinned !== machineB64) throw new Error('this machine’s identity changed since first connect — refusing');
+        return;
+      }
+      const owned = await loadOwnedMachines();
+      const keys = Object.keys(owned);
+      if (keys.some(k => sameKey(k, machineB64))) { await pinMachine(sid, machineB64); return; }
+      // The answer is in hand; the lookup and the question below can outlast
+      // the handshake's own timers, which would otherwise retry over them.
+      if (ownerTimer) { clearTimeout(ownerTimer); ownerTimer = 0; }
+      if (kexTimer) { clearTimeout(kexTimer); kexTimer = 0; }
+      const home = await findSessionHome(sid, keys);
+      if (home) {
+        const name = (owned[home] && owned[home].name) || 'one of your machines';
+        throw new Error('session ' + sid + ' is on ' + name + ', but a different machine answered — not connecting');
+      }
+      const id = 'mach_' + machineB64.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+      if (!confirm('This browser has not connected to this machine before.\n\nMachine: ' + id + '\n\nConnect, and remember it?')) {
+        throw new Error('not connected — this browser has not connected to that machine before, and it was not confirmed');
+      }
+      await pinMachine(sid, machineB64);
+    }
+    // Which of this browser's machines hosts sid, asked over their directory
+    // channels.
+    async function findSessionHome(sid, keys) {
+      const hits = await Promise.all(keys.map(async (k) => {
+        try {
+          const r = await queryDirectory(base64ToU8(b64URLToStd(k)), { timeout: 5000 });
+          return (r && Array.isArray(r.sessions) && r.sessions.some(x => x && x.id === sid)) ? k : null;
+        } catch (_) { return null; }
+      }));
+      return hits.find(Boolean) || null;
+    }
+
     // Have we ever completed an owner connect to this machine? (drives the
     // Machines list's owned-only "+".)
     async function isOwnedMachine(sid) { try { return (await getPinnedMachine(sid)) !== null; } catch (_) { return false; } }
@@ -5532,7 +5573,15 @@
       } finally { kexInFlight = false; }
     }
 
+    // One owner answer is checked at a time: a retried handshake can bring a
+    // second answer while the first is still being checked or confirmed.
+    let ownerChecking = false;
     async function completeOwner(msg) {
+      if (ownerChecking) return;
+      ownerChecking = true;
+      try { await completeOwnerChecked(msg); } finally { ownerChecking = false; }
+    }
+    async function completeOwnerChecked(msg) {
       const att = ownerAttempts.get(msg.ex_id);
       if (!att || cryptoKey) return;
       const agentEph = base64ToU8(msg.data || '');
@@ -5545,11 +5594,10 @@
       if (!(await crypto.subtle.verify({ name: 'Ed25519' }, macKey, machineSig, tr))) {
         throw new Error('machine signature invalid — refusing (possible relay tampering)');
       }
-      // 2. Trust-on-first-use: the machine key must match what we pinned before.
+      // 2. The machine must be one this browser trusts: the one it met on this
+      //    session before, or any machine it has connected to as an owner.
       const machineB64 = u8ToBase64(machinePub);
-      const pinned = await getPinnedMachine(sessionId);
-      if (pinned && pinned !== machineB64) throw new Error('this machine’s identity changed since first connect — refusing');
-      if (!pinned) await pinMachine(sessionId, machineB64);
+      await checkMachineIdentity(sessionId, machineB64);
       // 3. Same wrapped-session-key path as the PIN handshake.
       const shared = await att.eph.deriveShared(agentEph);
       const sharedKey = await crypto.subtle.importKey('raw', shared, 'HKDF', false, ['deriveBits']);

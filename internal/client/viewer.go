@@ -45,6 +45,11 @@ const escapeKey = 0x1d
 const readDeadline = 60 * time.Second
 
 type Viewer struct {
+	// promptIn / promptEsc are the viewer's stdin and Ctrl-] channels, lent to
+	// the owner handshake for the one question it may ask (askTrustMachine).
+	promptIn  <-chan []byte
+	promptEsc <-chan struct{}
+
 	// Atomics first for 64-bit alignment on 32-bit architectures.
 	lastSeq       uint64
 	droppedChunks uint64
@@ -401,6 +406,9 @@ func (v *Viewer) runConnection(stdinCh <-chan []byte, winCh <-chan os.Signal, in
 		}
 	}
 
+	// The owner handshake may need to ask whether to trust a machine this
+	// device has not connected to before; nothing else reads stdin yet.
+	v.promptIn, v.promptEsc = stdinCh, escapeCh
 	negotiate := v.negotiateSessionKey
 	if v.owner {
 		negotiate = v.negotiateSessionKeyOwner
@@ -667,20 +675,8 @@ func (v *Viewer) negotiateSessionKeyOwner(conn *websocket.Conn) error {
 				crypto.OwnerServerTranscript(v.sessionID, viewerEph, agentEph, devicePub, machinePub), machineSig) {
 				return fmt.Errorf("owner: machine signature invalid — refusing (possible relay tampering)")
 			}
-			// Trust-on-first-use. A read failure means we can't verify the
-			// identity → refuse. A mismatch means a possible impostor → refuse. A
-			// first-time key is pinned now, but that write is BEST-EFFORT — the
-			// machine signature already verified above, so failing to persist the
-			// cache must not abort an otherwise-authenticated connection.
-			pinned, known, perr := PinnedMachineKey(v.sessionID)
-			if perr != nil {
-				return fmt.Errorf("owner: can't read pinned machine key: %w", perr)
-			}
-			if known && !bytes.Equal(pinned, machinePub) {
-				return fmt.Errorf("owner: this machine's identity changed since you first connected — refusing (possible impersonation). If you re-provisioned this machine, remove it from ~/.reminal/known_machines.json and reconnect")
-			}
-			if !known {
-				_, _ = RecordMachineKey(v.sessionID, machinePub) // best-effort pin
+			if err := v.checkMachineIdentity(ed25519.PublicKey(machinePub)); err != nil {
+				return err
 			}
 			// This device just proved it owns this machine, so note it (or refresh
 			// LastSeen) for `reminal machines`. Best-effort — never fail an
