@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"reminal/internal/atrest"
 	"reminal/internal/config"
 	"reminal/internal/session"
 )
@@ -88,10 +89,15 @@ func (a *Agent) saveRestore() {
 			r.Fg, r.FgArgs, r.Conv = prev.Fg, prev.FgArgs, prev.Conv
 		}
 	}
-	_ = session.WriteRestore(r)
+	if session.WriteRestore(r) != nil {
+		return // the keystore will not give the key up yet: try next tick
+	}
 	if seq := a.buf.LatestSeq(); seq != a.restoreSeq {
 		if p, err := session.RestoreScrollbackPath(a.sessionID); err == nil {
-			if err := a.writeScrollbackDumpTo(p); err == nil {
+			id := a.sessionID
+			if err := a.writeScrollbackDumpTo(p, func(b []byte) ([]byte, error) {
+				return session.SealScrollback(id, b)
+			}); err == nil {
 				a.restoreSeq = seq
 			}
 		}
@@ -483,7 +489,10 @@ func LoadRestoreState(id string) (*ResumeState, func() (run, note string), error
 	st := &ResumeState{SessionID: r.ID, PIN: r.PIN, PinHash: r.PinHash, Token: r.Token,
 		StartedAt: time.Now(), Name: r.Name, Headless: true}
 	if p, err := session.RestoreScrollbackPath(r.ID); err == nil {
-		st.Dump = readScrollbackDump(p)
+		id := r.ID
+		st.Dump = readScrollbackDump(p, func(b []byte) ([]byte, error) {
+			return session.OpenScrollback(id, b)
+		})
 	}
 	plan := func() (string, string) {
 		peers, _ := session.ReadRestores()
@@ -532,10 +541,11 @@ func (a *Agent) restoreStart() {
 }
 
 // Restorable is a session that can be brought back: a record whose session
-// is not running.
+// is not running. atrest.ErrLocked comes back WITH the records it could open
+// when the keystore would not give the key up for the rest yet.
 func Restorable() ([]session.Restore, error) {
 	all, err := session.ReadRestores()
-	if err != nil {
+	if err != nil && !errors.Is(err, atrest.ErrLocked) {
 		return nil, err
 	}
 	live := map[string]bool{}
@@ -550,7 +560,7 @@ func Restorable() ([]session.Restore, error) {
 			out = append(out, r)
 		}
 	}
-	return out, nil
+	return out, err
 }
 
 // RestoreSession starts a headless agent that takes r over. Its shell starts
@@ -599,17 +609,56 @@ func RestoreEnvID() string { return strings.ToUpper(strings.TrimSpace(os.Getenv(
 
 // restoreAtStart brings back every session a restart ended. REMINAL_NO_RESTORE=1
 // turns it off (they can still be restored by hand).
+//
+// Saved sessions are sealed (see atrest). When the keystore will not give the
+// key up yet — a Keychain not unlocked, a desktop keyring locked until the
+// person logs in — the records are left as they are and tried again every
+// restoreRetryEvery, so the sessions come back once it opens.
 func restoreAtStart() {
+	sweepHandoffDumps()
+	session.QuarantinedRestores() // prune past their keep
 	if os.Getenv("REMINAL_NO_RESTORE") == "1" {
 		return
 	}
-	gone, err := Restorable()
+	deadline := time.Now().Add(restoreRetryFor)
+	for {
+		gone, err := Restorable()
+		for _, r := range gone {
+			if _, err := RestoreSession(r); err != nil {
+				agentNotify("  reminal: could not restore session %s: %v\n", r.ID, err)
+			}
+		}
+		if !errors.Is(err, atrest.ErrLocked) || time.Now().After(deadline) {
+			return
+		}
+		time.Sleep(restoreRetryEvery)
+	}
+}
+
+const (
+	restoreRetryEvery = 30 * time.Second
+	restoreRetryFor   = 24 * time.Hour
+)
+
+// sweepHandoffDumps removes hot-restart dumps no successor ever picked up (a
+// crash mid-restart). They are single-use; one older than a few minutes will
+// never be read. Plain ones from before sealing go the same way.
+func sweepHandoffDumps() {
+	dir, err := reminalDir()
 	if err != nil {
 		return
 	}
-	for _, r := range gone {
-		if _, err := RestoreSession(r); err != nil {
-			agentNotify("  reminal: could not restore session %s: %v\n", r.ID, err)
+	ents, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+	for _, e := range ents {
+		n := e.Name()
+		if !strings.HasPrefix(n, "scrollback-") {
+			continue
+		}
+		if fi, err := e.Info(); err == nil && time.Since(fi.ModTime()) > 5*time.Minute {
+			_ = os.Remove(filepath.Join(dir, n))
 		}
 	}
 }
@@ -617,4 +666,10 @@ func restoreAtStart() {
 func isRegularFile(p string) bool {
 	fi, err := os.Stat(p)
 	return err == nil && fi.Mode().IsRegular()
+}
+
+func init() {
+	// The sealing package reports a fallback taken or a record set aside —
+	// on stderr, never stdout, which `reminal mcp` speaks its protocol on.
+	atrest.Logf = func(format string, args ...any) { fmt.Fprintf(os.Stderr, "  "+format+"\n", args...) }
 }

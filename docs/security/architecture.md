@@ -66,14 +66,15 @@ outside that boundary.
 | Credential | Form | Entropy | Lifetime | Storage |
 |---|---|---|---|---|
 | Session ID | 8 chars, 32-symbol unambiguous alphabet (`internal/session/id.go`) | 32⁸ ≈ 1.1 × 10¹² (~40 bits) | One agent run | Memory only |
-| PIN | 6 digits (`internal/session/pin.go`) | 10⁶ (~20 bits) | One agent run | Memory only |
+| PIN | 6 digits (`internal/session/pin.go`) | 10⁶ (~20 bits) | Until the session ends or `reminal repin` | Memory; sealed on disk for restore and `reminal info` (§6.2) |
 | Device owner key | Ed25519 | 128-bit security | Until revoked | `~/.reminal/device_ed25519`, mode 0600 |
 | Machine identity key | Ed25519 | 128-bit security | Until re-provisioned | Host key store, mode 0600 |
 | Session key | 256-bit random (`internal/crypto/box.go`) | 256 bits | One agent run | Memory only, both ends |
 
-Session IDs and PINs are generated with `crypto/rand`, never a seeded PRNG. Neither
-is written to disk and neither survives the agent process — `Ctrl+C` destroys them
-irrecoverably.
+Session IDs and PINs are generated with `crypto/rand`, never a seeded PRNG. So that
+a session can come back as itself after its machine restarts, its ID and PIN are
+kept on disk, sealed (§6.2), until the session is ended on purpose. The session
+key is never written anywhere.
 
 The session ID and PIN are **separate factors on purpose**. The session ID is the
 relay's routing key and is therefore necessarily known to the relay; the PIN never
@@ -275,10 +276,60 @@ Key files are written atomically at 0600, and a present-but-corrupt key is surfa
 as an error rather than silently regenerated — silent regeneration would swap the
 machine's identity and orphan every trust relationship pinned against it.
 
-**No session content is ever written to disk**, and no long-lived remote-access
-credential exists on disk. This is the concrete sense in which reminal has "no keys
-on disk" relative to SSH: there is no equivalent of a stealable `id_rsa` that grants
-standing access.
+**Saved sessions.** A session's details are kept on disk so it can come back as
+itself after a restart, and so `reminal info` can show its PIN from any terminal.
+Everything below is sealed with AES-256-GCM under one random 32-byte key per user,
+and each file is bound to its kind and session ID, so one session's file never
+opens as another's (`internal/atrest`).
+
+| Path | Contents | Kept |
+|---|---|---|
+| `~/.reminal/restore/<id>.sealed` | Session ID, PIN, relay token, name, folder, the coding agent running and its conversation ID | Until the session is ended on purpose (`reminal kill`, `reminal stop`, its shell exiting) |
+| `~/.reminal/restore/<id>.scrollback.sealed` | The session's terminal history, so a restored session shows what came before | Same as the record; rewritten as output arrives |
+| `~/.reminal/restore/<id>.conv` | The coding agent's conversation ID (not sealed; not a credential) | Same as the record |
+| `~/.reminal/active-<id>.json` | A running session's ID, name, folder and viewer counts, with the PIN sealed | While the session runs; left behind by a crash until the next `reminal list` |
+| `~/.reminal/scrollback-<id>.json` | Terminal history handed from one process to the next during a hot restart or upgrade | Seconds: read once and deleted by the new process. Sealed under a one-time key passed to that process directly, never written to disk; any copy a crash leaves behind is removed at the next start |
+| `~/.reminal/restore/quarantine/` | Saved sessions that could not be opened (their key was gone, or the file was damaged), with a note saying why | 7 days, then removed; `reminal doctor` mentions them |
+
+Where the key lives:
+
+| OS | Key storage | Notes |
+|---|---|---|
+| macOS | Login Keychain, item `reminal-at-rest-key` | Written and read with `/usr/bin/security`, with the key passed on its stdin, not its argv. Builds do not use cgo, so the item's access list trusts the `security` tool, not the reminal app: any program running as the same user can read it without a prompt. This is no weaker than a 0600 file, and the key stays out of backups and disk images. The login Keychain is a file-based keychain and is not synced to iCloud. |
+| Windows | DPAPI, current user (`~/.reminal/atrest.key.dpapi`) | Opens only for the same Windows account. The background daemon runs as that user. |
+| Linux desktop | Secret Service (GNOME Keyring, KWallet) via `secret-tool` | Used when `secret-tool` is installed and a session bus is reachable. |
+| Linux without a keyring, containers | `~/.reminal/atrest.key`, mode 0600 | Same protection as the plain files it replaces: the contents are not greppable, but anyone who can read `~/.reminal` can read the key. |
+
+`~/.reminal/atrest.json` records which of these holds the key. A run with `HOME`
+pointed somewhere other than the user's real home, or with `REMINAL_KEYSTORE=file`,
+always uses the file, so a test can never write into the person's own keychain.
+
+Every keystore call has a 3-second limit; one that does not answer in time is
+treated as locked. A locked keystore never stops a session from starting: saved
+details are written once the key is available, and restoring after a reboot waits
+and tries again every 30 seconds, so sessions come back once the keystore unlocks.
+A key is treated as gone only when the keystore answers and says it does not exist;
+even then, the files it sealed are moved to the quarantine, not deleted. Deleting a
+file is a plain delete: on SSDs and copy-on-write file systems overwriting in place
+does not reach the old blocks, so reminal does not pretend to.
+
+Files written by versions before 3.15.11 held the PIN, the relay token and the
+terminal history in the clear (mode 0600). The first start of 3.15.11 or later
+seals them and deletes the plain copies. An older version that is run again cannot
+read the sealed files, so those sessions start fresh instead of being restored.
+
+**Where else a PIN is, at runtime.** In the memory of the session's own process,
+and in the memory of a viewer that typed it. Older versions also put it in the
+session shell's environment (`REMINAL_SESSION_PIN`); from 3.15.11 that variable is
+no longer set, so programs started inside a session do not inherit it. Anything
+running as the same user can read a process's memory and its saved files, sealed or
+not: sealing protects copies of the disk, not a live account.
+
+**Long-lived keys.** `~/.reminal/device_ed25519` (this device's owner key) and the
+machine's identity key are stored as 0600 files, not sealed. Unlike a PIN, the owner
+key grants standing access to every machine this device owns until it is revoked
+(`reminal owners revoke`); treat it like an SSH private key. Moving both into the OS
+keystore is planned as a separate change.
 
 ## 7. Network posture
 

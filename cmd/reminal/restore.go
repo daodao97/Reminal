@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"reminal/internal/atrest"
 	"reminal/internal/client"
 	"reminal/internal/session"
 )
@@ -18,7 +19,9 @@ import (
 // `reminal restore --all`.
 func runRestore(args []string) error {
 	gone, err := client.Restorable()
-	if err != nil {
+	if errors.Is(err, atrest.ErrLocked) {
+		fmt.Println("Some saved sessions are locked in your keychain right now; unlock it (log in to the desktop) and run this again to see them.")
+	} else if err != nil {
 		return err
 	}
 	if len(args) == 0 {

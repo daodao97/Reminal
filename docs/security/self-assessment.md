@@ -112,7 +112,7 @@ Full detail in [architecture §4](architecture.md#4-key-establishment).
 | # | Question | Answer |
 |---|---|---|
 | EKM.1 | Data encrypted in transit | Yes — WSS/TLS on every hop, with end-to-end AES-256-GCM beneath it. WebRTC data is DTLS-protected |
-| EKM.2 | Data encrypted at rest | N/A — no session data is written to disk on the host or stored on the relay at any point, so there is no data at rest to protect |
+| EKM.2 | Data encrypted at rest | Yes on the host: what a session keeps so it can come back after a restart (its PIN, relay token and terminal history) is sealed with AES-256-GCM under a per-user key held by the OS keystore where one exists (Keychain, DPAPI, Secret Service), else a 0600 key file ([architecture §6.2](architecture.md#62-on-the-host)). The relay stores no session content |
 | EKM.3 | End-to-end encryption | Yes for terminal, window, desktop, and copy/paste sessions. `reminal expose` is the exception: the visitor is an ordinary browser holding no reminal key, so port-forwarded traffic transits the relay in plaintext ([architecture §5.3](architecture.md#53-reminal-expose--not-end-to-end-encrypted)). Use a self-hosted relay for sensitive services |
 | EKM.4 | Algorithms and key sizes | Yes — AES-256-GCM, X25519, Ed25519, HKDF-SHA256. Standard primitives, no custom cryptography |
 | EKM.5 | Key generation | Yes — `crypto/rand` (CSPRNG) throughout; a fresh 256-bit session key per agent run |

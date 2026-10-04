@@ -4,16 +4,26 @@
 package client
 
 import (
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
+
+	"reminal/internal/atrest"
 )
 
 // envResumeScrollback is the path of a 0600 dump written just before a hot
 // restart. The session key is NOT carried across the exec (viewers re-EKE),
-// so this file holds plaintext and the successor re-encrypts it.
-const envResumeScrollback = "REMINAL_RESUME_SCROLLBACK"
+// so the dump is sealed under a one-time key handed to the successor in
+// envResumeScrollbackKey — the key never touches disk — and the successor
+// re-encrypts the history under its own session key.
+const (
+	envResumeScrollback    = "REMINAL_RESUME_SCROLLBACK"
+	envResumeScrollbackKey = "REMINAL_RESUME_SCROLLBACK_KEY"
+)
+
+const kindHandoff = "handoff"
 
 const scrollbackDumpVersion = 1
 
@@ -44,25 +54,34 @@ func scrollbackDumpPath(sessionID string) (string, error) {
 	return filepath.Join(dir, "scrollback-"+sessionID+".json"), nil
 }
 
-// writeScrollbackDump decrypts the live buffer and writes it to a 0600 file
-// the successor will load. Empty history yields ("", nil) — no file.
-func (a *Agent) writeScrollbackDump() (string, error) {
+// writeScrollbackDump writes the live buffer, sealed under a fresh one-time
+// key, to a 0600 file the successor will load, and returns the key as hex.
+// Empty history yields ("", "", nil) — no file.
+func (a *Agent) writeScrollbackDump() (string, string, error) {
 	if a == nil || a.buf == nil || a.box == nil || a.sessionID == "" {
-		return "", nil
+		return "", "", nil
 	}
 	path, err := scrollbackDumpPath(a.sessionID)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	if len(a.buf.From(0)) == 0 {
-		return "", nil
+		return "", "", nil
 	}
-	return path, a.writeScrollbackDumpTo(path)
+	key, err := atrest.NewKey()
+	if err != nil {
+		return "", "", err
+	}
+	id := a.sessionID
+	err = a.writeScrollbackDumpTo(path, func(b []byte) ([]byte, error) {
+		return atrest.SealWith(key, kindHandoff, id, b)
+	})
+	return path, hex.EncodeToString(key), err
 }
 
-// writeScrollbackDumpTo writes the live buffer, decrypted, to path (0600).
-// An empty buffer writes nothing.
-func (a *Agent) writeScrollbackDumpTo(path string) error {
+// writeScrollbackDumpTo writes the live buffer, decrypted from the session
+// key and sealed by seal, to path (0600). An empty buffer writes nothing.
+func (a *Agent) writeScrollbackDumpTo(path string, seal func([]byte) ([]byte, error)) error {
 	if a == nil || a.buf == nil || a.box == nil {
 		return nil
 	}
@@ -91,6 +110,10 @@ func (a *Agent) writeScrollbackDumpTo(path string) error {
 	if err != nil {
 		return err
 	}
+	body, err = seal(body)
+	if err != nil {
+		return err
+	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return err
 	}
@@ -110,15 +133,20 @@ func (a *Agent) writeScrollbackDumpTo(path string) error {
 	return nil
 }
 
-// dumpScrollbackForRestart writes the dump if there is history. A write
-// error must not block restart — we notify and continue without a file.
-func (a *Agent) dumpScrollbackForRestart() string {
-	path, err := a.writeScrollbackDump()
+// dumpScrollbackForRestart writes the dump if there is history and returns
+// the env entries that hand it to the successor. A write error must not
+// block restart — we notify and continue without a file.
+func (a *Agent) dumpScrollbackForRestart() (path string, env []string) {
+	path, key, err := a.writeScrollbackDump()
 	if err != nil {
 		agentNotify("  reminal: could not save scrollback for restart — history will reset: %v\n", err)
-		return ""
+		removeScrollbackDump(path)
+		return "", nil
 	}
-	return path
+	if path == "" {
+		return "", nil
+	}
+	return path, []string{envResumeScrollback + "=" + path, envResumeScrollbackKey + "=" + key}
 }
 
 // removeScrollbackDump deletes a dump and its .tmp sibling. Safe on "" / missing.
@@ -130,24 +158,39 @@ func removeScrollbackDump(path string) {
 	_ = os.Remove(path + ".tmp")
 }
 
-// takeScrollbackDump loads and deletes a dump written by the predecessor.
-// Always deletes path and path+".tmp" so plaintext cannot linger after a
-// corrupt / wrong-version file. Missing or unreadable files return nil so
-// restart still comes up (just without history).
-func takeScrollbackDump(path string) *scrollbackDump {
+// takeScrollbackDump loads and deletes a dump written by the predecessor,
+// opened with the one-time key it handed over (hex). A predecessor from
+// before sealing passes no key and a plain dump. Always deletes path and
+// path+".tmp" so nothing lingers after a corrupt / wrong-version file.
+// Missing or unreadable files return nil so restart still comes up (just
+// without history).
+func takeScrollbackDump(path, keyHex, sessionID string) *scrollbackDump {
 	if path == "" {
 		return nil
 	}
-	d := readScrollbackDump(path)
+	d := readScrollbackDump(path, func(b []byte) ([]byte, error) {
+		if !atrest.IsSealed(b) {
+			return b, nil // an older predecessor's plain dump
+		}
+		key, err := hex.DecodeString(keyHex)
+		if err != nil {
+			return nil, err
+		}
+		return atrest.OpenWith(key, kindHandoff, sessionID, b)
+	})
 	removeScrollbackDump(path)
 	return d
 }
 
-// readScrollbackDump loads a dump and leaves it in place — a restore that
-// fails can be tried again. Nil when missing, unreadable or empty.
-func readScrollbackDump(path string) *scrollbackDump {
+// readScrollbackDump loads a dump, opened by open, and leaves it in place —
+// a restore that fails can be tried again. Nil when missing, unreadable or
+// empty.
+func readScrollbackDump(path string, open func([]byte) ([]byte, error)) *scrollbackDump {
 	body, err := os.ReadFile(path)
 	if err != nil {
+		return nil
+	}
+	if body, err = open(body); err != nil {
 		return nil
 	}
 	var dump scrollbackDump

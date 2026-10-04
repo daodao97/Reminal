@@ -16,6 +16,7 @@ import (
 
 	"github.com/gorilla/websocket"
 	"golang.org/x/term"
+	"reminal/internal/atrest"
 	"reminal/internal/config"
 	"reminal/internal/protocol"
 	"reminal/internal/session"
@@ -79,7 +80,26 @@ func allChecks(currentVersion string) []check {
 		{"Shell", checkShell},
 		{"Active session", checkActiveSession},
 		{"Config dir", checkConfigDir},
+		{"Saved sessions", checkSavedSessions},
 	}
+}
+
+// checkSavedSessions says where the key sealing saved sessions lives, and
+// whether any saved session could not be opened and was set aside.
+func checkSavedSessions() (level, string) {
+	where := map[string]string{
+		"keychain":       "sealed with a key in the login Keychain",
+		"dpapi":          "sealed with a key protected by Windows (DPAPI)",
+		"secret-service": "sealed with a key in the desktop keyring",
+		"file":           "sealed with a key in a file in ~/.reminal (no OS keystore here)",
+	}[atrest.Backend()]
+	if where == "" {
+		where = "none saved yet"
+	}
+	if n := session.QuarantinedRestores(); n > 0 {
+		return levelWarn, fmt.Sprintf("%s; %d could not be opened and are kept in ~/.reminal/restore/quarantine for 7 days", where, n)
+	}
+	return levelOK, where
 }
 
 func badge(l level) string {

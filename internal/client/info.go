@@ -55,9 +55,8 @@ func ShowActiveInfo() error {
 		fmt.Println("  reminal — remote terminal")
 		fmt.Println()
 		fmt.Printf("  Session:  %s\n", envID)
-		fmt.Println("  (this shell is connected to a session whose host is on another machine,")
-		fmt.Println("   and the host agent is too old to share its PIN/URL — upgrade the host")
-		fmt.Println("   to ≥ v0.7.11 or run `reminal info` on the host directly)")
+		fmt.Println("  (this session's host is on another machine — run `reminal info` there")
+		fmt.Println("   for its PIN)")
 		fmt.Println()
 		return nil
 	}

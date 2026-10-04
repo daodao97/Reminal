@@ -73,7 +73,7 @@ func LoadResumeState() (*ResumeState, error) {
 		return nil, nil
 	}
 	// Consume first so a later validation / attach error cannot leave plaintext.
-	dump := takeScrollbackDump(os.Getenv(envResumeScrollback))
+	dump := takeScrollbackDump(os.Getenv(envResumeScrollback), os.Getenv(envResumeScrollbackKey), os.Getenv(envResumeSessionID))
 	defer scrubWindowsResumeEnv()
 
 	id := os.Getenv(envResumeSessionID)
@@ -116,7 +116,7 @@ func LoadResumeState() (*ResumeState, error) {
 func scrubWindowsResumeEnv() {
 	for _, k := range []string{envResume, envResumeSessionID, envResumePIN,
 		envResumePinHash, envResumeToken, envResumeStartedAt, envResumePTYSock,
-		envResumeName, envResumeHeadless, envResumeScrollback} {
+		envResumeName, envResumeHeadless, envResumeScrollback, envResumeScrollbackKey} {
 		_ = os.Unsetenv(k)
 	}
 }
@@ -192,10 +192,8 @@ func (a *Agent) executeRestart() error {
 		// process becomes a viewer, not a host terminal.
 		envResumeHeadless+"="+boolEnv(a.headless || a.localActive),
 	)
-	dumpPath := a.dumpScrollbackForRestart()
-	if dumpPath != "" {
-		cmd.Env = append(cmd.Env, envResumeScrollback+"="+dumpPath)
-	}
+	dumpPath, dumpEnv := a.dumpScrollbackForRestart()
+	cmd.Env = append(cmd.Env, dumpEnv...)
 	// prepareHandshake appends --handshake-addr to argv (ignored by the
 	// resume path except for ParseHandshakeAddr) and sets the detach attrs.
 	recv, afterStart, err := prepareHandshake(cmd)

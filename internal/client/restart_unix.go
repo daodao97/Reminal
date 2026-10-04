@@ -94,7 +94,7 @@ func LoadResumeState() (*ResumeState, error) {
 		return nil, nil
 	}
 	// Consume first so a later validation error cannot leave plaintext on disk.
-	dump := takeScrollbackDump(os.Getenv(envResumeScrollback))
+	dump := takeScrollbackDump(os.Getenv(envResumeScrollback), os.Getenv(envResumeScrollbackKey), os.Getenv(envResumeSessionID))
 	defer scrubUnixResumeEnv()
 
 	id := os.Getenv(envResumeSessionID)
@@ -136,7 +136,7 @@ func scrubUnixResumeEnv() {
 	for _, k := range []string{
 		envResume, envResumeSessionID, envResumePIN, envResumePinHash,
 		envResumeToken, envResumePTYFD, envResumeStartedAt, envResumeHeadless,
-		envResumeScrollback,
+		envResumeScrollback, envResumeScrollbackKey,
 	} {
 		_ = os.Unsetenv(k)
 	}
@@ -164,7 +164,7 @@ func (a *Agent) executeRestart() error {
 	// Decrypt + write here, while the runtime is still healthy. Doing this
 	// after the fd dance (phase 2) would allocate megabytes and take buf's
 	// mutex with the netpoller already in a fragile state.
-	dumpPath := a.dumpScrollbackForRestart()
+	dumpPath, dumpEnv := a.dumpScrollbackForRestart()
 
 	// Restore the host terminal to cooked mode so the new agent can
 	// re-enter raw mode and capture the correct "previous" state for
@@ -219,9 +219,7 @@ func (a *Agent) executeRestart() error {
 		envResumeStartedAt+"="+strconv.FormatInt(a.startedAt.Unix(), 10),
 		envResumeHeadless+"="+headlessEnv,
 	)
-	if dumpPath != "" {
-		env = append(env, envResumeScrollback+"="+dumpPath)
-	}
+	env = append(env, dumpEnv...)
 
 	if err := syscall.Exec(exe, []string{exe}, env); err != nil {
 		removeScrollbackDump(dumpPath)

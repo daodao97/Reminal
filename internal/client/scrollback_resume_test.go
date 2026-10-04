@@ -4,6 +4,7 @@
 package client
 
 import (
+	"encoding/hex"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -11,6 +12,7 @@ import (
 	"strings"
 	"testing"
 
+	"reminal/internal/atrest"
 	"reminal/internal/crypto"
 )
 
@@ -44,12 +46,17 @@ func TestScrollbackDumpRoundTripReencrypts(t *testing.T) {
 	a.buf.AppendBar(barEnc)
 
 	isolateReminalHome(t)
-	path, err := a.writeScrollbackDump()
+	path, key, err := a.writeScrollbackDump()
 	if err != nil {
 		t.Fatal(err)
 	}
 	if path == "" {
 		t.Fatal("expected a dump file")
+	}
+	if raw, err := os.ReadFile(path); err != nil {
+		t.Fatal(err)
+	} else if strings.Contains(string(raw), "hello from before restart") || strings.Contains(string(raw), "aGVsbG8gZnJvbSBiZWZvcmU") {
+		t.Fatal("the hand-off dump holds the scrollback in the clear")
 	}
 	if st, err := os.Stat(path); err != nil {
 		t.Fatal(err)
@@ -57,7 +64,7 @@ func TestScrollbackDumpRoundTripReencrypts(t *testing.T) {
 		t.Fatalf("dump mode %o, want 0600", st.Mode().Perm())
 	}
 
-	dump := takeScrollbackDump(path)
+	dump := takeScrollbackDump(path, key, a.sessionID)
 	if dump == nil {
 		t.Fatal("takeScrollbackDump returned nil")
 	}
@@ -129,11 +136,11 @@ func TestRestoreResumedScrollbackReplaysScreen(t *testing.T) {
 	a.initScreen()
 	a.record([]byte("kept across restart\r\n"))
 
-	path, err := a.writeScrollbackDump()
+	path, key, err := a.writeScrollbackDump()
 	if err != nil || path == "" {
 		t.Fatalf("dump: path=%q err=%v", path, err)
 	}
-	dump := takeScrollbackDump(path)
+	dump := takeScrollbackDump(path, key, a.sessionID)
 	if dump == nil {
 		t.Fatal("take returned nil")
 	}
@@ -162,7 +169,7 @@ func TestScrollbackDumpEmptyIsNoop(t *testing.T) {
 	box, _ := crypto.NewBox(key)
 	a := &Agent{sessionID: "EMPTY001", box: box, buf: newScrollback(1 << 20)}
 	isolateReminalHome(t)
-	path, err := a.writeScrollbackDump()
+	path, _, err := a.writeScrollbackDump()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -172,7 +179,7 @@ func TestScrollbackDumpEmptyIsNoop(t *testing.T) {
 }
 
 func TestTakeScrollbackDumpMissing(t *testing.T) {
-	if dump := takeScrollbackDump(filepath.Join(t.TempDir(), "nope.json")); dump != nil {
+	if dump := takeScrollbackDump(filepath.Join(t.TempDir(), "nope.json"), "", "X"); dump != nil {
 		t.Fatal("missing file should yield nil")
 	}
 }
@@ -183,7 +190,7 @@ func TestTakeScrollbackDumpCorruptDeletes(t *testing.T) {
 	if err := os.WriteFile(path, []byte("not-json"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if dump := takeScrollbackDump(path); dump != nil {
+	if dump := takeScrollbackDump(path, "", "X"); dump != nil {
 		t.Fatal("corrupt JSON should yield nil")
 	}
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
@@ -205,7 +212,7 @@ func TestTakeScrollbackDumpWrongVersionDeletes(t *testing.T) {
 	if err := os.WriteFile(path, body, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if dump := takeScrollbackDump(path); dump != nil {
+	if dump := takeScrollbackDump(path, "", "X"); dump != nil {
 		t.Fatal("wrong version should yield nil")
 	}
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
@@ -225,19 +232,19 @@ func TestWriteScrollbackDumpReplacesLeftover(t *testing.T) {
 	}
 	a := &Agent{sessionID: "LEFT2345", box: box, buf: newScrollback(1 << 20)}
 	a.record([]byte("first\r\n"))
-	path, err := a.writeScrollbackDump()
+	path, _, err := a.writeScrollbackDump()
 	if err != nil || path == "" {
 		t.Fatalf("first dump: path=%q err=%v", path, err)
 	}
 	a.record([]byte("second\r\n"))
-	path2, err := a.writeScrollbackDump()
+	path2, key2, err := a.writeScrollbackDump()
 	if err != nil || path2 == "" {
 		t.Fatalf("replace dump: path=%q err=%v", path2, err)
 	}
 	if path2 != path {
 		t.Fatalf("path changed %q -> %q", path, path2)
 	}
-	dump := takeScrollbackDump(path2)
+	dump := takeScrollbackDump(path2, key2, a.sessionID)
 	if dump == nil || len(dump.Entries) < 2 {
 		t.Fatalf("replaced dump = %+v", dump)
 	}
@@ -287,5 +294,39 @@ func TestLoadResumeStateTakesDumpOnValidationError(t *testing.T) {
 	}
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
 		t.Fatal("dump should be deleted even when resume validation fails")
+	}
+}
+
+// A dump opened with the wrong one-time key (or for another session) yields
+// nothing and is still deleted — and a plain dump from a predecessor that
+// predates sealing still loads.
+func TestTakeScrollbackDumpWrongKeyAndPlain(t *testing.T) {
+	isolateReminalHome(t)
+	key, _ := crypto.NewSessionKey()
+	box, _ := crypto.NewBox(key)
+	a := &Agent{sessionID: "KEYS2345", box: box, buf: newScrollback(1 << 20)}
+	a.record([]byte("secret history\r\n"))
+	path, _, err := a.writeScrollbackDump()
+	if err != nil || path == "" {
+		t.Fatalf("dump: %q %v", path, err)
+	}
+	other, _ := atrest.NewKey()
+	if d := takeScrollbackDump(path, hex.EncodeToString(other), a.sessionID); d != nil {
+		t.Fatal("wrong key opened the dump")
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatal("unopenable dump should be deleted")
+	}
+	path, k, _ := a.writeScrollbackDump()
+	if d := takeScrollbackDump(path, k, "OTHER234"); d != nil {
+		t.Fatal("dump opened for another session")
+	}
+
+	plain, _ := json.Marshal(scrollbackDump{Version: scrollbackDumpVersion, NextSeq: 1,
+		Entries: []scrollDumpEntry{{Seq: 1, Data: []byte("old predecessor")}}})
+	pp := filepath.Join(t.TempDir(), "plain.json")
+	_ = os.WriteFile(pp, plain, 0o600)
+	if d := takeScrollbackDump(pp, "", "KEYS2345"); d == nil || string(d.Entries[0].Data) != "old predecessor" {
+		t.Fatalf("plain dump from an older predecessor = %+v", d)
 	}
 }
