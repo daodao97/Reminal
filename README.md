@@ -5,7 +5,7 @@
 ### Every window, desktop and terminal on your machines — live in any browser.
 
 **Close the laptop lid and walk away.** reminal keeps the machine serving — and hands you its actual apps, not just a shell — in any browser, from anywhere.
-No open ports, no keys on disk, nothing to install on the device you're holding.
+No open ports, session secrets encrypted on disk, nothing to install on the device you're holding.
 
 [![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-blue.svg)](LICENSE) [![Release](https://img.shields.io/github/v/release/harshalgajjar/Reminal?color=success&label=release)](https://github.com/harshalgajjar/Reminal/releases) [![Go](https://img.shields.io/badge/go-1.25%2B-00ADD8?logo=go&logoColor=white)](https://go.dev/) [![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey)](https://github.com/harshalgajjar/Reminal/releases) [![Encryption](https://img.shields.io/badge/encryption-AES--256--GCM-success)](#security) [![Relay](https://img.shields.io/badge/relay-Cloudflare-F38020?logo=cloudflare&logoColor=white)](cloudflare/README.md)
 
@@ -263,7 +263,7 @@ Enroll a device as an **owner** — `reminal own`, then `sudo reminal add owner 
 
 > Built to be **as secure as a properly configured SSH — and safer by default.**
 
-SSH leaves port 22 open, stores long-lived keys on disk, and trusts you to configure everything correctly. reminal takes the opposite approach: **nothing to expose, nothing permanent to steal, encryption end-to-end.**
+SSH leaves port 22 open and trusts you to configure everything correctly. reminal takes the opposite approach: **nothing to expose, session secrets encrypted on disk, encryption end-to-end.**
 
 | Layer | What it does |
 |---|---|
@@ -294,7 +294,7 @@ SSH was designed in 1995 — it assumes a static IP, a router you can configure,
 |---|---|---|
 | **Setup time** | One command | Keys, configs, port-forwarding, firewalls |
 | **Listening port** | None | TCP 22 exposed to the internet |
-| **Credentials** | Ephemeral session ID + PIN | Permanent keys on disk |
+| **Credentials** | Per-session ID + PIN, encrypted on disk | Permanent keys on disk |
 | **Behind NAT / hotel Wi-Fi** | Just works | VPN or jump host required |
 | **Client required on viewer** | None — a browser is the client | `ssh` + a configured key per device |
 | **Phone friendly** | Scan QR → in | No native client |
@@ -465,7 +465,7 @@ irm https://raw.githubusercontent.com/harshalgajjar/Reminal/main/install.ps1 | i
 reminal
 ```
 
-Scan the QR — you're in. No signup, no port-forwarding, no keys on disk. About **30 seconds** from this page to your own machine, live in a browser.
+Scan the QR and you're in. No signup, no port-forwarding, session secrets encrypted on disk. About **30 seconds** from this page to your own machine, live in a browser.
 
 ---
 
