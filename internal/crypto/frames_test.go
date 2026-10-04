@@ -61,3 +61,26 @@ func TestSealInfoRoundTrip(t *testing.T) {
 		t.Fatal("seal info opened for another exchange")
 	}
 }
+
+// The agent's own nonces never repeat, and are recognised as its own.
+func TestOwnNoncesAreDistinctAndMarked(t *testing.T) {
+	k := frameKeys(t)
+	seen := map[string]bool{}
+	for i := 0; i < 10000; i++ {
+		n, err := k.OwnNonce()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if seen[string(n)] {
+			t.Fatalf("nonce repeated after %d", i)
+		}
+		seen[string(n)] = true
+		if !k.IsOwnNonce(n) {
+			t.Fatal("own nonce not recognised")
+		}
+	}
+	other := make([]byte, 12)
+	if k.IsOwnNonce(other) || frameKeys(t).IsOwnNonce(func() []byte { n, _ := k.OwnNonce(); return n }()) {
+		t.Fatal("a nonce not made by this key was recognised")
+	}
+}

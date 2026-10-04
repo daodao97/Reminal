@@ -62,6 +62,33 @@ func (b *Box) Encrypt(plaintext []byte) (string, error) {
 	return base64.StdEncoding.EncodeToString(out), nil
 }
 
+// EncryptWithNonce is Encrypt with a nonce the caller chose; it must never
+// repeat under one key.
+func (b *Box) EncryptWithNonce(nonce, plaintext []byte) (string, error) {
+	if len(nonce) != b.aead.NonceSize() {
+		return "", fmt.Errorf("nonce must be %d bytes", b.aead.NonceSize())
+	}
+	out := b.aead.Seal(append([]byte(nil), nonce...), nonce, plaintext, nil)
+	return base64.StdEncoding.EncodeToString(out), nil
+}
+
+// DecryptNonce is Decrypt that also returns the nonce the message carried.
+func (b *Box) DecryptNonce(encoded string) (nonce, plaintext []byte, err error) {
+	raw, err := base64.StdEncoding.DecodeString(encoded)
+	if err != nil {
+		return nil, nil, err
+	}
+	n := b.aead.NonceSize()
+	if len(raw) < n {
+		return nil, nil, fmt.Errorf("ciphertext too short")
+	}
+	pt, err := b.aead.Open(nil, raw[:n], raw[n:], nil)
+	if err != nil {
+		return nil, nil, err
+	}
+	return raw[:n], pt, nil
+}
+
 func (b *Box) Decrypt(encoded string) ([]byte, error) {
 	raw, err := base64.StdEncoding.DecodeString(encoded)
 	if err != nil {

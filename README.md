@@ -342,6 +342,14 @@ REMINAL_LOCAL=1 ./dist/reminal connect <session_id> <pin>
 # or http://localhost:8080/?s=<session_id>
 ```
 
+A relay run behind a reverse proxy sees every viewer at the proxy's address.
+If the proxy sets `X-Real-IP` (preferred) or appends to `X-Forwarded-For`,
+start the relay with `REMINAL_RELAY_TRUST_PROXY=1` so it uses those instead:
+`X-Real-IP`, or else the last `X-Forwarded-For` entry. Use it only if the proxy
+overwrites `X-Real-IP` (or never passes one through from the client), and
+leave it unset when the relay is reached directly, because anyone could then
+set those headers.
+
 To test against a remote relay without rebuilding, set either runtime URL;
 reminal derives its counterpart automatically:
 

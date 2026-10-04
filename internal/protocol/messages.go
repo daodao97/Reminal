@@ -53,6 +53,11 @@ const (
 	// wrapped under the key both sides derive (Wrap).
 	TypePakeResp MessageType = "pake_resp"
 
+	// TypePakeBusy is the relay's answer to a PIN handshake it is pacing
+	// (too many from one address just now): try again after RetryMS. A
+	// viewer that predates it ignores it and retries on its own timer.
+	TypePakeBusy MessageType = "pake_busy"
+
 	// TypeSealed wraps a session message once both ends support it: the
 	// inner type, the sender's stream and counter, and the scrollback seq
 	// are all bound into its encryption (crypto/frames.go). Peers that
@@ -401,6 +406,10 @@ type Message struct {
 	// predates sealed frames.
 	Frames int    `json:"frames,omitempty"`
 	Seal   string `json:"seal,omitempty"`
+	// Src, on a pake_init the relay forwards, is an opaque tag for the
+	// address it came from, set by the relay (any value a viewer sent is
+	// replaced), so the agent can pace handshakes per source.
+	Src string `json:"src,omitempty"`
 }
 
 // unsealed are the messages that are never wrapped in TypeSealed: the relay's
@@ -412,7 +421,7 @@ var unsealed = map[MessageType]bool{
 	TypeClosed: true, TypeResume: true, TypeAgentOnline: true, TypeAgentOffline: true,
 	TypeKexInit: true, TypeKexResp: true, TypePakeInit: true, TypePakeResp: true,
 	TypeOwnerInit: true, TypeOwnerResp: true, TypeOwnerBusy: true,
-	TypeSealed: true,
+	TypePakeBusy: true, TypeSealed: true,
 }
 
 // ReadOnlyRequest reports whether a message of type t, sent with no payload,

@@ -6,6 +6,7 @@ package client
 import (
 	"bytes"
 	"crypto/ed25519"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"os"
@@ -67,13 +68,20 @@ func (v *Viewer) checkMachineIdentity(machinePub ed25519.PublicKey) error {
 	}
 	machines, err := ListOwnedMachines()
 	if err != nil {
-		return fmt.Errorf("owner: can't read your machines: %w", err)
+		machines = nil // unreadable: treat as none, and ask
 	}
 	for _, m := range machines {
 		if bytes.Equal(m.Key, machinePub) {
 			_, _ = RecordMachineKey(v.sessionID, machinePub) // best-effort
 			return nil
 		}
+	}
+	// A key this device pinned for another session, before trust was held
+	// per machine, is a machine it already trusts.
+	if pinnedForAnySession(machinePub) {
+		_ = RecordOwnedMachine(machinePub)
+		_, _ = RecordMachineKey(v.sessionID, machinePub)
+		return nil
 	}
 	if home, ok := findSessionHome(v.sessionID, machines); ok {
 		name := ShortMachineID(home)
@@ -98,6 +106,14 @@ func (v *Viewer) askTrustMachine(machinePub ed25519.PublicKey, haveMachines bool
 	if v.promptIn == nil {
 		return false
 	}
+	// Only keys pressed after the question count: drop anything typed before.
+	for drained := false; !drained; {
+		select {
+		case <-v.promptIn:
+		default:
+			drained = true
+		}
+	}
 	fmt.Fprintf(os.Stderr, "\r\n  This device has not connected to this machine before.\r\n  Machine: %s\r\n", MachineID(machinePub))
 	if haveMachines {
 		fmt.Fprint(os.Stderr, "  If you expected one of the machines you already use, answer n.\r\n")
@@ -109,18 +125,36 @@ func (v *Viewer) askTrustMachine(machinePub ed25519.PublicKey, haveMachines bool
 			if !ok {
 				return false
 			}
+			// The first key that means anything decides; the rest of a pasted
+			// chunk does not.
 			for _, c := range b {
-				switch c {
-				case 'y', 'Y':
+				if c == ' ' || c == '\t' {
+					continue
+				}
+				if c == 'y' || c == 'Y' {
 					fmt.Fprint(os.Stderr, "y\r\n")
 					return true
-				case 'n', 'N', '\r', '\n', 3, 4:
-					fmt.Fprint(os.Stderr, "\r\n")
-					return false
 				}
+				fmt.Fprint(os.Stderr, "\r\n")
+				return false
 			}
 		case <-v.promptEsc:
 			return false
 		}
 	}
+}
+
+// pinnedForAnySession reports whether known_machines.json pins pub for any
+// session.
+func pinnedForAnySession(pub ed25519.PublicKey) bool {
+	m, err := loadKnownMachines()
+	if err != nil {
+		return false
+	}
+	for _, enc := range m {
+		if raw, err := base64.RawURLEncoding.DecodeString(enc); err == nil && bytes.Equal(raw, pub) {
+			return true
+		}
+	}
+	return false
 }

@@ -102,3 +102,42 @@ console.log(bad.length ? bad.join("\n") : "PASS");
 func jsStr(s string) string {
 	return `"` + strings.NewReplacer(`\`, `\\`, `"`, `\"`).Replace(s) + `"`
 }
+
+// addressGroup in session.ts must group an IPv6 address by its /64 and leave
+// an IPv4 address as it is.
+func TestAddressGroupByIPv6Prefix(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node not installed")
+	}
+	src, err := os.ReadFile(filepath.Join("src", "session.ts"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(src)
+	start := strings.Index(s, "export function addressGroup(ip: string): string {")
+	if start < 0 {
+		t.Fatal("addressGroup is no longer where this test looks for it — fix the test, do not delete it")
+	}
+	end := strings.Index(s[start:], "\n}\n")
+	fn := strings.Replace(s[start:start+end+2], "export function addressGroup(ip: string): string {", "function addressGroup(ip) {", 1)
+	cases := map[string]string{
+		"203.0.113.7":             "203.0.113.7",
+		"2001:db8:1:2:aaaa::1":    "2001:db8:1:2::/64",
+		"2001:db8:1:2:ffff::9999": "2001:db8:1:2::/64",
+		"2001:db8::1":             "2001:db8:0:0::/64",
+		"::1":                     "0:0:0:0::/64",
+		"::ffff:203.0.113.7":      "203.0.113.7",
+	}
+	for in, want := range cases {
+		out, err := exec.Command(node, "-e", fn+"\nprocess.stdout.write(addressGroup("+jsString(in)+"))").CombinedOutput()
+		if err != nil {
+			t.Fatalf("node: %v\n%s", err, out)
+		}
+		if string(out) != want {
+			t.Errorf("addressGroup(%q) = %q, want %q", in, out, want)
+		}
+	}
+}
+
+func jsString(s string) string { return "'" + strings.ReplaceAll(s, "'", "\\'") + "'" }

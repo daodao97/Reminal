@@ -4,7 +4,6 @@
 package client
 
 import (
-	"crypto/sha256"
 	"encoding/json"
 	"log"
 	"sync"
@@ -25,16 +24,19 @@ import (
 // Incoming: a sealed frame is accepted once, from a stream a handshake issued,
 // in order, as the message type it was sealed as. An unsealed message is a
 // viewer that predates sealed frames: it is accepted only if it decrypts with
-// the session key and is not one the agent wrote itself, and it puts the
-// session into writing both forms until the last viewer leaves.
+// the session key, does not carry one of the agent's own nonces, and has not
+// been accepted before. The session writes both forms from the moment a
+// viewer's handshake does not ask for sealed frames, or such a message
+// arrives, until the last viewer leaves.
 
 // maxStreams bounds how many handshakes' streams are remembered. Past it the
-// oldest is forgotten, and a frame on it is refused, never accepted afresh.
+// least recently used is forgotten, and a frame on it is refused, never
+// accepted afresh.
 const maxStreams = 4096
 
-// legacyEchoes bounds how many of the agent's own unsealed messages are
-// remembered (isEcho).
-const legacyEchoes = 1 << 15
+// legacySeen bounds how many earlier-form messages' nonces are remembered, so
+// that one is accepted once.
+const legacySeen = 1 << 18
 
 type sealState struct {
 	once sync.Once
@@ -43,16 +45,21 @@ type sealState struct {
 	outCtr uint64 // under Agent.writeMu
 
 	mu         sync.Mutex
-	streams    map[uint32]uint64 // stream → last counter accepted
-	order      []uint32
+	streams    map[uint32]*streamUse
+	tick       uint64
 	nextStream uint32
 
 	legacy atomic.Bool // a viewer that predates sealed frames is attached
 
-	echoMu  sync.Mutex
-	echoes  map[[16]byte]struct{}
-	echoLog [][16]byte
-	echoPos int
+	seenMu  sync.Mutex
+	seen    map[[12]byte]struct{}
+	seenLog [][12]byte
+	seenPos int
+}
+
+type streamUse struct {
+	last uint64 // last counter accepted
+	used uint64 // tick of the last frame accepted, or of issue
 }
 
 // frameKeys returns this agent's frame keys (a session's, or the machine
@@ -68,8 +75,8 @@ func (a *Agent) frameKeys() *crypto.FrameKeys {
 			return
 		}
 		a.seal.keys = k
-		a.seal.streams = map[uint32]uint64{}
-		a.seal.echoes = map[[16]byte]struct{}{}
+		a.seal.streams = map[uint32]*streamUse{}
+		a.seal.seen = map[[12]byte]struct{}{}
 	})
 	return a.seal.keys
 }
@@ -84,11 +91,17 @@ func (a *Agent) sealInfoFor(frames int, key, exID []byte) string {
 	a.seal.mu.Lock()
 	a.seal.nextStream++
 	stream := a.seal.nextStream
-	a.seal.streams[stream] = 0
-	a.seal.order = append(a.seal.order, stream)
-	if len(a.seal.order) > maxStreams {
-		delete(a.seal.streams, a.seal.order[0])
-		a.seal.order = a.seal.order[1:]
+	a.seal.tick++
+	a.seal.streams[stream] = &streamUse{used: a.seal.tick}
+	if len(a.seal.streams) > maxStreams {
+		var oldest uint32
+		var at uint64 = ^uint64(0)
+		for id, u := range a.seal.streams {
+			if u.used < at {
+				oldest, at = id, u.used
+			}
+		}
+		delete(a.seal.streams, oldest)
 	}
 	a.seal.mu.Unlock()
 	a.writeMu.Lock()
@@ -135,42 +148,58 @@ func (a *Agent) writeSessionMsg(conn *websocket.Conn, k *crypto.FrameKeys, msg p
 	if !a.seal.legacy.Load() {
 		return nil
 	}
-	plain, err := json.Marshal(msg)
+	plain, err := a.legacyForm(k, msg)
 	if err != nil {
 		return err
-	}
-	if msg.Data != "" {
-		a.rememberEcho(msg.Data)
 	}
 	return a.writeRaw(conn, plain)
 }
 
-func echoKey(data string) [16]byte {
-	sum := sha256.Sum256([]byte(data))
-	var k [16]byte
-	copy(k[:], sum[:])
-	return k
-}
-
-func (a *Agent) rememberEcho(data string) {
-	k := echoKey(data)
-	a.seal.echoMu.Lock()
-	defer a.seal.echoMu.Unlock()
-	if len(a.seal.echoLog) < legacyEchoes {
-		a.seal.echoLog = append(a.seal.echoLog, k)
-	} else {
-		delete(a.seal.echoes, a.seal.echoLog[a.seal.echoPos])
-		a.seal.echoLog[a.seal.echoPos] = k
-		a.seal.echoPos = (a.seal.echoPos + 1) % legacyEchoes
+// legacyForm is msg as a viewer from before sealed frames reads it. A payload
+// encrypted with the session key is encrypted again under one of the agent's
+// own nonces (FrameKeys.OwnNonce), so it can never be taken as input.
+func (a *Agent) legacyForm(k *crypto.FrameKeys, msg protocol.Message) ([]byte, error) {
+	if msg.Data != "" {
+		if pt, err := a.box.Decrypt(msg.Data); err == nil {
+			nonce, err := k.OwnNonce()
+			if err != nil {
+				return nil, err
+			}
+			if msg.Data, err = a.box.EncryptWithNonce(nonce, pt); err != nil {
+				return nil, err
+			}
+		}
 	}
-	a.seal.echoes[k] = struct{}{}
+	return json.Marshal(msg)
 }
 
-func (a *Agent) isEcho(data string) bool {
-	a.seal.echoMu.Lock()
-	defer a.seal.echoMu.Unlock()
-	_, ok := a.seal.echoes[echoKey(data)]
-	return ok
+// seenBefore records an earlier-form message's nonce and reports whether it
+// was already recorded.
+func (a *Agent) seenBefore(nonce []byte) bool {
+	var k [12]byte
+	copy(k[:], nonce)
+	a.seal.seenMu.Lock()
+	defer a.seal.seenMu.Unlock()
+	if _, ok := a.seal.seen[k]; ok {
+		return true
+	}
+	if len(a.seal.seenLog) < legacySeen {
+		a.seal.seenLog = append(a.seal.seenLog, k)
+	} else {
+		delete(a.seal.seen, a.seal.seenLog[a.seal.seenPos])
+		a.seal.seenLog[a.seal.seenPos] = k
+		a.seal.seenPos = (a.seal.seenPos + 1) % legacySeen
+	}
+	a.seal.seen[k] = struct{}{}
+	return false
+}
+
+// handshakeWithout notes a viewer handshake that did not ask for sealed
+// frames: a viewer from before them, which reads only the earlier form.
+func (a *Agent) handshakeWithout(frames int) {
+	if frames < 1 && a.frameKeys() != nil {
+		a.seal.legacy.Store(true)
+	}
 }
 
 // admit decides whether an incoming message is acted on, and unwraps a
@@ -189,18 +218,23 @@ func (a *Agent) admit(msg protocol.Message) (out protocol.Message, ok, legacyNow
 		return msg, true, false
 	}
 	// Unsealed session message, from a viewer that predates sealed frames.
-	// One that does not decrypt, or that the agent wrote itself, is dropped.
 	if msg.Data == "" {
-		// A bare request for something to be sent back is how an older
-		// client asks for a list or a status, and changes nothing; it is
-		// answered, in the form that client reads. Anything else bare is
-		// accepted only while such a client has shown itself.
+		// A bare request for something to be sent back (a list, a status)
+		// changes nothing and is answered. Anything else bare is accepted
+		// only while such a viewer is attached.
 		if protocol.ReadOnlyRequest(msg.Type) {
-			return msg, true, !a.seal.legacy.Swap(true)
+			return msg, true, false
 		}
 		return msg, a.seal.legacy.Load(), false
 	}
-	if _, err := a.box.Decrypt(msg.Data); err != nil || a.isEcho(msg.Data) {
+	// Accepted once, only if it decrypts, and never one the agent wrote.
+	nonce, _, err := a.box.DecryptNonce(msg.Data)
+	if err != nil || k.IsOwnNonce(nonce) {
+		return msg, false, false
+	}
+	// Window acknowledgements are frequent and change nothing; leaving them
+	// out keeps the record of everything else long.
+	if msg.Type != protocol.TypeWindowAck && a.seenBefore(nonce) {
 		return msg, false, false
 	}
 	return msg, true, !a.seal.legacy.Swap(true)
@@ -212,7 +246,11 @@ func (a *Agent) openSealed(k *crypto.FrameKeys, msg protocol.Message) (protocol.
 		return msg, false
 	}
 	a.seal.mu.Lock()
-	last, known := a.seal.streams[msg.Stream]
+	u, known := a.seal.streams[msg.Stream]
+	var last uint64
+	if known {
+		last = u.last
+	}
 	a.seal.mu.Unlock()
 	if !known || msg.Ctr <= last {
 		return msg, false
@@ -222,12 +260,13 @@ func (a *Agent) openSealed(k *crypto.FrameKeys, msg protocol.Message) (protocol.
 		return msg, false
 	}
 	a.seal.mu.Lock()
-	last, known = a.seal.streams[msg.Stream]
-	if !known || msg.Ctr <= last {
+	u, known = a.seal.streams[msg.Stream]
+	if !known || msg.Ctr <= u.last {
 		a.seal.mu.Unlock()
 		return msg, false
 	}
-	a.seal.streams[msg.Stream] = msg.Ctr
+	a.seal.tick++
+	u.last, u.used = msg.Ctr, a.seal.tick
 	a.seal.mu.Unlock()
 	out := protocol.Message{Type: msg.Inner, Seq: msg.Seq}
 	switch kind {

@@ -6,6 +6,7 @@ package crypto
 import (
 	"crypto/aes"
 	"crypto/cipher"
+	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
@@ -13,6 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"sync/atomic"
 
 	"golang.org/x/crypto/hkdf"
 )
@@ -40,11 +42,15 @@ var (
 	frameInfoV2A = []byte("reminal-frame-v1 viewer-to-agent")
 	frameAADTag  = []byte("reminal-frame-v1")
 	sealInfoInfo = []byte("reminal-seal-info-v1")
+	ownNonceInfo = []byte("reminal-frame-v1 own-nonce")
 )
 
-// FrameKeys holds the two directional keys for one session key.
+// FrameKeys holds the two directional keys for one session key, and the key
+// that marks the nonces of the agent's own earlier-form messages.
 type FrameKeys struct {
 	a2v, v2a cipher.AEAD
+	ownMark  []byte
+	ownCtr   atomic.Uint64
 }
 
 func gcmFrom(ikm, info []byte) (cipher.AEAD, error) {
@@ -72,7 +78,32 @@ func NewFrameKeys(sessionKey []byte) (*FrameKeys, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &FrameKeys{a2v: a2v, v2a: v2a}, nil
+	mark := make([]byte, 32)
+	if _, err := io.ReadFull(hkdf.New(sha256.New, sessionKey, nil, ownNonceInfo), mark); err != nil {
+		return nil, err
+	}
+	return &FrameKeys{a2v: a2v, v2a: v2a, ownMark: mark}, nil
+}
+
+// OwnNonce returns a fresh 12-byte nonce for a message the agent writes in the
+// earlier (unsealed) form: an 8-byte counter and 4 bytes of a MAC over it, so
+// the agent can tell such a message is one of its own from the nonce alone.
+// A counter never repeats under one session key, and every agent process has
+// its own session key.
+func (k *FrameKeys) OwnNonce() ([]byte, error) {
+	n := binary.BigEndian.AppendUint64(make([]byte, 0, 12), k.ownCtr.Add(1))
+	return append(n, k.markOf(n)...), nil
+}
+
+// IsOwnNonce reports whether nonce came from OwnNonce under this key.
+func (k *FrameKeys) IsOwnNonce(nonce []byte) bool {
+	return len(nonce) == 12 && hmac.Equal(nonce[8:], k.markOf(nonce[:8]))
+}
+
+func (k *FrameKeys) markOf(b []byte) []byte {
+	m := hmac.New(sha256.New, k.ownMark)
+	m.Write(b)
+	return m.Sum(nil)[:4]
 }
 
 // FrameAAD is the associated data of one frame. Exported for the

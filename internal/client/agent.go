@@ -190,7 +190,8 @@ type Agent struct {
 	// PIN at all (it can't, without becoming able to MITM the EKE).
 	kexMu         sync.Mutex
 	kexTokens     float64
-	kexLongTokens float64 // the long-term allowance; see kexLongBurst
+	kexLongTokens float64                  // the long-term allowance; see kexLongBurst
+	kexSrc        map[string]*kexSrcBucket // per-source share; see allowKexFrom
 	kexLast       time.Time
 
 	// Owner handshakes get their own allowance. An own_init is not a PIN
@@ -2934,9 +2935,13 @@ func (a *Agent) authenticate(conn *websocket.Conn) error {
 func (a *Agent) runReader(conn *websocket.Conn, cursorCh chan uint64) error {
 	for {
 		_ = conn.SetReadDeadline(time.Now().Add(readDeadlineAgent))
-		_, raw, err := conn.ReadMessage()
+		mt, raw, err := conn.ReadMessage()
 		if err != nil {
 			return err
+		}
+		// Peers send JSON text; nothing else is a message.
+		if mt != websocket.TextMessage || !exactTypeKey(raw) {
+			continue
 		}
 
 		var msg protocol.Message
@@ -3038,7 +3043,7 @@ func (a *Agent) runReader(conn *websocket.Conn, cursorCh chan uint64) error {
 			a.viewerSizeMu.Unlock()
 			pushCursor(cursorCh, cursor)
 		case protocol.TypePakeInit:
-			a.handlePakeInit(conn, msg.ExID, msg.Data, msg.Frames)
+			a.handlePakeInit(conn, msg.ExID, msg.Data, msg.Frames, msg.Src)
 		case protocol.TypeKexInit:
 			// Superseded by pake_init and no longer answered. A viewer that
 			// only sends this needs updating to connect with a PIN.
@@ -3326,7 +3331,45 @@ const (
 // allowKex reports whether we should answer another PIN handshake right now,
 // taking one token from each allowance if so. A refused attempt is dropped
 // silently (the viewer sees a handshake timeout and can retry later).
+// Per-source share of the PIN-handshake allowance. A relay that tags each
+// handshake with its source (Message.Src) lets the agent tell sources apart.
+// The share applies only when the machine-wide long-term allowance is below
+// half and another source has been seen recently: then a source that has used
+// its share (kexSrcBurst, refilled at half the machine-wide rate)
+// waits, so one source cannot use up what is left. A source on its own always
+// gets everything the machine-wide allowance gives. Untagged handshakes have
+// no share.
+const (
+	kexSrcBurst   = 10
+	kexSrcRefill  = 2 * kexLongRefill
+	kexSrcSources = 1024
+)
+
+type kexSrcBucket struct {
+	tokens float64
+	at     time.Time
+}
+
+// otherSourceSeen reports whether a source other than src asked within the
+// share's refill window. Callers hold kexMu.
+func (a *Agent) otherSourceSeen(src string, now time.Time) bool {
+	for k, o := range a.kexSrc {
+		if k != src && now.Sub(o.at) < kexSrcBurst*kexSrcRefill {
+			return true
+		}
+	}
+	return false
+}
+
+// allowKex reports whether to answer another PIN handshake now.
 func (a *Agent) allowKex(now time.Time) bool {
+	ok, _ := a.allowKexFrom(now, "")
+	return ok
+}
+
+// allowKexFrom takes one PIN-handshake token for src. When it cannot, retry
+// is how long until one is likely to be there.
+func (a *Agent) allowKexFrom(now time.Time, src string) (ok bool, retry time.Duration) {
 	a.kexMu.Lock()
 	defer a.kexMu.Unlock()
 	if a.kexLast.IsZero() {
@@ -3334,22 +3377,47 @@ func (a *Agent) allowKex(now time.Time) bool {
 		a.kexLongTokens = kexLongBurst
 	} else {
 		elapsed := now.Sub(a.kexLast).Seconds()
-		a.kexTokens += elapsed / kexRefill.Seconds()
-		if a.kexTokens > kexBurst {
-			a.kexTokens = kexBurst
-		}
-		a.kexLongTokens += elapsed / kexLongRefill.Seconds()
-		if a.kexLongTokens > kexLongBurst {
-			a.kexLongTokens = kexLongBurst
-		}
+		a.kexTokens = min(kexBurst, a.kexTokens+elapsed/kexRefill.Seconds())
+		a.kexLongTokens = min(kexLongBurst, a.kexLongTokens+elapsed/kexLongRefill.Seconds())
 	}
 	a.kexLast = now
+
+	var b *kexSrcBucket
+	if src != "" {
+		if a.kexSrc == nil {
+			a.kexSrc = map[string]*kexSrcBucket{}
+		}
+		if b = a.kexSrc[src]; b == nil && len(a.kexSrc) < kexSrcSources {
+			b = &kexSrcBucket{tokens: kexSrcBurst, at: now}
+			a.kexSrc[src] = b
+		} else if b == nil && len(a.kexSrc) >= kexSrcSources {
+			for k, o := range a.kexSrc {
+				if now.Sub(o.at) >= kexSrcBurst*kexSrcRefill {
+					delete(a.kexSrc, k)
+				}
+			}
+		}
+		if b != nil {
+			b.tokens = min(kexSrcBurst, b.tokens+now.Sub(b.at).Seconds()/kexSrcRefill.Seconds())
+			b.at = now
+			if a.kexLongTokens < kexLongBurst/2 && b.tokens < 1 && a.otherSourceSeen(src, now) {
+				return false, time.Duration((1 - b.tokens) * float64(kexSrcRefill))
+			}
+		}
+	}
 	if a.kexTokens < 1 || a.kexLongTokens < 1 {
-		return false
+		wait := time.Duration((1 - a.kexTokens) * float64(kexRefill))
+		if w := time.Duration((1 - a.kexLongTokens) * float64(kexLongRefill)); w > wait {
+			wait = w
+		}
+		return false, wait
 	}
 	a.kexTokens--
 	a.kexLongTokens--
-	return true
+	if b != nil {
+		b.tokens = max(0, b.tokens-1)
+	}
+	return true, 0
 }
 
 // ownVerifyBurst is how many owner handshakes we will verify back-to-back.
@@ -3411,10 +3479,13 @@ func pakeSID(sessionID string, exID []byte) []byte {
 }
 
 // handlePakeInit answers a viewer's PIN handshake with our CPace element and the
-// session key, wrapped under the key we both derive. Silent on every failure,
-// like the owner handshake: no reply, and the viewer times out.
-func (a *Agent) handlePakeInit(conn *websocket.Conn, exIDHex, dataB64 string, frames int) {
-	if !a.allowKex(time.Now()) {
+// session key, wrapped under the key we both derive. Past its allowance it
+// answers pake_busy; on any other failure it is silent and the viewer times
+// out.
+func (a *Agent) handlePakeInit(conn *websocket.Conn, exIDHex, dataB64 string, frames int, src string) {
+	if ok, retry := a.allowKexFrom(time.Now(), src); !ok {
+		// Say so, so the viewer waits and tries again instead of timing out.
+		_ = a.writeMsg(conn, protocol.Message{Type: protocol.TypePakeBusy, ExID: exIDHex, RetryMS: int(retry / time.Millisecond)})
 		return
 	}
 	exID, err := crypto.ParseExID(exIDHex)
@@ -3437,6 +3508,8 @@ func (a *Agent) handlePakeInit(conn *websocket.Conn, exIDHex, dataB64 string, fr
 	if err != nil {
 		return
 	}
+	// Before the answer: an older viewer's resume can follow it at once.
+	a.handshakeWithout(frames)
 	_ = a.writeMsg(conn, protocol.Message{
 		Type: protocol.TypePakeResp,
 		ExID: exIDHex,
@@ -3523,6 +3596,7 @@ func (a *Agent) handleOwnerInit(conn *websocket.Conn, msg protocol.Message) {
 	if err != nil {
 		return
 	}
+	a.handshakeWithout(msg.Frames)
 	_ = a.writeMsg(conn, protocol.Message{
 		Type:       protocol.TypeOwnerResp,
 		ExID:       msg.ExID,
@@ -3552,6 +3626,23 @@ func (a *Agent) writeMsg(conn *websocket.Conn, msg protocol.Message) error {
 	a.writeMu.Lock()
 	defer a.writeMu.Unlock()
 	return a.writeRaw(conn, data)
+}
+
+// exactTypeKey reports whether a message names its type only as "type".
+// encoding/json matches field names without regard to case, so a key such as
+// "TYPE" would otherwise be read as the type too; the relays count messages by
+// the exact key, and the agent reads them the same way.
+func exactTypeKey(raw []byte) bool {
+	var keys map[string]json.RawMessage
+	if json.Unmarshal(raw, &keys) != nil {
+		return false
+	}
+	for k := range keys {
+		if k != "type" && strings.EqualFold(k, "type") {
+			return false
+		}
+	}
+	return true
 }
 
 // writeRaw writes one encoded message. Callers hold writeMu.
