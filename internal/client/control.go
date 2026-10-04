@@ -61,7 +61,12 @@ func sendControlToDeadline(pid int, cmd string, d time.Duration) (string, error)
 	if err != nil {
 		return "", err
 	}
-	conn, err := net.Dial("unix", sock)
+	var conn net.Conn
+	if d > 0 {
+		conn, err = net.DialTimeout("unix", sock, d)
+	} else {
+		conn, err = net.Dial("unix", sock)
+	}
 	if err != nil {
 		return "", fmt.Errorf("connect to agent %d: %w", pid, err)
 	}

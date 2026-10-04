@@ -624,6 +624,9 @@ func RestoreEnvID() string { return strings.ToUpper(strings.TrimSpace(os.Getenv(
 // restoreRetryEvery, so the sessions come back once it opens.
 func restoreAtStart() {
 	sweepHandoffDumps()
+	if dir, err := reminalDir(); err == nil {
+		atrest.SweepTemps(dir, 10*time.Minute)
+	}
 	session.QuarantinedRestores() // prune past their keep
 	if os.Getenv("REMINAL_NO_RESTORE") == "1" {
 		return

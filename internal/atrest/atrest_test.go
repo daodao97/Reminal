@@ -15,6 +15,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"reminal/internal/atomicfile"
 )
 
 func isolate(t *testing.T) string {
@@ -522,5 +524,78 @@ func TestFallbackKeyMovesIntoKeystore(t *testing.T) {
 	resetCache()
 	if pt, err := Open("restore", "ABCD2345", fb); err != nil || string(pt) != "while locked" {
 		t.Fatalf("fallback blob after the move: %q %v", pt, err)
+	}
+}
+
+// After a key file has moved into the keystore, a run that cannot reach the
+// keystore (no session bus, a boot-time daemon, a different HOME) must call
+// the blobs it sealed "later", never "gone" — on both move paths, and with
+// atrest.json deleted too.
+func TestMovedKeyThenUnreachableStoreIsLocked(t *testing.T) {
+	unreachable := func() {
+		osStoreFor = func(string, string) store { return nil }
+		resetCache()
+	}
+	t.Run("moved while atrest.json named the keystore", func(t *testing.T) {
+		dir := isolate(t)
+		f := &fakeStore{}
+		useFake(f)
+		_, _ = Seal("restore", "ABCD2345", []byte("x"))
+		f.locked = true
+		resetCache()
+		fb, _ := Seal("restore", "ABCD2345", []byte("while locked")) // file key
+		f.locked = false
+		resetCache()
+		_, _ = Seal("restore", "ABCD2345", []byte("after")) // moves the file key
+		if _, err := os.Stat(filepath.Join(dir, "atrest.key")); !os.IsNotExist(err) {
+			t.Fatal("key file not moved")
+		}
+		unreachable()
+		if _, err := Open("restore", "ABCD2345", fb); !errors.Is(err, ErrLocked) {
+			t.Fatalf("got %v, want ErrLocked", err)
+		}
+	})
+	t.Run("moved at a first start that had fallen back", func(t *testing.T) {
+		dir := isolate(t)
+		f := &fakeStore{locked: true}
+		useFake(f)
+		fb, _ := Seal("restore", "ABCD2345", []byte("first start")) // file key, no atrest.json
+		f.locked = false
+		resetCache()
+		_, _ = Seal("restore", "ABCD2345", []byte("after")) // promoteFileKey
+		if Backend() != "keychain" {
+			t.Fatalf("backend %q", Backend())
+		}
+		unreachable()
+		if _, err := Open("restore", "ABCD2345", fb); !errors.Is(err, ErrLocked) {
+			t.Fatalf("got %v, want ErrLocked", err)
+		}
+		// ...and with atrest.json deleted as well.
+		_ = os.Remove(filepath.Join(dir, "atrest.json"))
+		resetCache()
+		if _, err := Open("restore", "ABCD2345", fb); !errors.Is(err, ErrLocked) {
+			t.Fatalf("meta deleted: got %v, want ErrLocked", err)
+		}
+		// Reachable again: it opens.
+		useFake(f)
+		resetCache()
+		if pt, err := Open("restore", "ABCD2345", fb); err != nil || string(pt) != "first start" {
+			t.Fatalf("reachable again: %q %v", pt, err)
+		}
+	})
+}
+
+// No hard links (FAT, some network shares): the key file is still written,
+// exclusively, and still never replaced.
+func TestWriteExclusiveFallback(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "k")
+	if err := atomicfile.WriteNewNoLinkForTest(p, []byte("a"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := atomicfile.WriteNewNoLinkForTest(p, []byte("b"), 0o600); !errors.Is(err, atomicfile.ErrExists) {
+		t.Fatalf("second write: %v", err)
+	}
+	if b, _ := os.ReadFile(p); string(b) != "a" {
+		t.Fatal("replaced")
 	}
 }

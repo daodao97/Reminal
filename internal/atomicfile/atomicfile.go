@@ -50,7 +50,30 @@ func WriteNew(path string, data []byte, perm os.FileMode) error {
 		if _, serr := os.Lstat(path); serr == nil {
 			return ErrExists
 		}
+		// No hard links here (FAT, some network file systems): create it
+		// exclusively instead. A crash mid-write can then leave a short
+		// file, which readers of keys treat as unreadable, never as absent.
+		return writeExclusive(path, data, perm)
+	}
+	syncDir(filepath.Dir(path))
+	return nil
+}
+
+func writeExclusive(path string, data []byte, perm os.FileMode) error {
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, perm)
+	if err != nil {
+		if errors.Is(err, os.ErrExist) {
+			return ErrExists
+		}
 		return err
+	}
+	_, werr := f.Write(data)
+	serr := f.Sync()
+	cerr := f.Close()
+	for _, e := range []error{werr, serr, cerr} {
+		if e != nil {
+			return e
+		}
 	}
 	syncDir(filepath.Dir(path))
 	return nil
@@ -85,4 +108,10 @@ func syncDir(dir string) {
 		_ = d.Sync()
 		_ = d.Close()
 	}
+}
+
+// WriteNewNoLinkForTest is WriteNew's path for file systems without hard
+// links.
+func WriteNewNoLinkForTest(path string, data []byte, perm os.FileMode) error {
+	return writeExclusive(path, data, perm)
 }

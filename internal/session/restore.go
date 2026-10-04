@@ -367,6 +367,15 @@ func ReadRestores() ([]Restore, error) {
 // ClearRestore forgets a session for good: its record, its scrollback and
 // its agent's conversation id, sealed or from an older version.
 func ClearRestore(id string) error {
+	id = strings.ToUpper(id)
+	if unlock, err := lockSession(id); err == nil {
+		defer func() {
+			if dir, err := restoreDir(); err == nil {
+				_ = os.Remove(filepath.Join(dir, "."+id+".lock"))
+			}
+			unlock()
+		}()
+	}
 	for _, suf := range []string{".sealed", ".json", ".scrollback.sealed", ".scrollback.json", ".conv"} {
 		if p, err := restorePath(strings.ToUpper(id), suf); err == nil {
 			_ = os.Remove(p)

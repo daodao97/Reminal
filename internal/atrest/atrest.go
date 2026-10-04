@@ -123,6 +123,9 @@ type meta struct {
 	Source  string `json:"source"`
 	ID      string `json:"id"`
 	Account string `json:"account,omitempty"`
+	// Promoted lists key ids moved from the key file into the OS keystore:
+	// blobs sealed with them open only from the keystore now.
+	Promoted []string `json:"promoted,omitempty"`
 }
 
 var (
@@ -452,10 +455,12 @@ func promoteFileKey(dir string, k []byte) bool {
 		return false
 	}
 	id := keyID(k)
-	if writeMeta(dir, meta{V: 1, Source: ost.name(), ID: hex.EncodeToString(id[:]), Account: acct}) != nil {
+	if writeMeta(dir, meta{V: 1, Source: ost.name(), ID: hex.EncodeToString(id[:]), Account: acct,
+		Promoted: []string{hex.EncodeToString(id[:])}}) != nil {
 		return false
 	}
 	_ = os.Remove(fileStore{dir: dir}.path())
+	SweepTemps(dir, 0)
 	return true
 }
 
@@ -495,10 +500,15 @@ func openingKey(dir string, want [idLen]byte, src byte) ([]byte, error) {
 		}
 		return osStoreAt(dir, &meta{Account: acct})
 	}
+	// Only a home that has only ever used the key file may conclude a key
+	// is gone without asking an OS keystore: anywhere else the key may have
+	// been moved into one (see promoteFallback), so a keystore that cannot
+	// be reached from here means "later".
+	fileOnlyHome := m != nil && m.Source == "file" && len(m.Promoted) == 0
 	tryOS := func() []byte {
 		st := osAt("")
-		if st == nil && src != srcFile {
-			locked = true // the store that sealed it cannot be reached from here
+		if st == nil && (src != srcFile || !fileOnlyHome || promoted(m, want)) {
+			locked = true // the store that may hold it cannot be reached from here
 		}
 		if k := try(st, "os"); k != nil {
 			return k
@@ -555,7 +565,32 @@ func promoteFallback(dir string, m *meta) {
 		}
 	}
 	remember(dir, k)
+	notePromoted(dir, id)
 	_ = os.Remove(fs.path())
+	SweepTemps(dir, 0)
+}
+
+func promoted(m *meta, id [idLen]byte) bool {
+	if m == nil {
+		return false
+	}
+	h := hex.EncodeToString(id[:])
+	for _, p := range m.Promoted {
+		if p == h {
+			return true
+		}
+	}
+	return false
+}
+
+// notePromoted records in atrest.json that id now lives in the keystore.
+func notePromoted(dir string, id [idLen]byte) {
+	m, err := readMeta(dir)
+	if err != nil || promoted(m, id) {
+		return
+	}
+	m.Promoted = append(m.Promoted, hex.EncodeToString(id[:]))
+	_ = writeMeta(dir, *m)
 }
 
 func sourceByte(name string) byte {
@@ -837,4 +872,25 @@ func ResetCacheForTest() {
 // processes migrating the same record).
 func Lock(dir, name string, wait time.Duration) (func(), error) {
 	return lockFile(dir, name, wait)
+}
+
+// SweepTemps removes atomic-write temp files in dir older than age (a crash
+// mid-write leaves them; one from a key write holds the key). Zero age still
+// spares files a live writer may be using right now.
+func SweepTemps(dir string, age time.Duration) {
+	if age < time.Minute {
+		age = time.Minute
+	}
+	ents, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+	for _, e := range ents {
+		if !strings.HasPrefix(e.Name(), ".reminal-") || !strings.HasSuffix(e.Name(), ".tmp") {
+			continue
+		}
+		if fi, err := e.Info(); err == nil && time.Since(fi.ModTime()) > age {
+			_ = os.Remove(filepath.Join(dir, e.Name()))
+		}
+	}
 }

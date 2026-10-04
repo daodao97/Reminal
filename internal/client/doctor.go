@@ -98,7 +98,7 @@ func checkSavedSessions() (level, string) {
 	} else {
 		switch atrest.Status() {
 		case "locked":
-			where += ", which is not answering right now (saving with a key file meanwhile)"
+			where += ", which can't be reached right now or no longer has the key (saving with a key file meanwhile)"
 		case "gone":
 			where += ", but that key is no longer there; a new one is made at the next save"
 		}
