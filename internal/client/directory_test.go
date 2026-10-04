@@ -65,10 +65,11 @@ func TestDirectoryRevokeSelfEndToEnd(t *testing.T) {
 	dirID := crypto.DeriveDirectoryID(machinePub)
 	d := *websocket.DefaultDialer
 	d.HandshakeTimeout = 6 * time.Second
-	conn, _, err := d.Dial(config.SessionWS(dirID, "viewer"), nil)
+	raw, _, err := d.Dial(config.SessionWS(dirID, "viewer"), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
+	conn := &dirConn{Conn: raw}
 	defer conn.Close()
 	_ = conn.SetReadDeadline(time.Now().Add(6 * time.Second))
 	if err := writeDir(conn, protocol.Message{Type: protocol.TypeAuth}); err != nil {
@@ -82,11 +83,11 @@ func TestDirectoryRevokeSelfEndToEnd(t *testing.T) {
 	ve := eph.PublicKey().Bytes()
 	b64 := base64.StdEncoding.EncodeToString
 	sig := crypto.SignOwner(dk, crypto.OwnerClientTranscript(dirID, ve, devicePub))
-	writeDir(conn, protocol.Message{Type: protocol.TypeOwnerInit, ExID: exHex, Data: b64(ve), DevicePub: b64(devicePub), DeviceSig: b64(sig)})
-	box, err := readOwnerResp(conn, dirID, exHex, exID, ve, devicePub, machinePub, eph)
-	if err != nil {
+	writeDir(conn, protocol.Message{Type: protocol.TypeOwnerInit, ExID: exHex, Data: b64(ve), DevicePub: b64(devicePub), DeviceSig: b64(sig), Frames: 1})
+	if err := readOwnerResp(conn, dirID, exHex, exID, ve, devicePub, machinePub, eph); err != nil {
 		t.Fatalf("handshake: %v", err)
 	}
+	box := conn.box
 	rsig := crypto.SignOwner(dk, crypto.RevokeSelfTranscript(machinePub, devicePub))
 	req, _ := json.Marshal(map[string]string{"device_pub": b64(devicePub), "sig": b64(rsig), "req_id": "r1"})
 	enc, _ := box.Encrypt(req)

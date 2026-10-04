@@ -49,6 +49,8 @@ type Viewer struct {
 	// the owner handshake for the one question it may ask (askTrustMachine).
 	promptIn  <-chan []byte
 	promptEsc <-chan struct{}
+	// seal is this connection's sealed-frame state (sealedviewer.go).
+	seal viewerSeal
 
 	// Atomics first for 64-bit alignment on 32-bit architectures.
 	lastSeq       uint64
@@ -540,10 +542,12 @@ func (v *Viewer) negotiateSessionKey(conn *websocket.Conn) error {
 	if err != nil {
 		return fmt.Errorf("handshake: %w", err)
 	}
+	v.resetSeal()
 	if err := v.writeMsg(conn, protocol.Message{
-		Type: protocol.TypePakeInit,
-		ExID: exIDHex,
-		Data: base64.StdEncoding.EncodeToString(mine),
+		Type:   protocol.TypePakeInit,
+		ExID:   exIDHex,
+		Data:   base64.StdEncoding.EncodeToString(mine),
+		Frames: 1,
 	}); err != nil {
 		return fmt.Errorf("handshake: send: %w", err)
 	}
@@ -592,6 +596,9 @@ func (v *Viewer) negotiateSessionKey(conn *websocket.Conn) error {
 			if err != nil {
 				return fmt.Errorf("handshake: box: %w", err)
 			}
+			if err := v.setSeal(sessionKey, key, exID, msg.Seal); err != nil {
+				return err
+			}
 			v.box = box
 			// Clear the deadline so runReader's own per-read deadline takes over.
 			_ = conn.SetReadDeadline(time.Time{})
@@ -624,12 +631,14 @@ func (v *Viewer) negotiateSessionKeyOwner(conn *websocket.Conn) error {
 	}
 	viewerEph := eph.PublicKey().Bytes()
 	deviceSig := crypto.SignOwner(deviceKey, crypto.OwnerClientTranscript(v.sessionID, viewerEph, devicePub))
+	v.resetSeal()
 	if err := v.writeMsg(conn, protocol.Message{
 		Type:      protocol.TypeOwnerInit,
 		ExID:      exIDHex,
 		Data:      base64.StdEncoding.EncodeToString(viewerEph),
 		DevicePub: base64.StdEncoding.EncodeToString(devicePub),
 		DeviceSig: base64.StdEncoding.EncodeToString(deviceSig),
+		Frames:    1,
 	}); err != nil {
 		return fmt.Errorf("owner: send: %w", err)
 	}
@@ -702,6 +711,9 @@ func (v *Viewer) negotiateSessionKeyOwner(conn *websocket.Conn) error {
 			if err != nil {
 				return fmt.Errorf("owner: box: %w", err)
 			}
+			if err := v.setSeal(sessionKey, shared, exID, msg.Seal); err != nil {
+				return err
+			}
 			v.box = box
 			_ = conn.SetReadDeadline(time.Time{})
 			return nil
@@ -758,6 +770,13 @@ func (v *Viewer) runReader(conn *websocket.Conn, agentLive *atomic.Bool) (err er
 
 		var msg protocol.Message
 		if err := json.Unmarshal(raw, &msg); err != nil {
+			continue
+		}
+		msg, ok, serr := v.admitIn(msg)
+		if serr != nil {
+			return serr
+		}
+		if !ok {
 			continue
 		}
 
@@ -898,12 +917,17 @@ func (v *Viewer) sendResizeNow(conn *websocket.Conn) {
 }
 
 func (v *Viewer) writeMsg(conn *websocket.Conn, msg protocol.Message) error {
-	data, err := json.Marshal(msg)
+	v.writeMu.Lock()
+	defer v.writeMu.Unlock()
+	data, err := v.sealOut(msg)
 	if err != nil {
 		return err
 	}
-	v.writeMu.Lock()
-	defer v.writeMu.Unlock()
+	if data == nil {
+		if data, err = json.Marshal(msg); err != nil {
+			return err
+		}
+	}
 	_ = conn.SetWriteDeadline(time.Now().Add(wsWriteWait))
 	return conn.WriteMessage(websocket.TextMessage, data)
 }

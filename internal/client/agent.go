@@ -180,6 +180,7 @@ type Agent struct {
 	scrollbackBytes int // byte cap on a snapshot's history (0 = no cap)
 
 	writeMu sync.Mutex // serializes WS writes; safe across sender/reader goroutines
+	seal    sealState  // sealed session frames (sealedframes.go)
 
 	// kex throttle. Each kex_init we answer is exactly one online PIN guess
 	// (the viewer-side blinding means a forged handshake can test only one
@@ -2942,6 +2943,18 @@ func (a *Agent) runReader(conn *websocket.Conn, cursorCh chan uint64) error {
 		if err := json.Unmarshal(raw, &msg); err != nil {
 			continue
 		}
+		msg, ok, legacyNow := a.admit(msg)
+		if !ok {
+			continue
+		}
+		if legacyNow {
+			// A viewer that predates sealed frames: from here everything is
+			// written in both forms, and it is owed the screen it missed.
+			select {
+			case cursorCh <- 0:
+			default:
+			}
+		}
 
 		if !a.servesOnThisChannel(msg.Type) {
 			// Wrong channel for this message — see servesOnThisChannel — or a
@@ -3025,7 +3038,7 @@ func (a *Agent) runReader(conn *websocket.Conn, cursorCh chan uint64) error {
 			a.viewerSizeMu.Unlock()
 			pushCursor(cursorCh, cursor)
 		case protocol.TypePakeInit:
-			a.handlePakeInit(conn, msg.ExID, msg.Data)
+			a.handlePakeInit(conn, msg.ExID, msg.Data, msg.Frames)
 		case protocol.TypeKexInit:
 			// Superseded by pake_init and no longer answered. A viewer that
 			// only sends this needs updating to connect with a PIN.
@@ -3144,6 +3157,7 @@ func (a *Agent) runReader(conn *websocket.Conn, cursorCh chan uint64) error {
 			} else {
 				a.notify("  [%s] Last viewer disconnected\n",
 					time.Now().Format("15:04:05"))
+				a.lastViewerLeft()
 				// Reset the viewer-min so a fresh viewer joining
 				// later can grow the PTY back to its size, instead
 				// of staying pinned at whatever a long-gone phone
@@ -3399,7 +3413,7 @@ func pakeSID(sessionID string, exID []byte) []byte {
 // handlePakeInit answers a viewer's PIN handshake with our CPace element and the
 // session key, wrapped under the key we both derive. Silent on every failure,
 // like the owner handshake: no reply, and the viewer times out.
-func (a *Agent) handlePakeInit(conn *websocket.Conn, exIDHex, dataB64 string) {
+func (a *Agent) handlePakeInit(conn *websocket.Conn, exIDHex, dataB64 string, frames int) {
 	if !a.allowKex(time.Now()) {
 		return
 	}
@@ -3428,6 +3442,7 @@ func (a *Agent) handlePakeInit(conn *websocket.Conn, exIDHex, dataB64 string) {
 		ExID: exIDHex,
 		Data: base64.StdEncoding.EncodeToString(mine),
 		Wrap: base64.StdEncoding.EncodeToString(wrapped),
+		Seal: a.sealInfoFor(frames, key, exID),
 	})
 }
 
@@ -3515,6 +3530,7 @@ func (a *Agent) handleOwnerInit(conn *websocket.Conn, msg protocol.Message) {
 		MachinePub: base64.StdEncoding.EncodeToString(machinePub),
 		MachineSig: base64.StdEncoding.EncodeToString(machineSig),
 		Wrap:       base64.StdEncoding.EncodeToString(wrapped),
+		Seal:       a.sealInfoFor(msg.Frames, shared, exID),
 	})
 }
 
@@ -3524,12 +3540,22 @@ func (a *Agent) writeMsg(conn *websocket.Conn, msg protocol.Message) error {
 	if conn == nil {
 		return errors.New("no connection")
 	}
+	if protocol.Sealable(msg.Type) {
+		if k := a.frameKeys(); k != nil {
+			return a.writeSessionMsg(conn, k, msg)
+		}
+	}
 	data, err := json.Marshal(msg)
 	if err != nil {
 		return err
 	}
 	a.writeMu.Lock()
 	defer a.writeMu.Unlock()
+	return a.writeRaw(conn, data)
+}
+
+// writeRaw writes one encoded message. Callers hold writeMu.
+func (a *Agent) writeRaw(conn *websocket.Conn, data []byte) error {
 	_ = conn.SetWriteDeadline(time.Now().Add(wsWriteWait))
 	return conn.WriteMessage(websocket.TextMessage, data)
 }
