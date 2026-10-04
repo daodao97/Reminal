@@ -79,6 +79,10 @@ type Server struct {
 	// defaultAuthWait/defaultReadWait.
 	authWait time.Duration
 	readWait time.Duration
+	// handshakes counts PIN handshakes per session and client address
+	// (handshakeAllowed).
+	hsMu       sync.Mutex
+	handshakes map[string]*addrBucket
 	// Room lifetimes; fields so a test can shorten them on its own Server.
 	// Zero means the default (orphanTTL, ownerKeep).
 	orphanWait time.Duration
@@ -264,6 +268,8 @@ func (s *Server) handleSessionConn(sessionID string, role protocol.Role, conn *w
 		switch {
 		case msg.Type == protocol.TypePing:
 			s.writeTo(p, protocol.Message{Type: protocol.TypePong})
+		case !s.handshakeAllowed(sessionID, role, conn, msg):
+			s.writeTo(p, protocol.Message{Type: protocol.TypeError, Error: tooManyHandshakes})
 		case forwardableTypes[msg.Type]:
 			s.forward(sessionID, role, msg)
 		}
@@ -432,6 +438,10 @@ func (s *Server) handleLegacyConn(conn *websocket.Conn) {
 			// had silently fallen behind — missing new_session, window, app, and
 			// webrtc types).
 			if registered && forwardableTypes[msg.Type] {
+				if !s.handshakeAllowed(sessionID, role, conn, msg) {
+					s.sendError(conn, tooManyHandshakes)
+					continue
+				}
 				s.forward(sessionID, role, msg)
 			}
 		}
