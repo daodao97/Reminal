@@ -106,3 +106,6 @@ func (d dpapiStore) put(k []byte) error {
 	}
 	return atomicfile.Write(d.path(), blob, 0o600)
 }
+
+// hasDesktopKeystore: a real login user here is expected to have an OS keystore.
+const hasDesktopKeystore = true

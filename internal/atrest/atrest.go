@@ -276,8 +276,12 @@ func storeAt(dir string, m *meta) store {
 // such blobs open from the file later whatever the keystore does.
 func sealingKey(dir string) ([]byte, [idLen]byte, byte, error) {
 	var zero [idLen]byte
+	if err := checkWritable(dir); err != nil {
+		return nil, zero, 0, err
+	}
 	if m, err := readMeta(dir); err == nil {
 		if id, ok := current[dir]; ok && hex.EncodeToString(id[:]) == m.ID {
+			confirmCurrent(dir, m, id)
 			return keys[dir][id], id, sourceByte(m.Source), nil
 		}
 		st := storeAt(dir, m)
@@ -289,11 +293,38 @@ func sealingKey(dir string) ([]byte, [idLen]byte, byte, error) {
 				promoteFallback(dir, m)
 			}
 			return keys[dir][id], id, st.source(), nil
+		case ok:
+			// The store holds a key, just not the one atrest.json names
+			// (an older ~/.reminal restored from a backup): adopt what the
+			// store has; never write over a key that exists.
+			if err := mint(dir); err != nil {
+				return nil, zero, 0, err
+			}
+			current[dir] = id
+			return keys[dir][id], id, st.source(), nil
 		case locked || st == nil:
 			return fileFallback(dir)
 		}
-		// The store answered and the key is not there (or is another
-		// key): it is gone, make a new one.
+		// The store answered that the key atrest.json names is NOT there.
+		// That is damage, not rotation: a key this machine saves with has
+		// gone missing while its records are sealed under it. Put it back
+		// if this process still holds it; otherwise refuse to save until
+		// someone does (`reminal doctor --repair-key`). Never mint over it.
+		for kid, k := range keys[dir] {
+			if hex.EncodeToString(kid[:]) == m.ID {
+				if st.put(k) == nil {
+					if got, err := st.get(); err == nil && string(got) == string(k) {
+						if !healed {
+							healed = true
+							Logf("reminal: the at-rest key was missing from %s and has been written back from memory", storeName(st, dir))
+						}
+						current[dir] = kid
+						return k, kid, st.source(), nil
+					}
+				}
+			}
+		}
+		return nil, zero, 0, ErrCurrentKeyMissing
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return fileFallback(dir)
 	}
@@ -320,6 +351,9 @@ func sealingKey(dir string) ([]byte, [idLen]byte, byte, error) {
 // touching atrest.json.
 func fileFallback(dir string) ([]byte, [idLen]byte, byte, error) {
 	var zero [idLen]byte
+	if err := checkWritable(dir); err != nil {
+		return nil, zero, 0, err
+	}
 	fs := fileStore{dir: dir}
 	if id, ok, _ := fromStore(dir, fs); ok {
 		noteFallback(dir)
@@ -360,6 +394,9 @@ func noteFallback(dir string) {
 // metadata was lost), the OS keystore's before the file's. With an
 // atrest.json whose store says the key is gone it makes a new one.
 func mint(dir string) error {
+	if err := checkWritable(dir); err != nil {
+		return err
+	}
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
 	}
@@ -389,6 +426,9 @@ func mint(dir string) error {
 		if locked || st == nil {
 			return ErrLocked
 		}
+		// The store answered "not found" for the key atrest.json names:
+		// damage, never rotation. Nothing is minted over a current key.
+		return ErrCurrentKeyMissing
 	} else {
 		m = nil
 		ost := osStoreAt(dir, nil)
@@ -471,10 +511,13 @@ func promoteFileKey(dir string, k []byte) bool {
 // absent in this context (no session bus) — or a damaged atrest.json makes it
 // ErrLocked.
 func openingKey(dir string, want [idLen]byte, src byte) ([]byte, error) {
+	m, merr := readMeta(dir)
 	if k, ok := keys[dir][want]; ok {
+		if m != nil && hex.EncodeToString(want[:]) == m.ID {
+			confirmCurrent(dir, m, want)
+		}
 		return k, nil
 	}
-	m, merr := readMeta(dir)
 	locked := merr != nil && !errors.Is(merr, os.ErrNotExist)
 	tried := map[string]bool{}
 	try := func(st store, label string) []byte {
@@ -526,6 +569,11 @@ func openingKey(dir string, want [idLen]byte, src byte) ([]byte, error) {
 	}
 	if locked {
 		return nil, ErrLocked
+	}
+	if m != nil && hex.EncodeToString(want[:]) == m.ID {
+		// The blob's key is the one this machine saves with, and its store
+		// has lost it: damage, not rotation. Later, never gone.
+		return nil, ErrCurrentKeyMissing
 	}
 	return nil, ErrKeyGone
 }
@@ -825,6 +873,9 @@ const QuarantineKeep = 7 * 24 * time.Hour
 // saying why, instead of deleting them: a keystore that only looked gone (a
 // profile repair, a slow login) must not cost anyone their sessions for good.
 func Quarantine(dir, name, reason string, files ...string) error {
+	if err := checkWritable(dir); err != nil {
+		return err
+	}
 	q := filepath.Join(dir, "quarantine")
 	if err := os.MkdirAll(q, 0o700); err != nil {
 		return err
@@ -879,7 +930,8 @@ func PruneQuarantine(dir string) int {
 // ResetCacheForTest forgets the in-process key, as a new process would.
 func ResetCacheForTest() {
 	keyMu.Lock()
-	keys, current, lockedUntil, fellBack = map[string]map[[idLen]byte][]byte{}, map[string][idLen]byte{}, time.Time{}, false
+	keys, current, lockedUntil, fellBack, healed = map[string]map[[idLen]byte][]byte{}, map[string][idLen]byte{}, time.Time{}, false, false
+	lastConfirm = map[string]time.Time{}
 	keyMu.Unlock()
 }
 
@@ -887,6 +939,9 @@ func ResetCacheForTest() {
 // it go if the holder dies. For callers that must not interleave (two
 // processes migrating the same record).
 func Lock(dir, name string, wait time.Duration) (func(), error) {
+	if err := checkWritable(dir); err != nil {
+		return nil, err
+	}
 	return lockFile(dir, name, wait)
 }
 
@@ -936,4 +991,26 @@ func OpenQuiet(kind, id string, blob []byte) ([]byte, error) {
 		keyMu.Unlock()
 	}()
 	return Open(kind, id, blob)
+}
+
+// RotateForTest replaces the key atrest.json names with a new one that the
+// store holds, as a genuine rotation would: blobs sealed before are then
+// "gone", not "missing", and new saves use the new key.
+func RotateForTest() {
+	dir, _ := Dir()
+	keyMu.Lock()
+	defer keyMu.Unlock()
+	m, err := readMeta(dir)
+	if err != nil {
+		return
+	}
+	k, _ := NewKey()
+	fs := fileStore{dir: dir}
+	_ = os.Remove(fs.path())
+	_ = fs.put(k)
+	id := keyID(k)
+	m.Source, m.ID, m.Promoted = "file", hex.EncodeToString(id[:]), nil
+	_ = writeMeta(dir, *m)
+	keys[dir] = nil
+	delete(current, dir)
 }

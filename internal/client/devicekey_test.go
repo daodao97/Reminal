@@ -139,8 +139,14 @@ func TestDeviceKeyUnreadableIsReportedNotReplaced(t *testing.T) {
 	atrest.ResetCacheForTest()
 	k, _ := loadOrCreateDeviceKey()
 	dir, _ := reminalDir()
+	// The sealing key FILE missing is damage: locked, nothing replaced.
 	_ = os.Remove(filepath.Join(dir, "atrest.key"))
 	atrest.ResetCacheForTest()
+	if _, err := loadOrCreateDeviceKey(); !errors.Is(err, ErrOwnerKeyLocked) {
+		t.Fatalf("sealing key file missing: %v, want ErrOwnerKeyLocked", err)
+	}
+	// A real rotation: unreadable, reported, never replaced.
+	atrest.RotateForTest()
 	if _, err := loadOrCreateDeviceKey(); !errors.Is(err, ErrOwnerKeyUnreadable) || !strings.Contains(err.Error(), "own reset") {
 		t.Fatalf("key gone: %v", err)
 	}

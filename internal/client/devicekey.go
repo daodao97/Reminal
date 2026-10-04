@@ -374,6 +374,9 @@ func mintLocked(out *ed25519.PrivateKey) error {
 		return err
 	}
 	if err := sealLocked(priv); err != nil {
+		if cerr := atrest.CheckWritable(); cerr != nil {
+			return cerr // a test binary with the real HOME: nothing is written
+		}
 		// Nothing to seal with (atrest already fell back to its key file;
 		// this is rarer still). The identity must exist from its first
 		// use, so it goes down the old way and is sealed at the next use.

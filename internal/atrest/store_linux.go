@@ -75,3 +75,6 @@ func (s secretServiceStore) put(k []byte) error {
 		"--label=reminal at-rest key", "service", keystoreService, "account", s.account)
 	return err
 }
+
+// hasDesktopKeystore: a real login user here is expected to have an OS keystore.
+const hasDesktopKeystore = false

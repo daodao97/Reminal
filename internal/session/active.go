@@ -198,6 +198,9 @@ func WriteActive(a Active) error {
 	if err != nil {
 		return err
 	}
+	if err := atrest.CheckWritable(); err != nil {
+		return err // a test binary with the real HOME writes nothing here
+	}
 	if err := os.MkdirAll(filepath.Dir(p), 0o700); err != nil {
 		return err
 	}

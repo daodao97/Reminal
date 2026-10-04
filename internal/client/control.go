@@ -15,6 +15,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"reminal/internal/atrest"
 	"reminal/internal/session"
 	"strings"
 	"sync"
@@ -241,6 +242,12 @@ func (a *Agent) handleControlConn(conn net.Conn) {
 			}
 		}()
 		return
+	case line == "atrest-key":
+		// `reminal doctor --repair-key`: the at-rest key this process saves
+		// with, so a key file deleted from under running sessions can be
+		// put back. Same-user socket; "" when this process has none that
+		// matches atrest.json.
+		_, _ = fmt.Fprintln(conn, "ok", atrest.CurrentKeyHex())
 	case line == "pin":
 		// The PIN of this running session, for `reminal info` / list when
 		// the copy in its record could not be opened (the keystore locked

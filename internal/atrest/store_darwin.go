@@ -79,3 +79,6 @@ func (s keychainStore) put(k []byte) error {
 	}
 	return nil
 }
+
+// hasDesktopKeystore: a real login user here is expected to have an OS keystore.
+const hasDesktopKeystore = true
