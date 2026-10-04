@@ -5,13 +5,11 @@ package client
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
-	"strings"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -20,6 +18,7 @@ import (
 	"reminal/internal/config"
 	"reminal/internal/protocol"
 	"reminal/internal/session"
+	"reminal/internal/updater"
 )
 
 // Doctor runs a series of environment checks and prints a color-coded report.
@@ -140,33 +139,19 @@ func checkVersion(current string) (level, string) {
 	if current == "" || current == "dev" {
 		return levelWarn, "dev build — version check skipped"
 	}
+	// The channel this build follows answers, the same way `reminal upgrade`
+	// asks it: a build on another line of releases is compared against its
+	// own feed, not the public one.
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, "GET",
-		"https://api.github.com/repos/harshalgajjar/Reminal/releases/latest", nil)
+	tag, err := updater.LatestTag(ctx)
 	if err != nil {
-		return levelWarn, fmt.Sprintf("v%s (couldn't check GitHub: %v)", current, err)
+		return levelWarn, fmt.Sprintf("v%s (couldn't check for updates: %v)", current, err)
 	}
-	req.Header.Set("Accept", "application/vnd.github+json")
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return levelWarn, fmt.Sprintf("v%s (couldn't reach GitHub: %v)", current, err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return levelWarn, fmt.Sprintf("v%s (GitHub returned %s)", current, resp.Status)
-	}
-	var rel struct {
-		TagName string `json:"tag_name"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&rel); err != nil {
-		return levelWarn, fmt.Sprintf("v%s (couldn't parse GitHub response)", current)
-	}
-	latest := strings.TrimPrefix(rel.TagName, "v")
-	if latest == current {
+	if tag == "" || !updater.Newer(current, tag) {
 		return levelOK, fmt.Sprintf("v%s (latest)", current)
 	}
-	return levelWarn, fmt.Sprintf("v%s — newer available: %s (run `reminal upgrade`)", current, rel.TagName)
+	return levelWarn, fmt.Sprintf("v%s — newer available: %s (run `reminal upgrade`)", current, tag)
 }
 
 func checkRelay() (level, string) {
