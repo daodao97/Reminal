@@ -22,7 +22,7 @@ const caseInsensitiveFS = true
 // runs as the user (an HKCU Run key), so it shares the CLI's DPAPI scope.
 type dpapiStore struct{ dir string }
 
-func osStore(dir string) store { return dpapiStore{dir: dir} }
+func osStore(dir, account string) store { return dpapiStore{dir: dir} }
 
 func (dpapiStore) name() string   { return "dpapi" }
 func (dpapiStore) source() byte   { return srcDPAPI }

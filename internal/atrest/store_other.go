@@ -7,4 +7,4 @@ package atrest
 
 const caseInsensitiveFS = false
 
-func osStore(dir string) store { return nil }
+func osStore(dir, account string) store { return nil }

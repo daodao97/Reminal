@@ -73,6 +73,9 @@ const (
 
 // SealScrollback / OpenScrollback seal a session's restore scrollback.
 func SealScrollback(id string, b []byte) ([]byte, error) {
+	if atrest.IsSealed(b) {
+		return nil, errors.New("already sealed")
+	}
 	return atrest.Seal(kindScrollback, strings.ToUpper(id), b)
 }
 func OpenScrollback(id string, b []byte) ([]byte, error) {
@@ -92,9 +95,10 @@ func writeFileAtomic(p string, data []byte) error {
 }
 
 // WriteRestore saves (replaces) a session's restore record, sealed. When the
-// keystore will not give the key up right now it writes nothing (the next
-// save tick tries again) — never the record in the clear.
+// key cannot be had at all it writes nothing (the next save tick tries again)
+// — never the record in the clear.
 func WriteRestore(r Restore) error {
+	r.ID = strings.ToUpper(r.ID)
 	p, err := restorePath(r.ID, ".sealed")
 	if err != nil {
 		return err
@@ -110,49 +114,58 @@ func WriteRestore(r Restore) error {
 	if err := writeFileAtomic(p, blob); err != nil {
 		return err
 	}
-	// The plain record an older version left is superseded.
+	// What an older version left in the clear is superseded.
 	if lp, err := restorePath(r.ID, ".json"); err == nil {
 		_ = os.Remove(lp)
 	}
+	_ = migrateLegacyScrollback(r.ID)
 	return nil
 }
 
-// ReadRestore reads one session's restore record: the sealed one, else a
-// plain one an older version wrote (sealed on the way, when it can be). A
-// record that will never open (its key is gone, it is damaged) is moved to
-// quarantine and reported as missing. atrest.ErrLocked means try later.
+// ReadRestore reads one session's restore record: the sealed one, or a plain
+// one an older version wrote, whichever is newer — a session still running
+// the old binary after an upgrade keeps rewriting its plain record. A plain
+// record is sealed on the way unless its session is still running (the old
+// process would only write it again, and its own cleanup would miss the
+// sealed copy). A record that will never open (its key is gone, it is
+// damaged) is moved to quarantine and reported as missing. atrest.ErrLocked
+// means try later.
 func ReadRestore(id string) (*Restore, error) {
 	id = strings.ToUpper(id)
 	p, err := restorePath(id, ".sealed")
 	if err != nil {
 		return nil, err
 	}
-	blob, err := os.ReadFile(p)
-	if err == nil {
-		data, oerr := atrest.Open(kindRestore, id, blob)
-		if oerr != nil {
-			if errors.Is(oerr, atrest.ErrLocked) {
-				return nil, oerr
-			}
-			quarantineRestore(id, oerr)
-			return nil, os.ErrNotExist
-		}
-		var r Restore
-		if err := json.Unmarshal(data, &r); err != nil || r.ID != id {
-			quarantineRestore(id, atrest.ErrCorrupt)
-			return nil, os.ErrNotExist
-		}
-		return &r, nil
+	lp, _ := restorePath(id, ".json")
+	sfi, serr := os.Stat(p)
+	lfi, lerr := os.Stat(lp)
+	if lerr == nil && (serr != nil || lfi.ModTime().After(sfi.ModTime())) {
+		return readLegacyRestore(id)
 	}
-	if !errors.Is(err, os.ErrNotExist) {
+	blob, err := os.ReadFile(p)
+	if err != nil {
 		return nil, err
 	}
-	return readLegacyRestore(id)
+	data, oerr := atrest.Open(kindRestore, id, blob)
+	if oerr != nil {
+		if errors.Is(oerr, atrest.ErrLocked) {
+			return nil, oerr
+		}
+		quarantineRestore(id, oerr)
+		return nil, os.ErrNotExist
+	}
+	var r Restore
+	if err := json.Unmarshal(data, &r); err != nil || strings.ToUpper(r.ID) != id {
+		quarantineRestore(id, atrest.ErrCorrupt)
+		return nil, os.ErrNotExist
+	}
+	return &r, nil
 }
 
-// readLegacyRestore reads a plain record from before sealing and, when the
-// key can be had, replaces it (and its plain scrollback) with sealed copies.
-// The plain copies go only once the sealed ones are safely written.
+// readLegacyRestore reads a plain record from before sealing and, when its
+// session is not running and the key can be had, replaces it and its plain
+// scrollback with sealed copies. The plain copies go only once the sealed
+// ones are safely written.
 func readLegacyRestore(id string) (*Restore, error) {
 	lp, err := restorePath(id, ".json")
 	if err != nil {
@@ -169,26 +182,48 @@ func readLegacyRestore(id string) (*Restore, error) {
 	if r.ID == "" {
 		r.ID = id
 	}
-	_ = migrateLegacy(r)
+	if !sessionRunning(id) {
+		_ = WriteRestore(r) // seals the scrollback too, then drops the plain copies
+	}
 	return &r, nil
 }
 
-func migrateLegacy(r Restore) error {
-	if lsp, err := LegacyScrollbackPath(r.ID); err == nil {
-		if pt, err := os.ReadFile(lsp); err == nil {
-			blob, err := SealScrollback(r.ID, pt)
-			if err != nil {
-				return err
-			}
-			sp, _ := RestoreScrollbackPath(r.ID)
-			if err := writeFileAtomic(sp, blob); err != nil {
-				return err
-			}
-			_ = os.Remove(lsp)
-			_ = os.Remove(lsp + ".tmp")
+func sessionRunning(id string) bool {
+	a, err := ReadActiveByID(id)
+	return err == nil && a != nil
+}
+
+// migrateLegacyScrollback seals the plain scrollback an older version kept
+// for this session, unless a sealed one is already there (newer: it is
+// written by this version), then removes the plain copy.
+func migrateLegacyScrollback(id string) error {
+	lsp, err := LegacyScrollbackPath(id)
+	if err != nil {
+		return err
+	}
+	pt, err := os.ReadFile(lsp)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	sp, err := RestoreScrollbackPath(id)
+	if err != nil {
+		return err
+	}
+	if _, err := os.Stat(sp); err != nil {
+		blob, err := SealScrollback(id, pt)
+		if err != nil {
+			return err
+		}
+		if err := writeFileAtomic(sp, blob); err != nil {
+			return err
 		}
 	}
-	return WriteRestore(r) // removes the plain record once the sealed one is in
+	_ = os.Remove(lsp)
+	_ = os.Remove(lsp + ".tmp")
+	return nil
 }
 
 // quarantineRestore moves a session's sealed files out of the way with a note.

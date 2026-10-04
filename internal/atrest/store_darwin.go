@@ -20,7 +20,7 @@ const caseInsensitiveFS = true
 // never synced to iCloud.
 type keychainStore struct{ account string }
 
-func osStore(dir string) store { return keychainStore{account: keystoreAccount(dir)} }
+func osStore(dir, account string) store { return keychainStore{account: account} }
 
 func (keychainStore) name() string { return "keychain" }
 func (keychainStore) source() byte { return srcKeychain }
@@ -32,7 +32,13 @@ func (s keychainStore) get() ([]byte, error) {
 	out, _, code, err := runTool(nil, "/usr/bin/security", "find-generic-password",
 		"-s", keystoreService, "-a", s.account, "-w")
 	if code == secItemNotFound {
-		return nil, errNotFound
+		// 44 is also what a keychain outside this security session's
+		// search list says. Believe "not there" only once a throwaway item
+		// can be written and read back.
+		if s.canary() {
+			return nil, errNotFound
+		}
+		return nil, ErrLocked
 	}
 	if err != nil {
 		return nil, ErrLocked
@@ -42,6 +48,18 @@ func (s keychainStore) get() ([]byte, error) {
 		return nil, ErrLocked
 	}
 	return k, nil
+}
+
+// canary proves the login keychain is open to us: write a throwaway item,
+// read it back.
+func (s keychainStore) canary() bool {
+	cmd := fmt.Sprintf("add-generic-password -U -s %s -a %s -w 01\n", keystoreCanary, s.account)
+	if _, _, _, err := runTool([]byte(cmd), "/usr/bin/security", "-i"); err != nil {
+		return false
+	}
+	out, _, _, err := runTool(nil, "/usr/bin/security", "find-generic-password",
+		"-s", keystoreCanary, "-a", s.account, "-w")
+	return err == nil && strings.TrimSpace(string(out)) == "01"
 }
 
 // put adds the item. The secret goes in on stdin (`security -i`), never in an

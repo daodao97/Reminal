@@ -21,23 +21,16 @@ func isolate(t *testing.T) string {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
-	keyMu.Lock()
-	cached, lockedUntil = nil, time.Time{}
-	keyMu.Unlock()
+	ResetCacheForTest()
 	t.Cleanup(func() {
-		keyMu.Lock()
-		cached, lockedUntil = nil, time.Time{}
-		keyMu.Unlock()
-		osStoreFor, allowOSStore = osStore, osStoreAllowed
+		ResetCacheForTest()
+		osStoreFor, osUsable = osStore, osStoreUsable
+		allowOSStore = func() bool { return osUsable() && os.Getenv("REMINAL_KEYSTORE") != "file" }
 	})
 	return filepath.Join(home, ".reminal")
 }
 
-func resetCache() {
-	keyMu.Lock()
-	cached, lockedUntil = nil, time.Time{}
-	keyMu.Unlock()
-}
+func resetCache() { ResetCacheForTest() }
 
 // fakeStore is an OS keystore whose answers the test controls.
 type fakeStore struct {
@@ -72,7 +65,8 @@ func (f *fakeStore) put(k []byte) error {
 }
 
 func useFake(f *fakeStore) {
-	osStoreFor = func(string) store { return f }
+	osStoreFor = func(string, string) store { return f }
+	osUsable = func() bool { return true }
 	allowOSStore = func() bool { return true }
 }
 
@@ -141,8 +135,9 @@ func TestKeyFileRemovedIsKeyGone(t *testing.T) {
 	}
 }
 
-// A locked keystore is never a lost key: Open and Seal say "later", no new
-// key is made, and the metadata is untouched.
+// A locked keystore is never a lost key: nothing sealed under it is given
+// up, no replacement is minted, atrest.json is untouched — and saving goes on
+// with the key file meanwhile, so a session's details are not lost either.
 func TestLockedKeystoreNeverMints(t *testing.T) {
 	dir := isolate(t)
 	f := &fakeStore{}
@@ -161,20 +156,29 @@ func TestLockedKeystoreNeverMints(t *testing.T) {
 		t.Fatalf("open while locked: %v", err)
 	}
 	resetCache()
-	if _, err := Seal("restore", "ABCD2345", []byte("y")); !errors.Is(err, ErrLocked) {
+	fb, err := Seal("restore", "ABCD2345", []byte("y"))
+	if err != nil {
 		t.Fatalf("seal while locked: %v", err)
 	}
 	after, _ := os.ReadFile(filepath.Join(dir, "atrest.json"))
 	if !bytes.Equal(before, after) || f.puts != 1 {
 		t.Fatal("a locked keystore led to a new key")
 	}
-	if _, err := os.Stat(filepath.Join(dir, "atrest.key")); err == nil {
-		t.Fatal("a locked keystore fell back to a key file")
+	if _, err := os.Stat(filepath.Join(dir, "atrest.key")); err != nil {
+		t.Fatal("no file fallback while locked")
 	}
 	f.locked = false
 	resetCache()
 	if pt, err := Open("restore", "ABCD2345", blob); err != nil || string(pt) != "x" {
-		t.Fatalf("after unlock: %q %v", pt, err)
+		t.Fatalf("keychain blob after unlock: %q %v", pt, err)
+	}
+	if pt, err := Open("restore", "ABCD2345", fb); err != nil || string(pt) != "y" {
+		t.Fatalf("fallback blob after unlock: %q %v", pt, err)
+	}
+	// Back to the keychain key once it answers again.
+	nb, _ := Seal("restore", "ABCD2345", []byte("z"))
+	if nb[len(magic)+1] != srcKeychain {
+		t.Fatalf("after unlock sealed with source %q", nb[len(magic)+1])
 	}
 }
 
@@ -194,16 +198,57 @@ func TestLostMetadataAdoptsStoredKey(t *testing.T) {
 	}
 }
 
-// No OS keystore available at first start: the file, and the session goes on.
+// No OS keystore answering at first start: the file, the session goes on,
+// and once the keystore answers the file's key moves into it (the same key,
+// so everything sealed meanwhile still opens) and the file goes.
 func TestNoKeystoreFallsBackToFile(t *testing.T) {
-	isolate(t)
+	dir := isolate(t)
 	f := &fakeStore{locked: true}
 	useFake(f)
-	if _, err := Seal("restore", "ABCD2345", []byte("x")); err != nil {
+	b1, err := Seal("restore", "ABCD2345", []byte("x"))
+	if err != nil {
 		t.Fatal(err)
 	}
-	if Backend() != "file" {
-		t.Fatalf("backend %q, want file", Backend())
+	f.locked = false
+	resetCache()
+	b2, err := Seal("restore", "ABCD2345", []byte("y"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if Backend() != "keychain" || f.puts != 1 {
+		t.Fatalf("backend %q puts %d, want the file key moved to the keystore", Backend(), f.puts)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "atrest.key")); !os.IsNotExist(err) {
+		t.Fatal("key file left behind after moving into the keystore")
+	}
+	resetCache()
+	for _, b := range [][]byte{b1, b2} {
+		if _, err := Open("restore", "ABCD2345", b); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// A blob opens by whichever store holds its key: atrest.json lost while the
+// key file holds the key, and an unrelated key sitting in the keystore, must
+// not get the blob quarantined.
+func TestOpenFindsKeyByID(t *testing.T) {
+	dir := isolate(t)
+	blob, _ := Seal("restore", "ABCD2345", []byte("x")) // file key (tests never use the OS store)
+	_ = os.Remove(filepath.Join(dir, "atrest.json"))
+	other, _ := NewKey()
+	f := &fakeStore{key: other}
+	useFake(f)
+	resetCache()
+	if pt, err := Open("restore", "ABCD2345", blob); err != nil || string(pt) != "x" {
+		t.Fatalf("open with the key in the file, another in the keystore: %q %v", pt, err)
+	}
+	// With the keystore locked and the blob's key nowhere else: later, not gone.
+	_ = os.Remove(filepath.Join(dir, "atrest.key"))
+	f.locked = true
+	resetCache()
+	if _, err := Open("restore", "ABCD2345", blob); !errors.Is(err, ErrLocked) {
+		t.Fatalf("key nowhere reachable, keystore locked: %v, want ErrLocked", err)
 	}
 }
 
@@ -276,6 +321,9 @@ func TestQuarantineKeepsAndPrunes(t *testing.T) {
 	dir := t.TempDir()
 	f := filepath.Join(dir, "ABCD2345.sealed")
 	_ = os.WriteFile(f, []byte("blob"), 0o600)
+	// Last saved long ago: the 7 days still count from the quarantine.
+	long := time.Now().Add(-30 * 24 * time.Hour)
+	_ = os.Chtimes(f, long, long)
 	if err := Quarantine(dir, "ABCD2345", "session ABCD2345: key gone", f); err != nil {
 		t.Fatal(err)
 	}

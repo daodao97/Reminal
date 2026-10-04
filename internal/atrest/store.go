@@ -19,12 +19,18 @@ import (
 )
 
 // keystoreService names the key in an OS keystore. The account is a hash of
-// the ~/.reminal path, so each home (and each user) has its own item and a
-// throwaway HOME can never read or overwrite the person's own.
-const keystoreService = "reminal-at-rest-key"
+// the (canonical) ~/.reminal path, recorded in atrest.json, so each home has
+// its own item and a throwaway HOME can never read or overwrite the person's
+// own.
+const (
+	keystoreService = "reminal-at-rest-key"
+	// keystoreCanary is a throwaway item written to prove a keystore is open
+	// before its "not found" is believed.
+	keystoreCanary = "reminal-at-rest-check"
+)
 
 func keystoreAccount(dir string) string {
-	s := sha256.Sum256([]byte(filepath.Clean(dir)))
+	s := sha256.Sum256([]byte(dir))
 	return "home-" + hex.EncodeToString(s[:8])
 }
 

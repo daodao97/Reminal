@@ -100,12 +100,6 @@ func Dir() (string, error) {
 	return filepath.Join(home, ".reminal"), nil
 }
 
-type meta struct {
-	V      int    `json:"v"`
-	Source string `json:"source"`
-	ID     string `json:"id"`
-}
-
 func metaPath(dir string) string { return filepath.Join(dir, "atrest.json") }
 
 func keyID(k []byte) [idLen]byte {
@@ -116,52 +110,51 @@ func keyID(k []byte) [idLen]byte {
 }
 
 // ---- the key -------------------------------------------------------------------
+//
+// atrest.json names where the key lives (the store, and the account in an OS
+// keystore) and its id. Blobs carry the id of the key that sealed them, so a
+// blob is opened by whichever store holds that key: the one atrest.json names,
+// the 0600 key file, or the OS keystore. A blob is ErrKeyGone only when every
+// store that could hold its key answered and none did; any store that could
+// not answer makes it ErrLocked instead.
 
-type cachedKey struct {
-	dir     string
-	key     []byte
-	id      [idLen]byte
-	src     byte
-	metaMod time.Time
+type meta struct {
+	V       int    `json:"v"`
+	Source  string `json:"source"`
+	ID      string `json:"id"`
+	Account string `json:"account,omitempty"`
 }
 
 var (
-	keyMu  sync.Mutex
-	cached *cachedKey
-	// lockedUntil: a keystore that just said "locked" is not asked again for
-	// a while, so a run of reads over SSH pays the timeout once, not per file.
+	keyMu sync.Mutex
+	// keys holds every key this process has seen, by home and id.
+	keys = map[string]map[[idLen]byte][]byte{}
+	// current is the key new blobs are sealed with, per home.
+	current = map[string][idLen]byte{}
+	// lockedUntil: an OS keystore that just said "locked" is not asked again
+	// for a while, so a run of reads over SSH pays the timeout once.
 	lockedUntil time.Time
+	// fellBack is logged once per process.
+	fellBack bool
 )
 
 const lockedBackoff = 30 * time.Second
 
-// storeFor names the store behind a source, whatever the policy for new keys:
-// a key minted in the Keychain is read from the Keychain even under
-// REMINAL_KEYSTORE=file.
-func storeFor(dir string, src string) store {
-	switch src {
-	case "file":
-		return fileStore{dir: dir}
-	default:
-		if s := osStoreFor(dir); s != nil && s.name() == src {
-			return s
-		}
-		return nil
-	}
-}
-
 // Indirection for tests.
 var (
 	osStoreFor   = osStore
-	allowOSStore = osStoreAllowed
+	osUsable     = osStoreUsable
+	allowOSStore = func() bool { return osUsable() && os.Getenv("REMINAL_KEYSTORE") != "file" }
 )
 
-// osStoreAllowed reports whether a NEW key may go into the OS keystore: not
-// when asked not to, and not when HOME is not this user's real home — a test
-// or a throwaway rig must never write into the person's own keychain.
-func osStoreAllowed() bool {
-	if os.Getenv("REMINAL_KEYSTORE") == "file" || strings.HasSuffix(strings.TrimSuffix(filepath.Base(os.Args[0]), ".exe"), ".test") {
-		return false // never from a test binary, whatever HOME says
+// osStoreUsable reports whether this process may touch the OS keystore at
+// all, to read or to write: never from a test binary, and never when HOME is
+// not this user's real home — a test or a throwaway rig must not reach into
+// the person's own keychain, not even to look. (REMINAL_KEYSTORE=file only
+// keeps NEW keys out of it.)
+func osStoreUsable() bool {
+	if strings.HasSuffix(strings.TrimSuffix(filepath.Base(os.Args[0]), ".exe"), ".test") {
+		return false
 	}
 	u, err := user.Current()
 	if err != nil {
@@ -171,110 +164,311 @@ func osStoreAllowed() bool {
 	if err != nil {
 		return false
 	}
-	a, _ := filepath.Abs(u.HomeDir)
-	b, _ := filepath.Abs(home)
-	if ea, err := filepath.EvalSymlinks(a); err == nil {
-		a = ea
-	}
-	if eb, err := filepath.EvalSymlinks(b); err == nil {
-		b = eb
-	}
-	return sameDir(a, b)
+	return canonical(u.HomeDir) == canonical(home)
 }
 
-// currentKey returns the key, minting one when none exists anywhere.
-// mint=false never creates one (Open must not).
-func currentKey(mint bool) (*cachedKey, error) {
-	dir, err := Dir()
+// canonical resolves symlinks and, where the file system ignores case, folds
+// it, so two processes that spell one home differently agree on it.
+func canonical(p string) string {
+	a, err := filepath.Abs(p)
 	if err != nil {
-		return nil, err
+		a = filepath.Clean(p)
 	}
-	keyMu.Lock()
-	defer keyMu.Unlock()
-	fi, statErr := os.Stat(metaPath(dir))
-	if cached != nil && cached.dir == dir && statErr == nil && fi.ModTime().Equal(cached.metaMod) {
-		return cached, nil
+	if e, err := filepath.EvalSymlinks(a); err == nil {
+		a = e
 	}
-	cached = nil
-	noMeta := errors.Is(statErr, os.ErrNotExist)
-	if time.Now().Before(lockedUntil) && !(mint && noMeta) {
-		return nil, ErrLocked
+	if caseInsensitiveFS {
+		a = strings.ToLower(a)
 	}
-	k, err := loadKey(dir)
-	if err == nil {
-		cached = k
-		return k, nil
-	}
-	if errors.Is(err, ErrLocked) {
-		lockedUntil = time.Now().Add(lockedBackoff)
-	}
-	// Locked with no key ever recorded here: the OS keystore is not
-	// answering on a first start, so the key goes in a file — a session
-	// must not go without its saved details because of it.
-	if !mint || (errors.Is(err, ErrLocked) && !noMeta) {
-		return nil, err
-	}
-	// No key at all, or the keystore says it is gone: make one.
-	k, err = mintKey(dir, true)
-	if err != nil {
-		return nil, err
-	}
-	cached = k
-	return k, nil
+	return a
 }
 
-// loadKey reads the key named by the metadata. With no metadata it looks for
-// a key a lost metadata file used to name — in the OS keystore, then the key
-// file — so a deleted atrest.json does not orphan everything sealed before.
-// ErrKeyGone only when every store that could hold it answered "none".
-func loadKey(dir string) (*cachedKey, error) {
+func readMeta(dir string) (*meta, error) {
 	b, err := os.ReadFile(metaPath(dir))
-	if err != nil && !errors.Is(err, os.ErrNotExist) {
-		return nil, ErrLocked
-	}
 	if err != nil {
-		return discoverKey(dir)
+		return nil, err
 	}
 	var m meta
-	if json.Unmarshal(b, &m) != nil || m.Source == "" {
-		return discoverKey(dir)
+	if json.Unmarshal(b, &m) != nil || m.Source == "" || m.ID == "" {
+		return nil, os.ErrNotExist // unreadable metadata is as good as none
 	}
-	st := storeFor(dir, m.Source)
-	if st == nil {
-		// Names a keystore this build or context cannot reach (the Secret
-		// Service from a shell with no D-Bus): locked, not gone.
-		return nil, ErrLocked
-	}
-	k, err := st.get()
-	if errors.Is(err, errNotFound) {
-		return nil, ErrKeyGone
-	}
-	if err != nil || len(k) != keyLen {
-		return nil, ErrLocked
-	}
-	id := keyID(k)
-	if hex.EncodeToString(id[:]) != m.ID {
-		return nil, ErrKeyGone
-	}
-	return newCached(dir, k, st), nil
+	return &m, nil
 }
 
-func discoverKey(dir string) (*cachedKey, error) {
-	locked := false
-	if ost := osStoreFor(dir); ost != nil && !time.Now().Before(lockedUntil) {
-		k, err := ost.get()
-		if err == nil && len(k) == keyLen {
-			return newCached(dir, k, ost), nil
+func writeMeta(dir string, m meta) error {
+	b, _ := json.Marshal(m)
+	return atomicfile.Write(metaPath(dir), b, 0o600)
+}
+
+// osStoreAt is the OS keystore for this home, under the account atrest.json
+// recorded (or the one this home would get).
+func osStoreAt(dir string, m *meta) store {
+	if !osUsable() {
+		return nil
+	}
+	acct := ""
+	if m != nil {
+		acct = m.Account
+	}
+	if acct == "" {
+		acct = keystoreAccount(canonical(dir))
+	}
+	return osStoreFor(dir, acct)
+}
+
+func remember(dir string, k []byte) [idLen]byte {
+	id := keyID(k)
+	if keys[dir] == nil {
+		keys[dir] = map[[idLen]byte][]byte{}
+	}
+	keys[dir][id] = k
+	return id
+}
+
+func osLocked() bool { return time.Now().Before(lockedUntil) }
+
+// fromStore asks st for its key and remembers it. ok=false with locked=true
+// when the store could not answer.
+func fromStore(dir string, st store) (id [idLen]byte, ok, locked bool) {
+	if st == nil {
+		return id, false, false
+	}
+	isOS := st.source() != srcFile
+	if isOS && osLocked() {
+		return id, false, true
+	}
+	k, err := st.get()
+	if err == nil && len(k) == keyLen {
+		return remember(dir, k), true, false
+	}
+	if errors.Is(err, errNotFound) {
+		return id, false, false
+	}
+	if isOS {
+		lockedUntil = time.Now().Add(lockedBackoff)
+	}
+	return id, false, true
+}
+
+// storeAt is the store atrest.json names; nil when this build or context
+// has no such store (the Secret Service from a shell with no session bus).
+func storeAt(dir string, m *meta) store {
+	if m.Source == "file" {
+		return fileStore{dir: dir}
+	}
+	if st := osStoreAt(dir, m); st != nil && st.name() == m.Source {
+		return st
+	}
+	return nil
+}
+
+// sealingKey returns the key to seal with: the one atrest.json names, made
+// the first time. A store that cannot answer right now (a locked keychain, a
+// keyring with no session bus) sends the blob to the file key instead — the
+// same fallback a machine with no keystore gets — so nothing goes unsaved;
+// such blobs open from the file later whatever the keystore does.
+func sealingKey(dir string) ([]byte, [idLen]byte, byte, error) {
+	var zero [idLen]byte
+	if m, err := readMeta(dir); err == nil {
+		if id, ok := current[dir]; ok && hex.EncodeToString(id[:]) == m.ID {
+			return keys[dir][id], id, sourceByte(m.Source), nil
 		}
-		locked = !errors.Is(err, errNotFound)
-	} else if ost != nil {
-		locked = true // it just said "locked"; don't wait on it again
+		st := storeAt(dir, m)
+		id, ok, locked := fromStore(dir, st)
+		switch {
+		case ok && hex.EncodeToString(id[:]) == m.ID:
+			current[dir] = id
+			return keys[dir][id], id, st.source(), nil
+		case locked || st == nil:
+			return fileFallback(dir)
+		}
+		// The store answered and the key is not there (or is another
+		// key): it is gone, make a new one.
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return fileFallback(dir)
+	}
+	if err := mint(dir); err != nil {
+		if errors.Is(err, ErrLocked) {
+			return fileFallback(dir)
+		}
+		return nil, zero, 0, err
+	}
+	m, err := readMeta(dir)
+	if err != nil {
+		return nil, zero, 0, ErrLocked
+	}
+	for id, k := range keys[dir] {
+		if hex.EncodeToString(id[:]) == m.ID {
+			current[dir] = id
+			return k, id, sourceByte(m.Source), nil
+		}
+	}
+	return nil, zero, 0, ErrLocked
+}
+
+// fileFallback seals with the 0600 key file, making it if needed, without
+// touching atrest.json.
+func fileFallback(dir string) ([]byte, [idLen]byte, byte, error) {
+	var zero [idLen]byte
+	fs := fileStore{dir: dir}
+	if id, ok, _ := fromStore(dir, fs); ok {
+		noteFallback(dir)
+		return keys[dir][id], id, srcFile, nil
+	}
+	unlock, err := lockDir(dir)
+	if err != nil {
+		return nil, zero, 0, err
+	}
+	defer unlock()
+	if id, ok, _ := fromStore(dir, fs); ok {
+		noteFallback(dir)
+		return keys[dir][id], id, srcFile, nil
+	}
+	k := make([]byte, keyLen)
+	if _, err := rand.Read(k); err != nil {
+		return nil, zero, 0, err
+	}
+	if err := fs.put(k); err != nil {
+		return nil, zero, 0, err
+	}
+	noteFallback(dir)
+	return k, remember(dir, k), srcFile, nil
+}
+
+func noteFallback(dir string) {
+	if !fellBack {
+		fellBack = true
+		Logf("reminal: the OS keystore is not answering; saving with the key file in %s for now", dir)
+	}
+}
+
+// mint makes the key, under a lock so sessions starting together agree on
+// one. With no atrest.json it first adopts a key a store already holds (the
+// metadata was lost), the OS keystore's before the file's. With an
+// atrest.json whose store says the key is gone it makes a new one.
+func mint(dir string) error {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+	unlock, err := lockDir(dir)
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	m, merr := readMeta(dir)
+	if merr == nil {
+		// Someone else may have made it while we waited.
+		st := storeAt(dir, m)
+		id, ok, locked := fromStore(dir, st)
+		if ok && hex.EncodeToString(id[:]) == m.ID {
+			return nil
+		}
+		if locked || st == nil {
+			return ErrLocked
+		}
+	} else {
+		m = nil
+		ost := osStoreAt(dir, nil)
+		if id, ok, locked := fromStore(dir, ost); ok {
+			return writeMeta(dir, meta{V: 1, Source: ost.name(), ID: hex.EncodeToString(id[:]), Account: keystoreAccount(canonical(dir))})
+		} else if locked {
+			return ErrLocked // the file fallback takes over; atrest.json stays unwritten
+		}
+		if id, ok, _ := fromStore(dir, fileStore{dir: dir}); ok {
+			// A key file made while the keystore was not answering (a first
+			// start over SSH): move it into the keystore now that it is,
+			// rather than stay on the file for good.
+			if promoteFileKey(dir, keys[dir][id]) {
+				return nil
+			}
+			return writeMeta(dir, meta{V: 1, Source: "file", ID: hex.EncodeToString(id[:])})
+		}
+	}
+	acct := keystoreAccount(canonical(dir))
+	if m != nil && m.Account != "" {
+		acct = m.Account
+	}
+	k := make([]byte, keyLen)
+	if _, err := rand.Read(k); err != nil {
+		return err
+	}
+	if ost := osStoreAt(dir, &meta{Account: acct}); ost != nil && allowOSStore() {
+		if err := ost.put(k); err == nil {
+			// Read it back: what we wrote is what we will read later.
+			if got, err := ost.get(); err == nil && bytes.Equal(got, k) {
+				id := remember(dir, k)
+				return writeMeta(dir, meta{V: 1, Source: ost.name(), ID: hex.EncodeToString(id[:]), Account: acct})
+			}
+		}
+		Logf("reminal: the %s did not take the at-rest key; using a file in %s instead", ost.name(), dir)
 	}
 	fs := fileStore{dir: dir}
-	if k, err := fs.get(); err == nil {
-		return newCached(dir, k, fs), nil
-	} else if !errors.Is(err, errNotFound) {
-		locked = true
+	if old, err := fs.get(); err == nil && len(old) == keyLen {
+		// The file holds a fallback key blobs may already be sealed with:
+		// keep it, and make it the key.
+		id := remember(dir, old)
+		return writeMeta(dir, meta{V: 1, Source: "file", ID: hex.EncodeToString(id[:])})
+	}
+	if err := fs.put(k); err != nil {
+		return err
+	}
+	id := remember(dir, k)
+	return writeMeta(dir, meta{V: 1, Source: "file", ID: hex.EncodeToString(id[:])})
+}
+
+// promoteFileKey moves the key file's key into the OS keystore and deletes
+// the file, once the keystore has it back verbatim.
+func promoteFileKey(dir string, k []byte) bool {
+	acct := keystoreAccount(canonical(dir))
+	ost := osStoreAt(dir, &meta{Account: acct})
+	if ost == nil || !allowOSStore() || ost.put(k) != nil {
+		return false
+	}
+	if got, err := ost.get(); err != nil || !bytes.Equal(got, k) {
+		return false
+	}
+	id := keyID(k)
+	if writeMeta(dir, meta{V: 1, Source: ost.name(), ID: hex.EncodeToString(id[:]), Account: acct}) != nil {
+		return false
+	}
+	_ = os.Remove(fileStore{dir: dir}.path())
+	return true
+}
+
+// openingKey finds the key with this id: one already seen, the store
+// atrest.json names, the key file, the OS keystore. ErrKeyGone only when all
+// of them answered without it.
+func openingKey(dir string, want [idLen]byte) ([]byte, error) {
+	if k, ok := keys[dir][want]; ok {
+		return k, nil
+	}
+	m, merr := readMeta(dir)
+	locked := merr != nil && !errors.Is(merr, os.ErrNotExist)
+	tried := map[string]bool{}
+	try := func(st store) []byte {
+		if st == nil || tried[st.name()] {
+			return nil
+		}
+		tried[st.name()] = true
+		if _, _, l := fromStore(dir, st); l {
+			locked = true
+		}
+		return keys[dir][want]
+	}
+	if m != nil {
+		st := storeAt(dir, m)
+		if st == nil {
+			locked = true
+		}
+		if k := try(st); k != nil {
+			return k, nil
+		}
+	}
+	if k := try(fileStore{dir: dir}); k != nil {
+		return k, nil
+	}
+	if k := try(osStoreAt(dir, m)); k != nil {
+		return k, nil
 	}
 	if locked {
 		return nil, ErrLocked
@@ -282,123 +476,38 @@ func discoverKey(dir string) (*cachedKey, error) {
 	return nil, ErrKeyGone
 }
 
-func newCached(dir string, k []byte, st store) *cachedKey {
-	ck := &cachedKey{dir: dir, key: k, id: keyID(k), src: st.source()}
-	if fi, err := os.Stat(metaPath(dir)); err == nil {
-		ck.metaMod = fi.ModTime()
+func sourceByte(name string) byte {
+	switch name {
+	case "keychain":
+		return srcKeychain
+	case "dpapi":
+		return srcDPAPI
+	case "secret-service":
+		return srcSecretSvc
 	}
-	return ck
+	return srcFile
 }
 
-// writeMeta records where the key lives.
-func writeMeta(dir string, k []byte, st store) error {
-	id := keyID(k)
-	m, _ := json.Marshal(meta{V: 1, Source: st.name(), ID: hex.EncodeToString(id[:])})
-	return atomicfile.Write(metaPath(dir), m, 0o600)
-}
-
-// mintKey makes the key, under a lock so sessions starting together agree on
-// one. A key the stores already hold (lost metadata) is adopted, not
-// replaced. replace=true makes a new one even so: the metadata named a key
-// its store has since said is gone.
-func mintKey(dir string, replace bool) (*cachedKey, error) {
+// lockDir takes ~/.reminal/atrest.lock with an OS file lock, which the kernel
+// lets go of if the holder dies: no stale lock, no two holders.
+func lockDir(dir string) (func(), error) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, err
 	}
-	unlock, err := lockDir(dir)
+	f, err := os.OpenFile(filepath.Join(dir, "atrest.lock"), os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
 		return nil, err
 	}
-	defer unlock()
-	// Someone else may have made it while we waited.
-	fileOnly := false
-	k, err := loadKey(dir)
-	switch {
-	case err == nil:
-		if _, serr := os.Stat(metaPath(dir)); serr != nil {
-			if st := storeFor(dir, sourceName(k.src)); st != nil {
-				if err := writeMeta(dir, k.key, st); err != nil {
-					return nil, err
-				}
-				k = newCached(dir, k.key, st)
-			}
-		}
-		return k, nil
-	case errors.Is(err, ErrLocked):
-		if _, serr := os.Stat(metaPath(dir)); !errors.Is(serr, os.ErrNotExist) {
-			return nil, err
-		}
-		fileOnly = true
-	case !replace:
-		if _, serr := os.Stat(metaPath(dir)); serr == nil {
-			// The metadata names a key that is gone; only a Seal may replace it.
-			return nil, ErrKeyGone
-		}
-	}
-	key := make([]byte, keyLen)
-	if _, err := rand.Read(key); err != nil {
-		return nil, err
-	}
-	var st store
-	if ost := osStoreFor(dir); ost != nil && allowOSStore() && !fileOnly {
-		if err := ost.put(key); err == nil {
-			// Read it back: what we wrote is what we will read later.
-			if got, err := ost.get(); err == nil && bytes.Equal(got, key) {
-				st = ost
-			}
-		}
-		if st == nil {
-			Logf("reminal: the %s is not available; the at-rest key goes in a file in %s instead", ost.name(), dir)
-		}
-	} else if fileOnly {
-		Logf("reminal: the OS keystore is not answering; the at-rest key goes in a file in %s instead", dir)
-	}
-	if st == nil {
-		fs := fileStore{dir: dir}
-		if err := fs.put(key); err != nil {
-			return nil, err
-		}
-		st = fs
-	}
-	if err := writeMeta(dir, key, st); err != nil {
-		return nil, err
-	}
-	return newCached(dir, key, st), nil
-}
-
-func sourceName(src byte) string {
-	switch src {
-	case srcKeychain:
-		return "keychain"
-	case srcDPAPI:
-		return "dpapi"
-	case srcSecretSvc:
-		return "secret-service"
-	}
-	return "file"
-}
-
-// lockDir takes ~/.reminal/atrest.lock. A lock older than lockStale was left
-// by a process that died holding it.
-const lockStale = 15 * time.Second
-
-func lockDir(dir string) (func(), error) {
-	p := filepath.Join(dir, "atrest.lock")
-	deadline := time.Now().Add(lockStale + keystoreTimeout*3)
+	deadline := time.Now().Add(4 * keystoreTimeout)
 	for {
-		f, err := os.OpenFile(p, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
-		if err == nil {
-			_ = f.Close()
-			return func() { _ = os.Remove(p) }, nil
-		}
-		if fi, serr := os.Stat(p); serr == nil && time.Since(fi.ModTime()) > lockStale {
-			_ = os.Remove(p)
-			continue
+		if tryLock(f) {
+			return func() { unlockFile(f); _ = f.Close() }, nil
 		}
 		if time.Now().After(deadline) {
+			_ = f.Close()
 			return nil, ErrLocked
 		}
-		time.Sleep(50 * time.Millisecond)
+		time.Sleep(25 * time.Millisecond)
 	}
 }
 
@@ -409,27 +518,47 @@ func Backend() string {
 	if err != nil {
 		return ""
 	}
-	b, err := os.ReadFile(metaPath(dir))
+	m, err := readMeta(dir)
 	if err != nil {
 		return ""
 	}
-	var m meta
-	_ = json.Unmarshal(b, &m)
 	return m.Source
+}
+
+// Available reports whether the key atrest.json names can be had right now
+// (true when there is none yet). For doctor.
+func Available() bool {
+	dir, err := Dir()
+	if err != nil {
+		return false
+	}
+	keyMu.Lock()
+	defer keyMu.Unlock()
+	m, err := readMeta(dir)
+	if err != nil {
+		return true
+	}
+	id, ok, _ := fromStore(dir, storeAt(dir, m))
+	return ok && hex.EncodeToString(id[:]) == m.ID
 }
 
 // ---- sealing -------------------------------------------------------------------
 
 // Seal seals plaintext under the at-rest key, bound to kind and id: a blob
 // sealed for one session's record does not open as another's. It makes the
-// key the first time. ErrLocked when the keystore holds a key it will not
-// give up right now — the caller keeps what it has and tries again later.
+// key the first time.
 func Seal(kind, id string, plaintext []byte) ([]byte, error) {
-	k, err := currentKey(true)
+	dir, err := Dir()
 	if err != nil {
 		return nil, err
 	}
-	return seal(k.key, k.id, k.src, kind, id, plaintext)
+	keyMu.Lock()
+	k, kid, src, err := sealingKey(dir)
+	keyMu.Unlock()
+	if err != nil {
+		return nil, err
+	}
+	return seal(k, kid, src, kind, id, plaintext)
 }
 
 // Open opens a blob made by Seal. ErrNotSealed for plain bytes (an older
@@ -439,16 +568,19 @@ func Open(kind, id string, blob []byte) ([]byte, error) {
 	if !IsSealed(blob) {
 		return nil, ErrNotSealed
 	}
-	k, err := currentKey(false)
+	dir, err := Dir()
 	if err != nil {
 		return nil, err
 	}
 	var bid [idLen]byte
 	copy(bid[:], blob[len(magic)+2:len(magic)+2+idLen])
-	if bid != k.id {
-		return nil, ErrKeyGone
+	keyMu.Lock()
+	k, err := openingKey(dir, bid)
+	keyMu.Unlock()
+	if err != nil {
+		return nil, err
 	}
-	return open(k.key, kind, id, blob)
+	return open(k, kind, id, blob)
 }
 
 // NewKey returns a fresh one-time key, for a hand-off between two processes
@@ -549,7 +681,11 @@ func Quarantine(dir, name, reason string, files ...string) error {
 		if _, err := os.Stat(f); err != nil {
 			continue
 		}
-		if err := os.Rename(f, filepath.Join(q, stamp+"-"+filepath.Base(f))); err == nil {
+		dst := filepath.Join(q, stamp+"-"+filepath.Base(f))
+		if err := os.Rename(f, dst); err == nil {
+			// The keep counts from now, not from the file's last save.
+			now := time.Now()
+			_ = os.Chtimes(dst, now, now)
 			moved++
 		}
 	}
@@ -586,16 +722,9 @@ func PruneQuarantine(dir string) int {
 	return held
 }
 
-func sameDir(a, b string) bool {
-	if caseInsensitiveFS {
-		return strings.EqualFold(a, b)
-	}
-	return a == b
-}
-
 // ResetCacheForTest forgets the in-process key, as a new process would.
 func ResetCacheForTest() {
 	keyMu.Lock()
-	cached, lockedUntil = nil, time.Time{}
+	keys, current, lockedUntil, fellBack = map[string]map[[idLen]byte][]byte{}, map[string][idLen]byte{}, time.Time{}, false
 	keyMu.Unlock()
 }

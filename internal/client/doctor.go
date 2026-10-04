@@ -95,6 +95,8 @@ func checkSavedSessions() (level, string) {
 	}[atrest.Backend()]
 	if where == "" {
 		where = "none saved yet"
+	} else if !atrest.Available() {
+		where += ", which is not answering right now (saving with a key file meanwhile)"
 	}
 	if n := session.QuarantinedRestores(); n > 0 {
 		return levelWarn, fmt.Sprintf("%s; %d could not be opened and are kept in ~/.reminal/restore/quarantine for 7 days", where, n)

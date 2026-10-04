@@ -18,7 +18,7 @@ const caseInsensitiveFS = false
 // there is a session bus to reach it on; a headless box uses the file.
 type secretServiceStore struct{ account string }
 
-func osStore(dir string) store {
+func osStore(dir, account string) store {
 	if _, err := exec.LookPath("secret-tool"); err != nil {
 		return nil
 	}
@@ -31,7 +31,7 @@ func osStore(dir string) store {
 			return nil
 		}
 	}
-	return secretServiceStore{account: keystoreAccount(dir)}
+	return secretServiceStore{account: account}
 }
 
 func (secretServiceStore) name() string { return "secret-service" }
@@ -42,8 +42,13 @@ func (s secretServiceStore) get() ([]byte, error) {
 		"service", keystoreService, "account", s.account)
 	// "Nothing stored" is exit 1 with nothing said; a bus or unlock failure
 	// says why on stderr.
+	// So is a locked collection whose unlock prompt was dismissed: believe
+	// "not there" only once a throwaway item can be stored and read back.
 	if code == 1 && len(strings.TrimSpace(string(out))) == 0 && len(strings.TrimSpace(string(stderr))) == 0 {
-		return nil, errNotFound
+		if s.canary() {
+			return nil, errNotFound
+		}
+		return nil, ErrLocked
 	}
 	if err != nil {
 		return nil, ErrLocked
@@ -53,6 +58,15 @@ func (s secretServiceStore) get() ([]byte, error) {
 		return nil, ErrLocked
 	}
 	return k, nil
+}
+
+func (s secretServiceStore) canary() bool {
+	if _, _, _, err := runTool([]byte("01"), "secret-tool", "store",
+		"--label=reminal at-rest check", "service", keystoreCanary, "account", s.account); err != nil {
+		return false
+	}
+	out, _, _, err := runTool(nil, "secret-tool", "lookup", "service", keystoreCanary, "account", s.account)
+	return err == nil && strings.TrimSpace(string(out)) == "01"
 }
 
 func (s secretServiceStore) put(k []byte) error {

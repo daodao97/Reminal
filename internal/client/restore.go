@@ -494,6 +494,14 @@ func LoadRestoreState(id string) (*ResumeState, func() (run, note string), error
 			return session.OpenScrollback(id, b)
 		})
 	}
+	if st.Dump == nil {
+		// Not sealed yet: an older version's plain copy, read as it is (it
+		// is sealed, and the plain copy removed, at this session's first
+		// save).
+		if p, err := session.LegacyScrollbackPath(r.ID); err == nil {
+			st.Dump = readScrollbackDump(p, func(b []byte) ([]byte, error) { return b, nil })
+		}
+	}
 	plan := func() (string, string) {
 		peers, _ := session.ReadRestores()
 		argv, note := resumePlan(*r, peers)
@@ -621,9 +629,14 @@ func restoreAtStart() {
 		return
 	}
 	deadline := time.Now().Add(restoreRetryFor)
+	tried := map[string]bool{} // a session is tried once; the retries are for locked records
 	for {
 		gone, err := Restorable()
 		for _, r := range gone {
+			if tried[r.ID] {
+				continue
+			}
+			tried[r.ID] = true
 			if _, err := RestoreSession(r); err != nil {
 				agentNotify("  reminal: could not restore session %s: %v\n", r.ID, err)
 			}
