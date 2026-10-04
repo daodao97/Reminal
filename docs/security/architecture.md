@@ -67,7 +67,7 @@ outside that boundary.
 |---|---|---|---|---|
 | Session ID | 8 chars, 32-symbol unambiguous alphabet (`internal/session/id.go`) | 32⁸ ≈ 1.1 × 10¹² (~40 bits) | One agent run | Memory only |
 | PIN | 6 digits (`internal/session/pin.go`) | 10⁶ (~20 bits) | Until the session ends or `reminal repin` | Memory; sealed on disk for restore and `reminal info` (§6.2) |
-| Device owner key | Ed25519 | 128-bit security | Until revoked | `~/.reminal/device_ed25519`, mode 0600 |
+| Device owner key | Ed25519 | 128-bit security | Until revoked | `~/.reminal/device_ed25519.sealed`, encrypted (§6.2) |
 | Machine identity key | Ed25519 | 128-bit security | Until re-provisioned | Host key store, mode 0600 |
 | Session key | 256-bit random (`internal/crypto/box.go`) | 256 bits | One agent run | Memory only, both ends |
 
@@ -266,7 +266,8 @@ outside reminal's control; see [subprocessors](subprocessors.md).
 | Path | Contents | Mode |
 |---|---|---|
 | `~/.reminal/settings.json` | User preferences | 0600 |
-| `~/.reminal/device_ed25519` | This device's owner key | 0600 |
+| `~/.reminal/device_ed25519.sealed` | This device's owner key, encrypted under the at-rest key below | 0600 |
+| `~/.reminal/device_ed25519` | A one-line placeholder once the key is encrypted, so an older version run again stops instead of making a second identity | 0600 |
 | `~/.reminal/owned_machines.json` | Machines this device trusts as an owner | 0600 |
 | `~/.reminal/known_machines.json` | Which machine each session was on | 0600 |
 | `~/.reminal/revoked_owners.json` | Revocation tombstones | Agent-writable |
@@ -339,11 +340,25 @@ no longer set, so programs started inside a session do not inherit it. Anything
 running as the same user can read a process's memory and its saved files, sealed or
 not: sealing protects copies of the disk, not a live account.
 
-**Long-lived keys.** `~/.reminal/device_ed25519` (this device's owner key) and the
-machine's identity key are stored as 0600 files, not sealed. Unlike a PIN, the owner
-key grants standing access to every machine this device owns until it is revoked
-(`reminal owners revoke`); treat it like an SSH private key. Moving both into the OS
-keystore is planned as a separate change.
+**Long-lived keys.** This device's owner key is the one file that grants standing
+access: it opens every machine the device owns until revoked (`reminal owners
+revoke`). Since 3.15.12 it is kept encrypted under the same per-user key as saved
+sessions, so on macOS and Windows a copy of `~/.reminal` cannot be used to act as
+the owner; on a Linux machine without a keyring the key that seals it sits beside
+it, and `~/.reminal` deserves the care `~/.ssh` gets. An identity key has stricter
+rules than a saved session: when it cannot be opened (the keychain is locked over
+SSH, or its key is gone) owner commands stop with a message, and reminal never
+replaces it on its own, since a new identity would make the device a stranger to
+every machine it owns. Only `reminal own reset` makes a new one. The key a 3.15.11
+or earlier version wrote in the clear is encrypted at its first use by a newer
+version, and the old file is left holding a placeholder line that older versions
+refuse to parse, so a downgrade cannot quietly mint a second identity either.
+
+The machine's identity key (`machine_ed25519`) stays a 0600 file, like an SSH host
+key: it proves which machine a device is talking to and opens nothing, the
+background daemon needs it before any keychain is unlocked (a Linux desktop after a
+reboot, a headless Mac), and a machine identity that changes is treated as an
+attack by every device that pinned it.
 
 ## 7. Network posture
 

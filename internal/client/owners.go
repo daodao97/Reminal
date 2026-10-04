@@ -94,7 +94,8 @@ func ownersPath() (string, error) {
 }
 
 // loadOrCreateKey returns the Ed25519 private key stored at path, minting one on
-// first use. Shared by the device key and the machine key. A present-but-corrupt
+// first use. The machine key (see loadOrCreateMachineKey); the device key has
+// its own, sealed, path in devicekey.go. A present-but-corrupt
 // key errors rather than silently regenerating (which would swap the identity and
 // orphan its trust relationships); a permission/I-O error is surfaced, never
 // clobbered. The mint is an atomic 0600 write so a crash can't leave a partial
@@ -140,16 +141,6 @@ func loadOrCreateKey(path string) (ed25519.PrivateKey, error) {
 		return nil, err
 	}
 	return priv, nil
-}
-
-// loadOrCreateDeviceKey returns this DEVICE's Ed25519 private key. The private
-// key never leaves this device — only the public id (see MyOwnerID) is shared.
-func loadOrCreateDeviceKey() (ed25519.PrivateKey, error) {
-	path, err := deviceKeyPath()
-	if err != nil {
-		return nil, err
-	}
-	return loadOrCreateKey(path)
 }
 
 func machineKeyPath() (string, error) {
@@ -221,18 +212,6 @@ func MyDeviceFingerprint() (string, error) {
 		return "", err
 	}
 	return deviceFingerprint(priv.Public().(ed25519.PublicKey)), nil
-}
-
-// HasDeviceKey reports whether this device already has an identity key (the user
-// has set it up as a potential owner), WITHOUT minting one. Used to decide
-// whether to try a PIN-free connect before falling back to asking for a PIN.
-func HasDeviceKey() bool {
-	path, err := deviceKeyPath()
-	if err != nil {
-		return false
-	}
-	_, err = os.Stat(path)
-	return err == nil
 }
 
 // MyOwnerID returns this device's public owner id, minting the device key on

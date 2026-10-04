@@ -81,7 +81,23 @@ func allChecks(currentVersion string) []check {
 		{"Active session", checkActiveSession},
 		{"Config dir", checkConfigDir},
 		{"Saved sessions", checkSavedSessions},
+		{"Owner key", checkOwnerKey},
 	}
+}
+
+// checkOwnerKey reports how this device's owner identity is kept.
+func checkOwnerKey() (level, string) {
+	switch OwnerKeyState() {
+	case "none":
+		return levelOK, "none yet (made by `reminal own`)"
+	case "sealed":
+		return levelOK, "encrypted on disk"
+	case "plain":
+		return levelWarn, "from an older version, not yet encrypted; it is encrypted at its next use"
+	case "locked":
+		return levelWarn, "encrypted, but its keystore isn't answering right now; owner commands wait until it does"
+	}
+	return levelFail, "can't be opened; owner commands will fail. `reminal own reset` makes a new identity (re-enrol it on each machine)"
 }
 
 // checkSavedSessions says where the key sealing saved sessions lives, and

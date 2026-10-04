@@ -19,7 +19,10 @@ import (
 // runOwn prints this device's public owner id and the exact command to paste on
 // the machine you want to own. The device keypair is minted on first run; the
 // private key never leaves this machine.
-func runOwn() error {
+func runOwn(args []string) error {
+	if len(args) > 0 && args[0] == "reset" {
+		return runOwnReset(len(args) > 1 && (args[1] == "-y" || args[1] == "--yes"))
+	}
 	id, err := client.MyOwnerID()
 	if err != nil {
 		return err
@@ -382,4 +385,35 @@ func maxInt(a, b int) int {
 		return a
 	}
 	return b
+}
+
+// runOwnReset throws this device's owner identity away and makes a new one.
+// It is the only way a new identity is ever made once one exists: an owner
+// key that cannot be read is reported, never replaced on reminal's own.
+func runOwnReset(yes bool) error {
+	fmt.Println()
+	fmt.Println("  " + cBold("This makes a new owner identity for this device."))
+	fmt.Println("  Every machine that knows the current one will stop recognising this device")
+	fmt.Println("  until you run " + cBold("sudo reminal add owner <new id>") + " there again.")
+	fmt.Println()
+	if !yes {
+		if !term.IsTerminal(int(os.Stdin.Fd())) {
+			return fmt.Errorf("refusing without a terminal; pass -y to confirm")
+		}
+		fmt.Print("  Type " + cBold("reset") + " to continue: ")
+		line, _ := bufio.NewReader(os.Stdin).ReadString('\n')
+		if strings.TrimSpace(line) != "reset" {
+			fmt.Println("  Nothing changed.")
+			return nil
+		}
+	}
+	id, err := client.ResetDeviceKey()
+	if err != nil {
+		return err
+	}
+	fmt.Println()
+	fmt.Println("  New owner id: " + cBold(id))
+	fmt.Println("  On each machine you own, paste:  " + cBold("sudo reminal add owner "+id))
+	fmt.Println()
+	return nil
 }
