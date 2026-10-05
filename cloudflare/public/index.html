@@ -7268,6 +7268,8 @@
       // Offer the agent a peer-to-peer channel for window frames (no-op if one
       // is already negotiating/up). Frames fall back to WS until it connects.
       ensureWebRTC();
+      // Live: what was typed while it was not goes now, in order.
+      flushHeldInput();
     }
 
     async function encrypt(key, data) {
@@ -8194,6 +8196,7 @@
         lastSeq = 0;
         sessionId = s;
         term.reset();
+        dropHeldInput(); // typed for the session being left
         // host_info describes the session we are LEAVING. Share falls back to
         // it for the PIN (see sharePin), so keeping it here handed out an
         // invite pairing the new session's id with the old session's PIN —
@@ -8212,6 +8215,10 @@
       sessionInput.value = sessionId;
       history.replaceState(null, '', '?s=' + sessionId);
       openSocket();
+      // Keys typed from now on are the terminal's — held until it is live
+      // (sendInput) — not lost to whatever had focus before it was shown.
+      // startSessionFlow focuses it again once connected, as it always has.
+      term.focus();
     }
 
     function openSocket() {
@@ -8502,7 +8509,17 @@
           // turned out to be the same agent — we just refresh our K.
           {
             const wasLive = agentLive;
-            if (!wasLive) winStreamsNeedRestart = true; // fresh agent process = no live streams
+            // "agent_online" while the agent was thought here: the relay had
+            // not noticed its old connection end (a process that died, or a
+            // machine that went away, without its socket being seen to close)
+            // and a newly authenticated one took its place — possibly
+            // another process, with another session key. Keeping the old
+            // key, every key typed went out sealed for an agent that is gone
+            // and was dropped there, and nothing came back. Treated as the
+            // agent coming back: handshake again (for the same process it
+            // only refreshes the key).
+            const fresh = !wasLive || msg.type === 'agent_online';
+            if (fresh) winStreamsNeedRestart = true; // fresh agent process = no live streams
             agentLive = true;
             connectedAt = Date.now();
             backoffMs = 1000;
@@ -8510,7 +8527,7 @@
             hideOverlay();
             setBtnDisconnect();
             renderRecents();
-            if (!wasLive) {
+            if (fresh) {
               // Agent (re)attached — it may be a fresh process, so any session
               // key we hold is stale; drop it and (re)handshake. On "connected"
               // the handshake sent at auth_ok reached this agent and either
@@ -8813,6 +8830,7 @@
       }
       authed = false;
       agentLive = false;
+      dropHeldInput(); // nothing typed now goes anywhere
       // Tear down any window panes — their streams are bound to the WS we
       // just closed. Guarded because userDisconnect can run before the window
       // module has initialised on very early failures.
@@ -9140,7 +9158,17 @@
           return; // phantom IME-driven backspace; drop
         }
       }
-      if (!agentLive) return; // typing into nothing while agent is offline
+      // Not live yet (the terminal is shown while it connects, its session
+      // is still starting, the agent is away or its handshake is being
+      // redone): held, and sent once it is. Dropped here, the keys vanished
+      // with nothing to say so. Behind keys already held, so nothing typed
+      // overtakes them.
+      const n = ++inputSerial;
+      if (!inputLive() || heldInput.length) {
+        holdInput(data, n);
+        flushHeldInput();
+        return;
+      }
       // Predict ONLY after all suppression / drop checks have passed.
       // Predicting earlier would dim-render keystrokes we never sent
       // (autocorrect suppression, phantom IME backspace, offline drop)
@@ -9158,7 +9186,51 @@
         lastNonMirrorSendAt = now;
       }
       predictLocalEcho(data);
+      return deliverInput(data, n);
+    }
+    term.onData(sendInput);
+
+    // Keys typed while the session is not live: held (in the order typed, at
+    // most INPUT_HOLD_BYTES) and sent when it is — unless they waited longer
+    // than INPUT_HOLD_MS, when sending them would be a surprise; then the
+    // terminal says they were not sent.
+    const INPUT_HOLD_MS = 30000;
+    const INPUT_HOLD_BYTES = 65536;
+    let heldInput = []; // [{ n, data }], n ascending
+    let heldBytes = 0;
+    let heldSince = 0;
+    let heldOverflow = false;
+    let inputSerial = 0;
+    function inputLive() {
+      return !!(agentLive && authed && cryptoKey && ws && ws.readyState === WebSocket.OPEN);
+    }
+    function holdInput(data, n) {
+      if (heldBytes + data.length > INPUT_HOLD_BYTES) { heldOverflow = true; return; }
+      if (!heldInput.length) heldSince = Date.now();
+      let i = heldInput.length;
+      while (i > 0 && heldInput[i - 1].n > n) i--;
+      heldInput.splice(i, 0, { n, data });
+      heldBytes += data.length;
+    }
+    function dropHeldInput() {
+      heldInput = []; heldBytes = 0; heldSince = 0; heldOverflow = false;
+    }
+    function flushHeldInput() {
+      if (!inputLive() || (!heldInput.length && !heldOverflow)) return;
+      const items = heldInput, late = Date.now() - heldSince > INPUT_HOLD_MS, over = heldOverflow;
+      dropHeldInput();
+      if (late || over) {
+        term.write('\r\n\x1b[2m[reminal] ' + (late ? 'What you typed while not connected was not sent.' : 'Some of what you typed while not connected was too much to hold and was not sent.') + '\x1b[0m\r\n');
+        if (late) return;
+      }
+      dbg('live: sending ' + items.length + ' held keystroke(s)');
+      for (const it of items) deliverInput(it.data, it.n);
+    }
+    // deliverInput sends one keystroke's bytes on the chain that keeps them in
+    // order. Gone not live by the time its turn comes: held again, not lost.
+    function deliverInput(data, n) {
       const result = sendChain.then(async () => {
+        if (!inputLive()) { holdInput(data, n); return; }
         const bytes = new TextEncoder().encode(data);
         let binary = '';
         bytes.forEach(b => binary += String.fromCharCode(b));
@@ -9168,7 +9240,6 @@
       sendChain = result.catch(() => {}); // keep chain alive on errors
       return result;
     }
-    term.onData(sendInput);
 
     // Mobile soft-key map. Values are the literal byte sequences the
     // remote shell expects — same as what xterm.js would emit for the
