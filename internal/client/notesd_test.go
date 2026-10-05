@@ -8,8 +8,11 @@ package client
 // called the store directly would have passed against the broken design too.
 
 import (
+	"io"
 	"os"
 	"path/filepath"
+	"runtime"
+	"strings"
 	"testing"
 	"time"
 )
@@ -240,5 +243,95 @@ func TestBadgeDetachesWhenEmptied(t *testing.T) {
 	d.mu.Unlock()
 	if stillAttached {
 		t.Error("window still attached after clear_notes")
+	}
+}
+
+// Notes outlive the daemon: the store is on disk, reloaded by the next daemon,
+// with who owned each window; a folded (badge-evicted) note is kept; a window
+// the helper reports closed is dropped.
+func TestNotesPersistAcrossDaemonRestart(t *testing.T) {
+	dir, err := os.MkdirTemp("", "rn")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	t.Setenv("REMINAL_OVERLAY_BIN", filepath.Join(dir, "does-not-exist"))
+	path := filepath.Join(dir, "notes.json")
+
+	d1 := newNotesDaemon()
+	d1.path = path
+	if _, err := d1.add(42, windowNote{ID: "a", Status: "attention", Title: "look here", TS: 1}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d1.add(42, windowNote{ID: "b", Status: "info", Title: "and here", TS: 2}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d1.add(7, windowNote{ID: "c", Status: "done", Title: "other window", TS: 3}); err != nil {
+		t.Fatal(err)
+	}
+	// What the helper would have told it about window 42's owner, and that the
+	// badge folded note "a" past its cap.
+	d1.readBadgeEvents(io.NopCloser(strings.NewReader(
+		`{"event":"attached","window":42,"pid":4242,"title":"Editor"}` + "\n" +
+			`{"event":"evicted","window":42,"id":"a"}` + "\n")))
+	st, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("store not written: %v", err)
+	}
+	if runtime.GOOS != "windows" && st.Mode().Perm() != 0o600 {
+		t.Fatalf("store mode %o", st.Mode().Perm())
+	}
+
+	// "The daemon restarts."
+	d2 := newNotesDaemon()
+	d2.path = path
+	d2.load()
+	snap := d2.snapshot()
+	if len(snap["42"]) != 2 || len(snap["7"]) != 1 {
+		t.Fatalf("after reload: %+v", snap)
+	}
+	var folded bool
+	for _, n := range snap["42"] {
+		if n.ID == "a" {
+			folded = n.Folded
+		}
+	}
+	if !folded {
+		t.Fatal("the folded note came back unfolded, or was lost")
+	}
+	if o := d2.owners[42]; o.PID != 4242 || o.Title != "Editor" {
+		t.Fatalf("owner not kept: %+v", o)
+	}
+	// The window really closed (the helper's rule): its notes go, the other's stay.
+	d2.readBadgeEvents(io.NopCloser(strings.NewReader(`{"event":"closed","window":42}` + "\n")))
+	snap = d2.snapshot()
+	if len(snap["42"]) != 0 || len(snap["7"]) != 1 {
+		t.Fatalf("after close: %+v", snap)
+	}
+	d3 := newNotesDaemon()
+	d3.path = path
+	d3.load()
+	if s := d3.snapshot(); len(s["42"]) != 0 || len(s["7"]) != 1 {
+		t.Fatalf("close not saved: %+v", s)
+	}
+	// Dismissing the last note forgets the window and its owner on disk too.
+	d3.remove(7, "c")
+	d4 := newNotesDaemon()
+	d4.path = path
+	d4.load()
+	if s := d4.snapshot(); len(s) != 0 || len(d4.owners) != 0 {
+		t.Fatalf("after dismiss: %+v %+v", s, d4.owners)
+	}
+}
+
+// A store with no path (how every earlier test runs) still works in memory.
+func TestNotesWithoutStoreStayInMemory(t *testing.T) {
+	d := newNotesDaemon()
+	t.Setenv("REMINAL_OVERLAY_BIN", "/does/not/exist")
+	if _, err := d.add(1, windowNote{ID: "x", Status: "info", Title: "t"}); err != nil {
+		t.Fatal(err)
+	}
+	if len(d.snapshot()["1"]) != 1 {
+		t.Fatal("note lost")
 	}
 }

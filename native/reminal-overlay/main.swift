@@ -109,9 +109,14 @@ struct WinInfo {
     let bounds: CGRect   // CG coords: origin top-left of the primary display
     let onscreen: Bool
     let owner: String
+    let ownerPID: Int
     let title: String
 }
 
+/// The window's entry in the ALL-windows list (not just on-screen ones): a
+/// minimised window, a hidden app's, one on another Space, one behind the lock
+/// screen is still listed, so absence here means the window is gone or the
+/// window server is mid-transition — never merely out of sight.
 func windowInfo(_ wid: CGWindowID) -> WinInfo? {
     guard let arr = CGWindowListCopyWindowInfo([.optionIncludingWindow], wid) as? [[String: Any]],
           let d = arr.first,
@@ -120,7 +125,22 @@ func windowInfo(_ wid: CGWindowID) -> WinInfo? {
     return WinInfo(bounds: rect,
                    onscreen: (d[kCGWindowIsOnscreen as String] as? Bool) ?? false,
                    owner: d[kCGWindowOwnerName as String] as? String ?? "",
+                   ownerPID: d[kCGWindowOwnerPID as String] as? Int ?? 0,
                    title: d[kCGWindowName as String] as? String ?? "")
+}
+
+/// How long a window must be missing from the window list before it counts as
+/// closed. Space switches and Mission Control blink the list for a frame or
+/// two; a full-screen transition, a display sleep or a lock screen can hide
+/// one for longer. Notes die with a window, so "closed" must be sure.
+let closedAfter: CFTimeInterval = 5.0
+
+/// One JSON event line to the daemon, from anywhere in the process.
+func emitLine(_ obj: [String: Any]) {
+    guard let d = try? JSONSerialization.data(withJSONObject: obj),
+          var s = String(data: d, encoding: .utf8) else { return }
+    s += "\n"
+    FileHandle.standardOutput.write(Data(s.utf8))
 }
 
 /// On-screen, normal-layer, reasonably sized windows, front to back — the things
@@ -139,6 +159,7 @@ func candidateWindows() -> [(id: CGWindowID, info: WinInfo)] {
               rect.width > 120, rect.height > 80 else { continue }
         out.append((wid, WinInfo(bounds: rect, onscreen: true,
                                  owner: d[kCGWindowOwnerName as String] as? String ?? "",
+                                 ownerPID: Int(pid),
                                  title: d[kCGWindowName as String] as? String ?? "")))
     }
     return out
@@ -415,6 +436,8 @@ final class PillButton: NSView {
 /// the time, so it stays tiny and readable at a glance from across the desk.
 final class PillView: NSView {
     var comments: [Comment] = [] { didSet { needsDisplay = true } }
+    /// Notes folded away past the badge's cap, counted into the "+N".
+    var folded = 0 { didSet { needsDisplay = true } }
     var onClick: () -> Void = {}
     private var pulseTimer: Timer?
 
@@ -451,8 +474,8 @@ final class PillView: NSView {
                     pulsePhase: c.status.pulses ? phase : nil)
             x += 12
         }
-        if comments.count > 4 {
-            let a = attr("+\(comments.count - 4)", NSFont.systemFont(ofSize: 10, weight: .semibold),
+        if comments.count + folded > 4 {
+            let a = attr("+\(comments.count + folded - 4)", NSFont.systemFont(ofSize: 10, weight: .semibold),
                          NSColor(white: 1, alpha: 0.7))
             a.draw(at: NSPoint(x: x - 4, y: bounds.midY - a.size().height / 2))
         }
@@ -823,7 +846,9 @@ final class Overlay {
                 ?? comments.enumerated()
                     .min(by: { $0.element.created < $1.element.created })!.offset
             let dropped = comments.remove(at: victim)
-            // Tell the daemon, so its copy stays in step with what is on screen.
+            folded += 1
+            // Tell the daemon: it keeps the note (folded), so nothing is lost;
+            // the pill's "+N" counts it so the person knows there is more.
             emit(["event": "evicted", "id": dropped.id, "window": Int(windowID)])
         }
     }
@@ -854,6 +879,7 @@ final class Overlay {
     private func rebuild(animated: Bool = false) {
         if comments.isEmpty { setVisible(false); return }
         pill.comments = comments
+        pill.folded = folded
         if expanded {
             // Rebuilt rather than patched so edited/added comments show up; the
             // per-frame layout re-applies alpha, so no state is lost mid-morph.
@@ -1023,6 +1049,12 @@ final class Overlay {
     private var inSetVisible = false
     /// When the target first went missing from the window list, 0 if present.
     private var missingSince: CFTimeInterval = 0
+    /// The program that owns the target window, learned at attach; a window id
+    /// that now belongs to another program (ids are reused across logins) is a
+    /// different window, and a dead owner means the window is gone.
+    var ownerPID: Int = 0
+    /// Notes the badge dropped from view past its cap; the daemon keeps them.
+    var folded = 0
     private var lastTick: CFTimeInterval = CACurrentMediaTime()
     /// Time constant of the follow. ~90ms reads as "attached but relaxed"; lower
     /// gets twitchy on a coarse sample stream, higher feels like drag.
@@ -1084,7 +1116,9 @@ final class Overlay {
             // absence to persist before declaring it gone.
             setVisible(false)
             if missingSince == 0 { missingSince = now }
-            if now - missingSince > 0.6 {
+            // Gone for a while, or its program is no longer running: closed.
+            let ownerGone = ownerPID != 0 && kill(pid_t(ownerPID), 0) != 0 && errno == ESRCH
+            if now - missingSince > closedAfter || (ownerGone && now - missingSince > 1.0) {
                 emit(["event": "closed", "window": Int(windowID)])
                 comments.removeAll()
                 wantsFast = false
@@ -1095,6 +1129,7 @@ final class Overlay {
             return
         }
         missingSince = 0
+        if ownerPID == 0 { ownerPID = info.ownerPID }
         // A minimised or hidden window is NOT closed: keep the list, just hide.
         if !info.onscreen {
             // Minimised, app hidden, or another Space: fade out and, crucially,
@@ -1407,9 +1442,26 @@ func handle(_ line: String) {
 
     if cmd == "attach" {
         guard let w = obj["window"] as? Int else { return }
+        let wid = CGWindowID(w)
+        let info = windowInfo(wid)
+        // A stored badge coming back after a restart names the owner it had.
+        // The id now belonging to another program is another window: refuse,
+        // so its notes are dropped rather than stuck on a stranger's window.
+        if let want = obj["pid"] as? Int, want != 0, let have = info?.ownerPID, have != 0, have != want {
+            emitLine(["event": "closed", "window": w])
+            return
+        }
+        if info == nil {
+            // Not in the window list right now. Attach anyway: the panel's
+            // own rule decides, after closedAfter, whether it is gone.
+        }
         let corner = (obj["corner"] as? String).flatMap(Corner.init(rawValue:)) ?? .tr
         let placement = (obj["placement"] as? String).flatMap(Placement.init(rawValue:)) ?? .float
-        mgr.attach(CGWindowID(w), corner: corner, placement: placement)
+        let o = mgr.attach(wid, corner: corner, placement: placement)
+        if let i = info {
+            o.ownerPID = i.ownerPID
+            emitLine(["event": "attached", "window": w, "pid": i.ownerPID, "title": i.title])
+        }
         return
     }
 

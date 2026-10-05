@@ -36,6 +36,9 @@ type windowNote struct {
 	Body   string `json:"body,omitempty"`
 	Author string `json:"author,omitempty"`
 	TS     int64  `json:"ts,omitempty"`
+	// Folded: the on-screen badge dropped this one past its cap; the note is
+	// kept, and the badge says how many older ones it folded.
+	Folded bool `json:"folded,omitempty"`
 }
 
 // noteStore is the machine's current annotations, keyed by CGWindowID as a

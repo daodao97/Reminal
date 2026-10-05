@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -81,6 +82,7 @@ func allChecks(currentVersion string) []check {
 		{"Config dir", checkConfigDir},
 		{"Saved sessions", checkSavedSessions},
 		{"Owner key", checkOwnerKey},
+		{"Window notes", checkWindowNotes},
 	}
 }
 
@@ -257,4 +259,13 @@ func checkConfigDir() (level, string) {
 	_ = tmp.Close()
 	_ = os.Remove(name)
 	return levelOK, fmt.Sprintf("%s writable", dir)
+}
+
+// checkWindowNotes: how many notes are kept, and where.
+func checkWindowNotes() (level, string) {
+	n, p := NotesCount()
+	if p == "" {
+		return levelOK, "none"
+	}
+	return levelOK, fmt.Sprintf("%d kept in %s (survive daemon restarts)", n, strings.Replace(p, os.Getenv("HOME"), "~", 1))
 }
