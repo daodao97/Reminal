@@ -27,6 +27,7 @@ func TestInitScreenSeedsGeometryFromPTYOnResume(t *testing.T) {
 
 	a := &Agent{buf: newScrollback(scrollbackBytes), term: ipty.Attach(ptmx)}
 	a.initScreen()
+	t.Cleanup(a.stopAttention)
 
 	if c, r := a.buf.Base(); c != 100 || r != 40 {
 		t.Fatalf("initScreen on resume seeded %dx%d, want 100x40 (regression: fell back to 80x24)", c, r)

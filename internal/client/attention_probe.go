@@ -65,7 +65,24 @@ func (a *Agent) startAttention() {
 	if !have {
 		return
 	}
-	go a.runAttention(os.Getenv("REMINAL_ATTENTION_PROBE"))
+	a.attnMu.Lock()
+	if a.attnStop == nil {
+		a.attnStop = make(chan struct{})
+	}
+	stop := a.attnStop
+	a.attnMu.Unlock()
+	go a.runAttention(os.Getenv("REMINAL_ATTENTION_PROBE"), stop)
+}
+
+// stopAttention ends the detector: the session is going, and a probe that
+// outlives its PTY polls a closed file (a data race the tests caught).
+func (a *Agent) stopAttention() {
+	a.attnMu.Lock()
+	defer a.attnMu.Unlock()
+	if a.attnStop != nil {
+		close(a.attnStop)
+		a.attnStop = nil
+	}
 }
 
 type attentionProbeSample struct {
@@ -79,7 +96,7 @@ type attentionProbeSample struct {
 	Tail      string `json:"tail"`       // bottom rows of the rendered screen
 }
 
-func (a *Agent) runAttention(logPath string) {
+func (a *Agent) runAttention(logPath string, stop <-chan struct{}) {
 	var enc *json.Encoder
 	if logPath != "" {
 		if f, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644); err == nil {
@@ -95,7 +112,12 @@ func (a *Agent) runAttention(logPath string) {
 	lastChange := time.Now()
 	var progCache foregroundProgCache
 
-	for range ticker.C {
+	for {
+		select {
+		case <-stop:
+			return
+		case <-ticker.C:
+		}
 		a.screenMu.Lock()
 		scr := a.screen
 		if scr == nil { // snapshot disabled / torn down — nothing to read
