@@ -92,7 +92,12 @@ func (d dpapiStore) get() ([]byte, error) {
 	return k, nil
 }
 
-func (d dpapiStore) put(k []byte) error {
+func (d dpapiStore) put(k []byte) error { return d.write(k, false) }
+
+// putNew writes the blob only if none exists: errExists otherwise.
+func (d dpapiStore) putNew(k []byte) error { return d.write(k, true) }
+
+func (d dpapiStore) write(k []byte, create bool) error {
 	blob, err := bounded(func() ([]byte, error) {
 		var out windows.DataBlob
 		if err := windows.CryptProtectData(blobOf(k), nil, blobOf(dpapiEntropy), 0, nil,
@@ -103,6 +108,13 @@ func (d dpapiStore) put(k []byte) error {
 	})
 	if err != nil {
 		return err
+	}
+	if create {
+		if err := atomicfile.WriteNew(d.path(), blob, 0o600); errors.Is(err, atomicfile.ErrExists) {
+			return errExists
+		} else {
+			return err
+		}
 	}
 	return atomicfile.Write(d.path(), blob, 0o600)
 }

@@ -103,6 +103,9 @@ func lockSession(id string) (func(), error) {
 	if err != nil {
 		return nil, err
 	}
+	if err := atrest.CheckWritable(); err != nil {
+		return nil, err // a test binary with the real HOME: not even the directory
+	}
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, err
 	}

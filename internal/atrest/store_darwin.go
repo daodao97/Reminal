@@ -64,16 +64,28 @@ func (s keychainStore) canary() bool {
 	return err == nil && strings.TrimSpace(string(out)) == "01"
 }
 
-// put adds the item. The secret goes in on stdin (`security -i`), never in an
-// argv another process could read.
-func (s keychainStore) put(k []byte) error {
-	cmd := fmt.Sprintf("add-generic-password -U -s %s -a %s -w %s\n",
-		keystoreService, s.account, hex.EncodeToString(k))
+// put adds the item, replacing one that exists. The secret goes in on stdin
+// (`security -i`), never in an argv another process could read.
+func (s keychainStore) put(k []byte) error { return s.add(k, true) }
+
+// putNew adds the item only if there is none: errExists otherwise.
+func (s keychainStore) putNew(k []byte) error { return s.add(k, false) }
+
+func (s keychainStore) add(k []byte, replace bool) error {
+	flag := ""
+	if replace {
+		flag = "-U "
+	}
+	cmd := fmt.Sprintf("add-generic-password %s-s %s -a %s -w %s\n",
+		flag, keystoreService, s.account, hex.EncodeToString(k))
 	_, stderr, _, err := runTool([]byte(cmd), "/usr/bin/security", "-i")
 	if err != nil {
 		return err
 	}
 	// `security -i` exits 0 even when a command in it failed.
+	if strings.Contains(string(stderr), "already exists") {
+		return errExists
+	}
 	if strings.Contains(string(stderr), "security:") || strings.Contains(string(stderr), "rror") {
 		return fmt.Errorf("keychain: %s", strings.TrimSpace(string(stderr)))
 	}

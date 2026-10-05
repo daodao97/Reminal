@@ -311,8 +311,9 @@ The key `atrest.json` names is the one every running session and the daemon
 save with. If its store loses it (the key file deleted, a keychain entry removed)
 while they run, that is damage, not a new key: nothing sealed under it is treated
 as gone, saving pauses rather than minting a replacement, any process that still
-holds the key in memory writes it back on its next save, and `reminal doctor` says
-so plainly (`reminal doctor --repair-key` asks a running session for the key and
+holds the key in memory writes it back at its next save (every fifteen seconds for
+a session; not instantly), and only if nothing has replaced it meanwhile, and
+`reminal doctor` says so plainly (`reminal doctor --repair-key` asks a running session for the key and
 puts it back). Only a key `atrest.json` does not name counts as gone.
 
 Every keystore call has a 3-second limit; one that does not answer in time is

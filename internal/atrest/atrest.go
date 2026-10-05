@@ -87,9 +87,16 @@ type store interface {
 	// none, or ErrLocked for anything else (a timeout included).
 	get() ([]byte, error)
 	put(key []byte) error
+	// putNew writes the key only if the store holds none: errExists when it
+	// does. Healing a missing key must never write over one another process
+	// has just made.
+	putNew(key []byte) error
 }
 
-var errNotFound = errors.New("not found")
+var (
+	errNotFound = errors.New("not found")
+	errExists   = errors.New("already exists")
+)
 
 // Dir is ~/.reminal, where the key's metadata (and the file fallback) live.
 func Dir() (string, error) {
@@ -280,10 +287,13 @@ func sealingKey(dir string) ([]byte, [idLen]byte, byte, error) {
 		return nil, zero, 0, err
 	}
 	if m, err := readMeta(dir); err == nil {
-		if id, ok := current[dir]; ok && hex.EncodeToString(id[:]) == m.ID {
-			confirmCurrent(dir, m, id)
+		if id, ok := current[dir]; ok && hex.EncodeToString(id[:]) == m.ID && confirmCurrent(dir, m, id) {
+			if m.Source == "file" && promoteFileMeta(dir, id, keys[dir][id]) {
+				return keys[dir][id], id, sourceByte(osStoreAt(dir, nil).name()), nil
+			}
 			return keys[dir][id], id, sourceByte(m.Source), nil
 		}
+		delete(current, dir) // not confirmed: read what is current below
 		st := storeAt(dir, m)
 		id, ok, locked := fromStore(dir, st)
 		switch {
@@ -311,17 +321,9 @@ func sealingKey(dir string) ([]byte, [idLen]byte, byte, error) {
 		// if this process still holds it; otherwise refuse to save until
 		// someone does (`reminal doctor --repair-key`). Never mint over it.
 		for kid, k := range keys[dir] {
-			if hex.EncodeToString(kid[:]) == m.ID {
-				if st.put(k) == nil {
-					if got, err := st.get(); err == nil && string(got) == string(k) {
-						if !healed {
-							healed = true
-							Logf("reminal: the at-rest key was missing from %s and has been written back from memory", storeName(st, dir))
-						}
-						current[dir] = kid
-						return k, kid, st.source(), nil
-					}
-				}
+			if hex.EncodeToString(kid[:]) == m.ID && healCurrent(dir, kid, k) {
+				current[dir] = kid
+				return k, kid, st.source(), nil
 			}
 		}
 		return nil, zero, 0, ErrCurrentKeyMissing
@@ -392,7 +394,8 @@ func noteFallback(dir string) {
 // mint makes the key, under a lock so sessions starting together agree on
 // one. With no atrest.json it first adopts a key a store already holds (the
 // metadata was lost), the OS keystore's before the file's. With an
-// atrest.json whose store says the key is gone it makes a new one.
+// atrest.json whose store says the key is gone it refuses: that key is
+// missing, not rotated, and is put back by a process that holds it.
 func mint(dir string) error {
 	if err := checkWritable(dir); err != nil {
 		return err
@@ -504,6 +507,56 @@ func promoteFileKey(dir string, k []byte) bool {
 	return true
 }
 
+// promoteFileMeta moves a key that lives in the key file into the OS
+// keystore, on a desktop login that has one: the file was made outside the
+// GUI keystore (over SSH, at boot) and should not stay a file. Same key, same
+// id: everything sealed with it still opens. Create-only, under the lock,
+// with atrest.json re-read; the file goes only once the keystore reads the
+// key back. Caller holds keyMu.
+func promoteFileMeta(dir string, id [idLen]byte, k []byte) bool {
+	if !hasDesktopKeystore || !allowOSStore() || k == nil || osLocked() {
+		return false
+	}
+	if time.Since(lastConfirm[dir]) < confirmEvery {
+		return false
+	}
+	lastConfirm[dir] = time.Now()
+	if checkWritable(dir) != nil {
+		return false
+	}
+	unlock, err := lockDir(dir)
+	if err != nil {
+		return false
+	}
+	defer unlock()
+	m, err := readMeta(dir)
+	if err != nil || m.Source != "file" || hex.EncodeToString(id[:]) != m.ID {
+		return false
+	}
+	acct := keystoreAccount(canonical(dir))
+	ost := osStoreAt(dir, &meta{Account: acct})
+	if ost == nil {
+		return false
+	}
+	switch err := ost.putNew(k); {
+	case err == nil, errors.Is(err, errExists):
+	default:
+		lockedUntil = time.Now().Add(lockedBackoff)
+		return false
+	}
+	if got, err := ost.get(); err != nil || string(got) != string(k) {
+		return false // the keystore holds another key under this account: leave the file be
+	}
+	m.Source, m.Account = ost.name(), acct
+	if writeMeta(dir, *m) != nil {
+		return false
+	}
+	_ = os.Remove(fileStore{dir: dir}.path())
+	SweepTemps(dir, 0)
+	Logf("reminal: the at-rest key moved from a file into the %s", ost.name())
+	return true
+}
+
 // openingKey finds the key with this id, starting with the store the blob's
 // header names: one already seen, then that store (and, for an OS keystore,
 // a fallback key kept there by id), then the rest. ErrKeyGone only when every
@@ -514,7 +567,7 @@ func openingKey(dir string, want [idLen]byte, src byte) ([]byte, error) {
 	m, merr := readMeta(dir)
 	if k, ok := keys[dir][want]; ok {
 		if m != nil && hex.EncodeToString(want[:]) == m.ID {
-			confirmCurrent(dir, m, want)
+			confirmCurrent(dir, m, want) // a blob sealed with it still opens either way
 		}
 		return k, nil
 	}
@@ -633,6 +686,9 @@ func promoted(m *meta, id [idLen]byte) bool {
 
 // notePromoted records in atrest.json that id now lives in the keystore.
 func notePromoted(dir string, id [idLen]byte) {
+	if checkWritable(dir) != nil {
+		return
+	}
 	m, err := readMeta(dir)
 	if err != nil || promoted(m, id) {
 		return
@@ -705,7 +761,8 @@ func Backend() string {
 
 // Status says whether the key atrest.json names can be had right now: "ok"
 // (or no key yet), "locked" (the store did not answer) or "gone" (it answered
-// without it; a new one is made at the next save). For doctor.
+// without it; saving pauses until it is put back, see healCurrent and
+// `reminal doctor --repair-key`). For doctor.
 func Status() string {
 	dir, err := Dir()
 	if err != nil {
@@ -998,6 +1055,9 @@ func OpenQuiet(kind, id string, blob []byte) ([]byte, error) {
 // "gone", not "missing", and new saves use the new key.
 func RotateForTest() {
 	dir, _ := Dir()
+	if checkWritable(dir) != nil {
+		return
+	}
 	keyMu.Lock()
 	defer keyMu.Unlock()
 	m, err := readMeta(dir)

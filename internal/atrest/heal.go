@@ -82,46 +82,81 @@ func CheckWritable() error {
 
 // confirmCurrent makes sure the store atrest.json names still holds the
 // current key this process has in memory, and writes it back when it does
-// not. Caller holds keyMu. Cheap: a stat for the key file; a lookup at most
-// once a minute for an OS keystore.
-func confirmCurrent(dir string, m *meta, id [idLen]byte) {
+// not. False when this key must not be used any more: the store now holds a
+// different key (another process rotated) or the write-back lost such a
+// race; the caller then re-reads atrest.json and adopts what is current.
+// Caller holds keyMu. Cheap: a stat for the key file; a lookup at most once
+// a minute for an OS keystore, and none while it is on the back-off list.
+func confirmCurrent(dir string, m *meta, id [idLen]byte) bool {
 	k := keys[dir][id]
 	if k == nil || hex.EncodeToString(id[:]) != m.ID {
-		return
+		return false
 	}
 	st := storeAt(dir, m)
 	if st == nil {
-		return
+		return true
 	}
-	isOS := st.source() != srcFile
-	if isOS {
+	if st.source() != srcFile {
 		if time.Since(lastConfirm[dir]) < confirmEvery || osLocked() {
-			return
+			return true
 		}
 		lastConfirm[dir] = time.Now()
-	} else if _, err := os.Lstat(fileStore{dir: dir}.path()); err == nil {
-		return
-	}
-	if isOS {
 		got, err := st.get()
-		if err == nil && len(got) == keyLen {
-			return // still there
+		if err == nil {
+			return string(got) == string(k) // another key there means ours is stale
 		}
 		if !errors.Is(err, errNotFound) {
-			return // locked or unreachable: nothing to conclude
+			lockedUntil = time.Now().Add(lockedBackoff) // locked or unreachable: no more asking for a while
+			return true
 		}
-		// Answered "not found" (confirmed by the canary): put it back.
+	} else if _, err := os.Lstat(fileStore{dir: dir}.path()); err == nil {
+		return true
 	}
+	return healCurrent(dir, id, k)
+}
+
+// healCurrent writes the current key back into its store — create-only, under
+// the atrest lock, and only while atrest.json still names it: between a
+// holder's "not found" and its write, another process may have minted a new
+// key and named it, and a stale key written over that one would orphan
+// everything sealed since. Caller holds keyMu. True when the key is in place
+// afterwards, by us or by someone else.
+func healCurrent(dir string, id [idLen]byte, k []byte) bool {
 	if err := checkWritable(dir); err != nil {
-		return
+		return false
 	}
-	if err := st.put(k); err != nil {
-		return
+	unlock, err := lockDir(dir)
+	if err != nil {
+		return false
 	}
-	if got, err := st.get(); err == nil && string(got) == string(k) && !healed {
+	defer unlock()
+	m, err := readMeta(dir)
+	if err != nil || hex.EncodeToString(id[:]) != m.ID {
+		return false // no longer the current key: not ours to put back
+	}
+	st := storeAt(dir, m)
+	if st == nil {
+		return false
+	}
+	switch err := st.putNew(k); {
+	case err == nil:
+	case errors.Is(err, errExists):
+		// Someone else got there first; whatever is there wins.
+	default:
+		return false
+	}
+	got, err := st.get()
+	if err != nil || string(got) != string(k) {
+		return false
+	}
+	if m2, err := readMeta(dir); err != nil || m2.ID != m.ID {
+		return false
+	}
+	if !healed {
 		healed = true
 		Logf("reminal: the at-rest key was missing from %s and has been written back from memory", storeName(st, dir))
 	}
+	return true
 }
 
 func storeName(st store, dir string) string {
@@ -145,11 +180,12 @@ func CurrentKeyHex() string {
 	if err != nil {
 		return ""
 	}
-	id, ok := current[dir]
-	if !ok || hex.EncodeToString(id[:]) != m.ID {
-		return ""
+	for id, k := range keys[dir] {
+		if hex.EncodeToString(id[:]) == m.ID {
+			return hex.EncodeToString(k) // held: sealed with it, or opened with it
+		}
 	}
-	return hex.EncodeToString(keys[dir][id])
+	return ""
 }
 
 // RestoreKey writes a key recovered from a running process back into the
@@ -207,6 +243,8 @@ type KeyStatus struct {
 	// that, being a check, wrote no canary to confirm it; it could also be a
 	// keychain outside this login session.
 	MaybeMissing bool
+	// MetaDamaged: atrest.json is there but cannot be read.
+	MetaDamaged bool
 	// FileOnDesktop: the key is a file although this is a real login user on
 	// macOS or Windows — it was minted outside the GUI keystore (over SSH,
 	// or by a test binary) and the daemon moves it in once the keystore
@@ -225,6 +263,7 @@ func KeyState() KeyStatus {
 	defer keyMu.Unlock()
 	m, err := readMeta(dir)
 	if err != nil {
+		s.MetaDamaged = err != nil && !errors.Is(err, os.ErrNotExist)
 		return s
 	}
 	s.Source = m.Source

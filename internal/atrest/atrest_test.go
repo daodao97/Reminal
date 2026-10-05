@@ -38,11 +38,12 @@ func resetCache() { ResetCacheForTest() }
 // fakeStore is an OS keystore whose answers the test controls. Entries are
 // per account, like a real keychain; key is the main account's entry.
 type fakeStore struct {
-	mu      sync.Mutex
-	key     []byte
-	entries map[string][]byte
-	locked  bool
-	puts    int
+	mu       sync.Mutex
+	key      []byte
+	entries  map[string][]byte
+	locked   bool
+	puts     int
+	onPutNew func() // runs inside putNew, before the existence check: "another process got there first"
 }
 
 type fakeEntry struct {
@@ -69,6 +70,20 @@ func (e fakeEntry) get() ([]byte, error) {
 		return nil, errNotFound
 	}
 	return append([]byte(nil), k...), nil
+}
+
+func (e fakeEntry) putNew(k []byte) error {
+	e.f.mu.Lock()
+	if e.f.onPutNew != nil {
+		e.f.onPutNew()
+		e.f.onPutNew = nil
+	}
+	has := e.main() && e.f.key != nil || !e.main() && e.f.entries[e.acct] != nil
+	e.f.mu.Unlock()
+	if has {
+		return errExists
+	}
+	return e.put(k)
 }
 
 func (e fakeEntry) put(k []byte) error {
@@ -761,5 +776,98 @@ func TestCurrentKeyHealedIntoKeystore(t *testing.T) {
 	}
 	if ks := KeyState(); !ks.MaybeMissing || ks.Missing || !ks.MissingKeyLikely() {
 		t.Fatalf("KeyState %+v, want MaybeMissing", ks)
+	}
+}
+
+// Reviewer's race: between a holder's "not found" and its write-back, another
+// process mints key B and names it. The holder must never write stale A over
+// B, in the store or in atrest.json.
+func TestReview_HealRace_KeystorePutOverwrites(t *testing.T) {
+	due := func(dir string) { keyMu.Lock(); lastConfirm[dir] = time.Time{}; keyMu.Unlock() }
+	t.Run("rotation landed before the holder looked", func(t *testing.T) {
+		dir := isolate(t)
+		f := &fakeStore{}
+		useFake(f)
+		if _, err := Seal("restore", "ABCD2345", []byte("a")); err != nil { // holder has A
+			t.Fatal(err)
+		}
+		keyB, _ := NewKey()
+		idB := keyID(keyB)
+		f.mu.Lock()
+		f.key = append([]byte(nil), keyB...)
+		f.mu.Unlock()
+		_ = writeMeta(dir, meta{V: 1, Source: "keychain", ID: hex.EncodeToString(idB[:]), Account: "acct"})
+		due(dir)
+		blobB, err := Seal("restore", "ABCD2345", []byte("b"))
+		if err != nil {
+			t.Fatalf("holder seal after rotation: %v", err)
+		}
+		f.mu.Lock()
+		stillB := string(f.key) == string(keyB)
+		f.mu.Unlock()
+		if !stillB {
+			t.Fatal("stale key A was written over B")
+		}
+		if m, _ := readMeta(dir); m.ID != hex.EncodeToString(idB[:]) {
+			t.Fatalf("atrest.json renamed to %s", m.ID)
+		}
+		var got [idLen]byte
+		copy(got[:], blobB[len(magic)+2:])
+		if got != idB {
+			t.Fatal("holder did not seal with B")
+		}
+	})
+	t.Run("B lands between the holder's lookup and its write", func(t *testing.T) {
+		dir := isolate(t)
+		f := &fakeStore{}
+		useFake(f)
+		if _, err := Seal("restore", "ABCD2345", []byte("a")); err != nil {
+			t.Fatal(err)
+		}
+		putsBefore := f.puts
+		keyB, _ := NewKey()
+		f.mu.Lock()
+		f.key = nil                                                  // the entry is gone...
+		f.onPutNew = func() { f.key = append([]byte(nil), keyB...) } // ...and B appears just as the holder writes
+		f.mu.Unlock()
+		due(dir)
+		blob, err := Seal("restore", "ABCD2345", []byte("c"))
+		f.mu.Lock()
+		stillB := string(f.key) == string(keyB)
+		puts := f.puts
+		f.mu.Unlock()
+		if !stillB || puts != putsBefore {
+			t.Fatalf("create-only put wrote stale A over B (puts %d → %d)", putsBefore, puts)
+		}
+		// The holder either stops saving until atrest.json catches up, or
+		// adopts B; it never seals anything more with stale A.
+		if err == nil {
+			var got [idLen]byte
+			copy(got[:], blob[len(magic)+2:])
+			if got != keyID(keyB) {
+				t.Fatal("holder sealed with stale A after B landed")
+			}
+		} else if !errors.Is(err, ErrCurrentKeyMissing) {
+			t.Fatalf("holder seal: %v", err)
+		}
+	})
+}
+
+// A test binary pointed at a (stand-in) real home creates nothing: no key,
+// no lock file, not even the directory, on any write path.
+func TestRefusesRealHomeCreatesNoDirectory(t *testing.T) {
+	fake := t.TempDir()
+	t.Setenv("HOME", fake)
+	t.Setenv("USERPROFILE", fake)
+	old := realHome
+	realHome = func() string { return fake }
+	t.Cleanup(func() { realHome = old })
+	ResetCacheForTest()
+	_, _ = Seal("restore", "X", []byte("x"))
+	_, _ = Lock(filepath.Join(fake, ".reminal"), "a.lock", 0)
+	_ = Quarantine(filepath.Join(fake, ".reminal", "restore"), "x", "r")
+	RotateForTest()
+	if _, err := os.Stat(filepath.Join(fake, ".reminal")); err == nil {
+		t.Fatal("~/.reminal was created under the real home")
 	}
 }

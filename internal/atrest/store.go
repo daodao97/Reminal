@@ -60,8 +60,14 @@ func (f fileStore) get() ([]byte, error) {
 }
 
 // put writes the key file. It never replaces one that exists.
-func (f fileStore) put(k []byte) error {
-	return atomicfile.WriteNew(f.path(), []byte(hex.EncodeToString(k)+"\n"), 0o600)
+func (f fileStore) put(k []byte) error { return f.putNew(k) }
+
+func (f fileStore) putNew(k []byte) error {
+	err := atomicfile.WriteNew(f.path(), []byte(hex.EncodeToString(k)+"\n"), 0o600)
+	if errors.Is(err, atomicfile.ErrExists) {
+		return errExists
+	}
+	return err
 }
 
 // canaryOn: a keystore's "not found" is confirmed with a throwaway write.

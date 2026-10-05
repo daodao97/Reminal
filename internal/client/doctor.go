@@ -118,8 +118,13 @@ func checkSavedSessions() (level, string) {
 	} else {
 		// A check writes nothing, so "locked" and "gone" cannot be told
 		// apart on every OS; one sentence covers both.
-		if st := atrest.Status(); st == "locked" || st == "gone" {
-			where += ", which can't be reached right now or no longer has the key (saving with a key file meanwhile)"
+		switch ks := atrest.KeyState(); {
+		case ks.Missing || ks.MaybeMissing:
+			where += ", which no longer has the key; saving is paused until it is back (see At-rest key below)"
+		default:
+			if st := atrest.Status(); st == "locked" || st == "gone" {
+				where += ", which can't be reached right now (saving with a key file meanwhile)"
+			}
 		}
 	}
 	if n := session.QuarantinedRestores(); n > 0 {
@@ -270,9 +275,11 @@ func checkAtRestKey() (level, string) {
 	case ks.Missing:
 		return levelFail, "the at-rest key this machine saves with is missing from disk; running sessions still hold it — restart nothing; run `reminal doctor --repair-key`"
 	case ks.MaybeMissing:
-		return levelFail, "the at-rest key this machine saves with can't be found in the " + ks.Source + " right now; if sessions are running they still hold it — restart nothing; run `reminal doctor --repair-key`"
+		return levelWarn, "the " + ks.Source + " is locked or no longer has the key this machine saves with; if it stays this way with sessions running, `reminal doctor --repair-key` puts it back from one of them — restart nothing"
+	case ks.MetaDamaged:
+		return levelFail, "~/.reminal/atrest.json is damaged; saved sessions cannot be opened until it is restored from a backup"
 	case ks.FileOnDesktop:
-		return levelWarn, "kept in a file in ~/.reminal although this is a desktop login (made outside the keystore, over SSH or by a test); the daemon moves it into the keystore once that answers"
+		return levelWarn, "kept in a file in ~/.reminal although this is a desktop login (made outside the keystore, over SSH or by a test); it moves into the keystore at the next save once that answers"
 	}
 	return levelOK, "in place (" + ks.Source + ")"
 }
@@ -282,6 +289,9 @@ func checkAtRestKey() (level, string) {
 // names. Nothing is restarted and nothing is minted.
 func RepairAtRestKey() error {
 	ks := atrest.KeyState()
+	if ks.MetaDamaged {
+		return errors.New("~/.reminal/atrest.json is damaged, so there is nothing to say which key is current; restore it from a backup")
+	}
 	if ks.Source == "" {
 		return errors.New("no at-rest key is recorded here (atrest.json missing); nothing to repair")
 	}

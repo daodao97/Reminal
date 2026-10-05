@@ -5,6 +5,7 @@ package atrest
 
 import (
 	"encoding/hex"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -74,6 +75,17 @@ func (s secretServiceStore) put(k []byte) error {
 	_, _, _, err := runTool([]byte(hex.EncodeToString(k)), "secret-tool", "store",
 		"--label=reminal at-rest key", "service", keystoreService, "account", s.account)
 	return err
+}
+
+// putNew: secret-tool has no create-only store, so look first. Callers hold
+// the atrest lock, which keeps reminal's own processes from racing here.
+func (s secretServiceStore) putNew(k []byte) error {
+	if got, err := s.get(); err == nil && len(got) == keyLen {
+		return errExists
+	} else if err != nil && !errors.Is(err, errNotFound) {
+		return err
+	}
+	return s.put(k)
 }
 
 // hasDesktopKeystore: a real login user here is expected to have an OS keystore.

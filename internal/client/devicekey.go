@@ -81,6 +81,8 @@ func ownerKeyHint(err error) error {
 	switch {
 	case err == nil:
 		return nil
+	case errors.Is(err, atrest.ErrCurrentKeyMissing):
+		return fmt.Errorf("%w: the key this machine's saved details are protected with is missing from its store, so the owner key can't be opened; if sessions are running, `reminal doctor --repair-key` puts it back", ErrOwnerKeyLocked)
 	case errors.Is(err, ErrOwnerKeyLocked), errors.Is(err, atrest.ErrLocked):
 		if runtime.GOOS == "darwin" {
 			return fmt.Errorf("%w: your login keychain is locked, so this device's owner key can't be read. Run `security unlock-keychain ~/Library/Keychains/login.keychain-db` and try again", ErrOwnerKeyLocked)
@@ -226,6 +228,9 @@ func withDeviceKeyLock(fn func() error) error {
 	dir, err := reminalDir()
 	if err != nil {
 		return err
+	}
+	if err := atrest.CheckWritable(); err != nil {
+		return err // a test binary with the real HOME: not even the directory
 	}
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
