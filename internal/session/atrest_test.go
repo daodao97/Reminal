@@ -15,6 +15,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"reminal/internal/atrest"
 )
 
 func isolateHome(t *testing.T) string {
@@ -102,12 +104,21 @@ func TestKeyGoneQuarantinesNotDeletes(t *testing.T) {
 	sp, _ := RestoreScrollbackPath("GONE2345")
 	blob, _ := SealScrollback("GONE2345", []byte("history"))
 	_ = os.WriteFile(sp, blob, 0o600)
+	// The key FILE missing is damage: later, nothing quarantined.
 	if err := os.Remove(filepath.Join(dir, "atrest.key")); err != nil {
 		t.Fatal(err)
 	}
 	resetAtrestCache(t)
+	if _, err := ReadRestore("GONE2345"); !errors.Is(err, atrest.ErrLocked) {
+		t.Fatalf("read with the current key file missing: %v, want ErrLocked", err)
+	}
+	if _, err := os.ReadDir(filepath.Join(dir, "restore", "quarantine")); err == nil {
+		t.Fatal("quarantined while the current key was merely missing")
+	}
+	// A real rotation (atrest.json names another key): gone, quarantined.
+	atrest.RotateForTest()
 	if _, err := ReadRestore("GONE2345"); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("read with key gone: %v", err)
+		t.Fatalf("read with key rotated away: %v", err)
 	}
 	q, _ := os.ReadDir(filepath.Join(dir, "restore", "quarantine"))
 	var names []string

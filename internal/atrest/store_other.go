@@ -8,3 +8,6 @@ package atrest
 const caseInsensitiveFS = false
 
 func osStore(dir, account string) store { return nil }
+
+// hasDesktopKeystore: a real login user here is expected to have an OS keystore.
+const hasDesktopKeystore = false

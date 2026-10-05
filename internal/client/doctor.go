@@ -80,6 +80,7 @@ func allChecks(currentVersion string) []check {
 		{"Active session", checkActiveSession},
 		{"Config dir", checkConfigDir},
 		{"Saved sessions", checkSavedSessions},
+		{"At-rest key", checkAtRestKey},
 		{"Owner key", checkOwnerKey},
 	}
 }
@@ -117,8 +118,13 @@ func checkSavedSessions() (level, string) {
 	} else {
 		// A check writes nothing, so "locked" and "gone" cannot be told
 		// apart on every OS; one sentence covers both.
-		if st := atrest.Status(); st == "locked" || st == "gone" {
-			where += ", which can't be reached right now or no longer has the key (saving with a key file meanwhile)"
+		switch ks := atrest.KeyState(); {
+		case ks.Missing || ks.MaybeMissing:
+			where += ", which no longer has the key; saving is paused until it is back (see At-rest key below)"
+		default:
+			if st := atrest.Status(); st == "locked" || st == "gone" {
+				where += ", which can't be reached right now (saving with a key file meanwhile)"
+			}
 		}
 	}
 	if n := session.QuarantinedRestores(); n > 0 {
@@ -257,4 +263,67 @@ func checkConfigDir() (level, string) {
 	_ = tmp.Close()
 	_ = os.Remove(name)
 	return levelOK, fmt.Sprintf("%s writable", dir)
+}
+
+// checkAtRestKey: the key everything saved is sealed with. Missing from its
+// store while sessions run is damage that running processes can repair.
+func checkAtRestKey() (level, string) {
+	ks := atrest.KeyState()
+	switch {
+	case ks.Source == "":
+		return levelOK, "none yet (made at the first save)"
+	case ks.Missing:
+		return levelFail, "the at-rest key this machine saves with is missing from disk; running sessions still hold it — restart nothing; run `reminal doctor --repair-key`"
+	case ks.MaybeMissing:
+		return levelWarn, "the " + ks.Source + " is locked or no longer has the key this machine saves with; if it stays this way with sessions running, `reminal doctor --repair-key` puts it back from one of them — restart nothing"
+	case ks.MetaDamaged:
+		return levelFail, "~/.reminal/atrest.json is damaged; saved sessions cannot be opened until it is restored from a backup"
+	case ks.FileOnDesktop:
+		return levelWarn, "kept in a file in ~/.reminal although this is a desktop login (made outside the keystore, over SSH or by a test); it moves into the keystore at the next save once that answers"
+	}
+	return levelOK, "in place (" + ks.Source + ")"
+}
+
+// RepairAtRestKey asks every running session on this machine for the at-rest
+// key over its control socket and writes it back into the store atrest.json
+// names. Nothing is restarted and nothing is minted.
+func RepairAtRestKey() error {
+	ks := atrest.KeyState()
+	if ks.MetaDamaged {
+		return errors.New("~/.reminal/atrest.json is damaged, so there is nothing to say which key is current; restore it from a backup")
+	}
+	if ks.Source == "" {
+		return errors.New("no at-rest key is recorded here (atrest.json missing); nothing to repair")
+	}
+	if !ks.MissingKeyLikely() {
+		fmt.Println("  The at-rest key is in place; nothing to repair.")
+		return nil
+	}
+	dir, err := reminalDir()
+	if err != nil {
+		return err
+	}
+	socks, _ := filepath.Glob(filepath.Join(dir, "agent-*.sock"))
+	asked := 0
+	for _, s := range socks {
+		var pid int
+		if _, err := fmt.Sscanf(filepath.Base(s), "agent-%d.sock", &pid); err != nil {
+			continue
+		}
+		asked++
+		hexKey, err := sendControlToDeadline(pid, "atrest-key", 2*time.Second)
+		if err != nil || hexKey == "" {
+			continue
+		}
+		if err := atrest.RestoreKey(hexKey); err != nil {
+			fmt.Printf("  session %d offered a key that was not accepted: %v\n", pid, err)
+			continue
+		}
+		fmt.Printf("  Recovered the at-rest key from a running session (pid %d) and wrote it back.\n", pid)
+		return nil
+	}
+	if asked == 0 {
+		return errors.New("no running session to ask; the key is lost unless you have a backup of ~/.reminal/atrest.key")
+	}
+	return fmt.Errorf("asked %d running session(s); none held the key atrest.json names", asked)
 }

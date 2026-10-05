@@ -23,7 +23,9 @@ func runRestore(args []string) error {
 		return printRestoreRecords()
 	}
 	gone, err := client.Restorable()
-	if errors.Is(err, atrest.ErrLocked) {
+	if errors.Is(err, atrest.ErrCurrentKeyMissing) {
+		fmt.Println("The key your saved sessions are protected with is missing from disk; they are kept as they are. Run `reminal doctor --repair-key` (running sessions still hold the key), then run this again.")
+	} else if errors.Is(err, atrest.ErrLocked) {
 		fmt.Println("Some saved sessions are locked in your keychain right now; unlock it (log in to the desktop) and run this again to see them.")
 	} else if err != nil {
 		return err
