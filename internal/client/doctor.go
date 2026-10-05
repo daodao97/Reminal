@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -82,6 +83,7 @@ func allChecks(currentVersion string) []check {
 		{"Saved sessions", checkSavedSessions},
 		{"At-rest key", checkAtRestKey},
 		{"Owner key", checkOwnerKey},
+		{"Window notes", checkWindowNotes},
 	}
 }
 
@@ -326,4 +328,16 @@ func RepairAtRestKey() error {
 		return errors.New("no running session to ask; the key is lost unless you have a backup of ~/.reminal/atrest.key")
 	}
 	return fmt.Errorf("asked %d running session(s); none held the key atrest.json names", asked)
+}
+
+// checkWindowNotes: how many notes are kept, and where.
+func checkWindowNotes() (level, string) {
+	n, p := NotesCount()
+	if p == "" || n == 0 {
+		return levelOK, "none"
+	}
+	if home, err := os.UserHomeDir(); err == nil && home != "" && strings.HasPrefix(p, home) {
+		p = "~" + strings.TrimPrefix(p, home)
+	}
+	return levelOK, fmt.Sprintf("%d kept in %s (survive daemon restarts)", n, p)
 }

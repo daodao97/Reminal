@@ -290,6 +290,7 @@ opens as another's (`internal/atrest`).
 | `~/.reminal/restore/<id>.conv` | The coding agent's conversation ID (not sealed; not a credential) | Same as the record |
 | `~/.reminal/active-<id>.json` | A running session's ID, name, folder and viewer counts, with the PIN sealed | While the session runs; left behind by a crash until the next `reminal list` |
 | `~/.reminal/scrollback-<id>.json` | Terminal history handed from one process to the next during a hot restart or upgrade | Seconds: read once and deleted by the new process. Sealed under a one-time key passed to that process directly, never written to disk; any copy a crash leaves behind is removed at the next start |
+| `~/.reminal/notes.json` | Window notes (titles, bodies, window titles, owning program), in the clear | Until the note is cleared or its window closes. Not sealed on purpose: a note holds no credential, and the badge must come back at login before any keystore answers |
 | `~/.reminal/restore/quarantine/` | Saved sessions that could not be opened (their key was gone, or the file was damaged), with a note saying why | 7 days, then removed; `reminal doctor` mentions them |
 
 Where the key lives:
