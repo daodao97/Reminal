@@ -140,7 +140,7 @@ func readDiskState(quiet bool) (diskState, error) {
 		case oerr == nil && len(pt) == ed25519.PrivateKeySize:
 			st.sealed = ed25519.PrivateKey(pt)
 		case errors.Is(oerr, atrest.ErrLocked):
-			st.sealedErr = atrest.ErrLocked
+			st.sealedErr = oerr // keeps ErrCurrentKeyMissing, so the hint names --repair-key
 		default:
 			st.sealedErr = errSealedBad
 		}

@@ -871,3 +871,28 @@ func TestRefusesRealHomeCreatesNoDirectory(t *testing.T) {
 		t.Fatal("~/.reminal was created under the real home")
 	}
 }
+
+// RestoreKey must never write over a different key the store already holds.
+func TestReview_RestoreKeyOverwritesForeignEntry(t *testing.T) {
+	isolate(t)
+	f := &fakeStore{}
+	useFake(f)
+	if _, err := Seal("restore", "ABCD2345", []byte("x")); err != nil {
+		t.Fatal(err)
+	}
+	mine := CurrentKeyHex()
+	foreign, _ := NewKey()
+	f.mu.Lock()
+	f.key = append([]byte(nil), foreign...) // the store now holds X
+	f.mu.Unlock()
+	resetCache()
+	if err := RestoreKey(mine); err == nil {
+		t.Fatal("RestoreKey wrote over a foreign key")
+	}
+	f.mu.Lock()
+	still := string(f.key) == string(foreign)
+	f.mu.Unlock()
+	if !still {
+		t.Fatal("foreign entry replaced")
+	}
+}

@@ -35,6 +35,9 @@ var errTestRealHome = errors.New("atrest: refusing to write under the real home 
 // holds the current key; the key file is a stat, checked every time.
 const confirmEvery = time.Minute
 
+// healLockWait bounds how long a heal waits for the atrest lock.
+const healLockWait = time.Second
+
 var (
 	lastConfirm = map[string]time.Time{}
 	healed      bool
@@ -125,7 +128,10 @@ func healCurrent(dir string, id [idLen]byte, k []byte) bool {
 	if err := checkWritable(dir); err != nil {
 		return false
 	}
-	unlock, err := lockDir(dir)
+	// A short wait only: this runs inside a save tick holding keyMu, and
+	// another process healing at the same moment is the usual reason the
+	// lock is taken. The next tick tries again.
+	unlock, err := lockFile(dir, "atrest.lock", healLockWait)
 	if err != nil {
 		return false
 	}
@@ -204,6 +210,11 @@ func RestoreKey(keyHex string) error {
 	}
 	keyMu.Lock()
 	defer keyMu.Unlock()
+	unlock, err := lockDir(dir)
+	if err != nil {
+		return err
+	}
+	defer unlock()
 	m, err := readMeta(dir)
 	if err != nil {
 		return fmt.Errorf("atrest.json: %w", err)
@@ -216,17 +227,26 @@ func RestoreKey(keyHex string) error {
 	if st == nil {
 		return ErrLocked
 	}
-	if got, err := st.get(); err == nil && string(got) == string(k) {
-		remember(dir, k)
-		current[dir] = id
-		return nil // already there
-	}
-	if err := st.put(k); err != nil {
+	// Create-only: never written over whatever the store holds now.
+	switch err := st.putNew(k); {
+	case err == nil:
+	case errors.Is(err, errExists):
+		got, gerr := st.get()
+		if gerr != nil {
+			return gerr
+		}
+		if string(got) != string(k) {
+			return errors.New("the store already holds a different key under this name; nothing written")
+		}
+	default:
 		return err
 	}
 	got, err := st.get()
 	if err != nil || string(got) != string(k) {
 		return errors.New("the key did not read back after writing")
+	}
+	if m2, err := readMeta(dir); err != nil || m2.ID != m.ID {
+		return errors.New("atrest.json changed while writing; nothing to do")
 	}
 	remember(dir, k)
 	current[dir] = id

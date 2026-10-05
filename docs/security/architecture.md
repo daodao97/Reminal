@@ -314,7 +314,11 @@ as gone, saving pauses rather than minting a replacement, any process that still
 holds the key in memory writes it back at its next save (every fifteen seconds for
 a session; not instantly), and only if nothing has replaced it meanwhile, and
 `reminal doctor` says so plainly (`reminal doctor --repair-key` asks a running session for the key and
-puts it back). Only a key `atrest.json` does not name counts as gone.
+puts it back). Only a key `atrest.json` does not name counts as gone. The keystore is the authority
+over `atrest.json`: if the store holds a different key under reminal's name (a login
+keychain restored from an older backup, say), that key becomes current and is never
+written over, and everything sealed under the previous key is quarantined, not lost
+for seven days, and opens again if the previous key is put back.
 
 Every keystore call has a 3-second limit; one that does not answer in time is
 treated as locked. A locked keystore never stops a session from starting and never
