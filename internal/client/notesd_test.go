@@ -304,12 +304,20 @@ func TestNotesPersistAcrossDaemonRestart(t *testing.T) {
 	if o := d2.owners[42]; o.PID != 4242 || o.Title != "Editor" {
 		t.Fatalf("owner not kept: %+v", o)
 	}
-	// The window really closed (the helper's rule): its notes go, the other's stay.
+	// The window really closed (the helper's rule): its notes are hidden at
+	// once, kept for the grace period, then gone; the other's stay.
 	d2.readBadgeEvents(io.NopCloser(strings.NewReader(`{"event":"closed","window":42}` + "\n")))
 	snap = d2.snapshot()
 	if len(snap["42"]) != 0 || len(snap["7"]) != 1 {
 		t.Fatalf("after close: %+v", snap)
 	}
+	d2.mu.Lock()
+	d2.closedAt[42] = time.Now().Add(-2 * closedGrace)
+	d2.mu.Unlock()
+	if !d2.sweepClosed() {
+		t.Fatal("grace expired but nothing swept")
+	}
+	d2.save()
 	d3 := newNotesDaemon()
 	d3.path = path
 	d3.load()
