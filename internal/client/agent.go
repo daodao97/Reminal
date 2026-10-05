@@ -380,6 +380,9 @@ type Agent struct {
 	hostOldState *xterm.State
 	// saveStalled: the person has been told once that saves are paused.
 	saveStalled bool
+	// attnStop ends the attention detector (see startAttention).
+	attnMu   sync.Mutex
+	attnStop chan struct{}
 	// stopControlFn is the cancel function returned by listenControl().
 	// Hot-restart calls it explicitly so the new image can re-bind the
 	// same control socket (PID is preserved across Exec, so the path
@@ -784,10 +787,12 @@ func (a *Agent) Run() error {
 			return fmt.Errorf("start shell: %w", err)
 		}
 		defer term.Close()
+		defer a.stopAttention() // runs before the PTY closes: no probe polls a closed file
 		a.term = term
 	} else {
 		// term was set in NewAgentWith from ResumeState.PTY.
 		defer a.term.Close()
+		defer a.stopAttention()
 	}
 	// Seed the record with the shell's actual working directory and persist
 	// it now so `reminal list` is correct immediately instead of after the

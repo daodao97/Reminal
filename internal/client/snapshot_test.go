@@ -25,6 +25,7 @@ func TestRecordDoesNotBlockOnTerminalQueries(t *testing.T) {
 	box, _ := crypto.NewBox(key)
 	a := &Agent{box: box, buf: newScrollback(1 << 20)}
 	a.initScreen()
+	t.Cleanup(a.stopAttention)
 	if a.screen == nil {
 		t.Skip("snapshots disabled")
 	}

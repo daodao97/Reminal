@@ -134,6 +134,7 @@ func TestRestoreResumedScrollbackReplaysScreen(t *testing.T) {
 	a := &Agent{sessionID: "SCRN2345", box: oldBox, buf: newScrollback(1 << 20)}
 	isolateReminalHome(t)
 	a.initScreen()
+	t.Cleanup(a.stopAttention)
 	a.record([]byte("kept across restart\r\n"))
 
 	path, key, err := a.writeScrollbackDump()
@@ -155,6 +156,7 @@ func TestRestoreResumedScrollbackReplaysScreen(t *testing.T) {
 	}
 	b := &Agent{box: newBox, buf: newScrollback(1 << 20), resumeDump: dump}
 	b.initScreen()
+	t.Cleanup(b.stopAttention)
 	b.restoreResumedScrollback()
 	if b.screen == nil {
 		t.Fatal("expected emulator after initScreen")
