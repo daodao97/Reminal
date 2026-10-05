@@ -378,6 +378,8 @@ type Agent struct {
 	// the new agent's MakeRaw catches the right "previous" state for
 	// its own restore-on-exit.
 	hostOldState *xterm.State
+	// saveStalled: the person has been told once that saves are paused.
+	saveStalled bool
 	// stopControlFn is the cancel function returned by listenControl().
 	// Hot-restart calls it explicitly so the new image can re-bind the
 	// same control socket (PID is preserved across Exec, so the path

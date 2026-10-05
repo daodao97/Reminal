@@ -38,11 +38,12 @@ func resetCache() { ResetCacheForTest() }
 // fakeStore is an OS keystore whose answers the test controls. Entries are
 // per account, like a real keychain; key is the main account's entry.
 type fakeStore struct {
-	mu      sync.Mutex
-	key     []byte
-	entries map[string][]byte
-	locked  bool
-	puts    int
+	mu       sync.Mutex
+	key      []byte
+	entries  map[string][]byte
+	locked   bool
+	puts     int
+	onPutNew func() // runs inside putNew, before the existence check: "another process got there first"
 }
 
 type fakeEntry struct {
@@ -69,6 +70,20 @@ func (e fakeEntry) get() ([]byte, error) {
 		return nil, errNotFound
 	}
 	return append([]byte(nil), k...), nil
+}
+
+func (e fakeEntry) putNew(k []byte) error {
+	e.f.mu.Lock()
+	if e.f.onPutNew != nil {
+		e.f.onPutNew()
+		e.f.onPutNew = nil
+	}
+	has := e.main() && e.f.key != nil || !e.main() && e.f.entries[e.acct] != nil
+	e.f.mu.Unlock()
+	if has {
+		return errExists
+	}
+	return e.put(k)
 }
 
 func (e fakeEntry) put(k []byte) error {
@@ -132,31 +147,137 @@ func TestSealOpenRoundTripAndBinding(t *testing.T) {
 	}
 }
 
-// The key file deleted after a seal: the store answered "none", so the blob
-// is gone for good (ErrKeyGone) — and the next Seal makes a new key rather
-// than failing forever.
-func TestKeyFileRemovedIsKeyGone(t *testing.T) {
+// The key file deleted after a seal is DAMAGE, not rotation: the blob is
+// "later" (ErrLocked), never "gone"; nothing is minted over the missing key;
+// and a process that still holds it in memory writes it back.
+func TestKeyFileRemovedIsMissingNotGone(t *testing.T) {
 	dir := isolate(t)
 	blob, err := Seal("restore", "ABCD2345", []byte("x"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Remove(filepath.Join(dir, "atrest.key")); err != nil {
+	metaBefore, _ := os.ReadFile(filepath.Join(dir, "atrest.json"))
+	// Another process, which never held the key:
+	_ = os.Remove(filepath.Join(dir, "atrest.key"))
+	resetCache()
+	if _, err := Open("restore", "ABCD2345", blob); !errors.Is(err, ErrLocked) || !errors.Is(err, ErrCurrentKeyMissing) {
+		t.Fatalf("open with the current key missing: %v, want ErrCurrentKeyMissing (an ErrLocked)", err)
+	}
+	if _, err := Seal("restore", "ABCD2345", []byte("y")); !errors.Is(err, ErrCurrentKeyMissing) {
+		t.Fatalf("seal with the current key missing: %v, want ErrCurrentKeyMissing", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "atrest.key")); err == nil {
+		t.Fatal("a new key file was made over the missing one")
+	}
+	if after, _ := os.ReadFile(filepath.Join(dir, "atrest.json")); !bytes.Equal(after, metaBefore) {
+		t.Fatal("atrest.json was rewritten")
+	}
+	if !KeyState().Missing {
+		t.Fatal("KeyState does not report the missing key")
+	}
+}
+
+// Self-heal: a process holding the current key puts the file back on its next
+// Seal, and on an Open that hits its cache.
+func TestCurrentKeyHealedFromMemory(t *testing.T) {
+	dir := isolate(t)
+	blob, err := Seal("restore", "ABCD2345", []byte("x")) // key now in memory
+	if err != nil {
 		t.Fatal(err)
 	}
+	kf := filepath.Join(dir, "atrest.key")
+	before, _ := os.ReadFile(kf)
+	_ = os.Remove(kf)
+	if _, err := Seal("restore", "ABCD2345", []byte("y")); err != nil {
+		t.Fatalf("seal with the key in memory: %v", err)
+	}
+	if after, err := os.ReadFile(kf); err != nil || !bytes.Equal(after, before) {
+		t.Fatalf("key file not written back by Seal: %v", err)
+	}
+	_ = os.Remove(kf)
+	if _, err := Open("restore", "ABCD2345", blob); err != nil {
+		t.Fatalf("open from cache: %v", err)
+	}
+	if after, err := os.ReadFile(kf); err != nil || !bytes.Equal(after, before) {
+		t.Fatalf("key file not written back by Open: %v", err)
+	}
+	// And the id is unchanged: everything sealed before still opens.
 	resetCache()
+	if pt, err := Open("restore", "ABCD2345", blob); err != nil || string(pt) != "x" {
+		t.Fatalf("after heal: %q %v", pt, err)
+	}
+}
+
+// RestoreKey: a key recovered from a running process is written back only if
+// it is the one atrest.json names.
+func TestRestoreKey(t *testing.T) {
+	dir := isolate(t)
+	blob, _ := Seal("restore", "ABCD2345", []byte("x"))
+	hexKey := CurrentKeyHex()
+	if hexKey == "" {
+		t.Fatal("no current key in memory")
+	}
+	_ = os.Remove(filepath.Join(dir, "atrest.key"))
+	resetCache() // a process that never had it
+	if CurrentKeyHex() != "" {
+		t.Fatal("a fresh process claims to hold the key")
+	}
+	other, _ := NewKey()
+	if err := RestoreKey(hex.EncodeToString(other)); err == nil {
+		t.Fatal("a foreign key was accepted")
+	}
+	if _, err := os.Stat(filepath.Join(dir, "atrest.key")); err == nil {
+		t.Fatal("a foreign key was written")
+	}
+	if err := RestoreKey(hexKey); err != nil {
+		t.Fatal(err)
+	}
+	if pt, err := Open("restore", "ABCD2345", blob); err != nil || string(pt) != "x" {
+		t.Fatalf("after restore: %q %v", pt, err)
+	}
+	if KeyState().Missing {
+		t.Fatal("still reported missing")
+	}
+}
+
+// A genuine rotation (atrest.json names another key) still makes old blobs
+// "gone", and a new key is made for new saves.
+func TestRotatedKeyIsGone(t *testing.T) {
+	dir := isolate(t)
+	blob, _ := Seal("restore", "ABCD2345", []byte("x"))
+	_ = os.Remove(filepath.Join(dir, "atrest.key"))
+	RotateForTest()
 	if _, err := Open("restore", "ABCD2345", blob); !errors.Is(err, ErrKeyGone) {
-		t.Fatalf("open after key removed: %v, want ErrKeyGone", err)
+		t.Fatalf("rotated: %v, want ErrKeyGone", err)
 	}
-	blob2, err := Seal("restore", "ABCD2345", []byte("y"))
-	if err != nil {
-		t.Fatalf("seal after key removed: %v", err)
+	if _, err := Seal("restore", "ABCD2345", []byte("y")); err != nil {
+		t.Fatalf("seal after rotation: %v", err)
 	}
-	if pt, err := Open("restore", "ABCD2345", blob2); err != nil || string(pt) != "y" {
-		t.Fatalf("new key: %q %v", pt, err)
+}
+
+// A test binary whose HOME is the real home writes nothing under ~/.reminal.
+func TestRefusesRealHomeFromTests(t *testing.T) {
+	fake := t.TempDir() // stands in for the login user's home
+	t.Setenv("HOME", fake)
+	t.Setenv("USERPROFILE", fake)
+	old := realHome
+	realHome = func() string { return fake }
+	t.Cleanup(func() { realHome = old })
+	ResetCacheForTest()
+	if _, err := Seal("restore", "ABCD2345", []byte("x")); !errors.Is(err, errTestRealHome) {
+		t.Fatalf("seal: %v, want the real-home refusal", err)
 	}
-	if _, err := Open("restore", "ABCD2345", blob); !errors.Is(err, ErrKeyGone) {
-		t.Fatalf("old blob under new key: %v, want ErrKeyGone", err)
+	if err := CheckWritable(); !errors.Is(err, errTestRealHome) {
+		t.Fatalf("CheckWritable: %v", err)
+	}
+	if _, err := Lock(filepath.Join(fake, ".reminal", "restore"), "x.lock", 0); !errors.Is(err, errTestRealHome) {
+		t.Fatalf("Lock under the real home: %v", err)
+	}
+	if ents, _ := os.ReadDir(filepath.Join(fake, ".reminal")); len(ents) != 0 {
+		t.Fatalf("files created under the real home: %v", ents)
+	}
+	if _, err := os.Stat(filepath.Join(fake, ".reminal")); err == nil {
+		t.Fatal("~/.reminal was created under the real home")
 	}
 }
 
@@ -597,5 +718,181 @@ func TestWriteExclusiveFallback(t *testing.T) {
 	}
 	if b, _ := os.ReadFile(p); string(b) != "a" {
 		t.Fatal("replaced")
+	}
+}
+
+// The keystore variant of the heal: the entry vanishes from under a process
+// that holds the key; its next Seal (and an Open that hits its cache) confirms
+// with the store and puts the entry back. A process without the key calls it
+// missing, never gone, and mints nothing.
+func TestCurrentKeyHealedIntoKeystore(t *testing.T) {
+	dir := isolate(t)
+	f := &fakeStore{}
+	useFake(f)
+	blob, err := Seal("restore", "ABCD2345", []byte("x"))
+	if err != nil || Backend() != "keychain" {
+		t.Fatalf("seal: %v backend %q", err, Backend())
+	}
+	gone := func() { f.mu.Lock(); f.key = nil; f.mu.Unlock() }
+	has := func() bool { f.mu.Lock(); defer f.mu.Unlock(); return f.key != nil }
+	due := func() { keyMu.Lock(); lastConfirm[dir] = time.Time{}; keyMu.Unlock() }
+
+	// The holder (this process, cache filled) heals on its next Seal.
+	gone()
+	due()
+	if _, err := Seal("restore", "ABCD2345", []byte("y")); err != nil {
+		t.Fatalf("holder seal: %v", err)
+	}
+	if !has() || f.puts != 2 {
+		t.Fatalf("entry not written back by Seal (has=%v puts=%d)", has(), f.puts)
+	}
+	// ...and on an Open that hits its cache.
+	gone()
+	due()
+	if _, err := Open("restore", "ABCD2345", blob); err != nil {
+		t.Fatalf("holder open: %v", err)
+	}
+	if !has() || f.puts != 3 {
+		t.Fatalf("entry not written back by Open (has=%v puts=%d)", has(), f.puts)
+	}
+	// Within the minute the store is not asked again (one lookup a minute).
+	gone()
+	if _, err := Seal("restore", "ABCD2345", []byte("z")); err != nil {
+		t.Fatal(err)
+	}
+	if has() {
+		t.Fatal("confirmed more than once a minute")
+	}
+	// A process without the key: missing, not gone, nothing minted.
+	resetCache()
+	if _, err := Open("restore", "ABCD2345", blob); !errors.Is(err, ErrCurrentKeyMissing) {
+		t.Fatalf("fresh process open: %v", err)
+	}
+	if _, err := Seal("restore", "ABCD2345", []byte("w")); !errors.Is(err, ErrCurrentKeyMissing) {
+		t.Fatalf("fresh process seal: %v", err)
+	}
+	if f.puts != 3 {
+		t.Fatalf("puts %d: something minted over the missing key", f.puts)
+	}
+	if ks := KeyState(); !ks.MaybeMissing || ks.Missing || !ks.MissingKeyLikely() {
+		t.Fatalf("KeyState %+v, want MaybeMissing", ks)
+	}
+}
+
+// Reviewer's race: between a holder's "not found" and its write-back, another
+// process mints key B and names it. The holder must never write stale A over
+// B, in the store or in atrest.json.
+func TestReview_HealRace_KeystorePutOverwrites(t *testing.T) {
+	due := func(dir string) { keyMu.Lock(); lastConfirm[dir] = time.Time{}; keyMu.Unlock() }
+	t.Run("rotation landed before the holder looked", func(t *testing.T) {
+		dir := isolate(t)
+		f := &fakeStore{}
+		useFake(f)
+		if _, err := Seal("restore", "ABCD2345", []byte("a")); err != nil { // holder has A
+			t.Fatal(err)
+		}
+		keyB, _ := NewKey()
+		idB := keyID(keyB)
+		f.mu.Lock()
+		f.key = append([]byte(nil), keyB...)
+		f.mu.Unlock()
+		_ = writeMeta(dir, meta{V: 1, Source: "keychain", ID: hex.EncodeToString(idB[:]), Account: "acct"})
+		due(dir)
+		blobB, err := Seal("restore", "ABCD2345", []byte("b"))
+		if err != nil {
+			t.Fatalf("holder seal after rotation: %v", err)
+		}
+		f.mu.Lock()
+		stillB := string(f.key) == string(keyB)
+		f.mu.Unlock()
+		if !stillB {
+			t.Fatal("stale key A was written over B")
+		}
+		if m, _ := readMeta(dir); m.ID != hex.EncodeToString(idB[:]) {
+			t.Fatalf("atrest.json renamed to %s", m.ID)
+		}
+		var got [idLen]byte
+		copy(got[:], blobB[len(magic)+2:])
+		if got != idB {
+			t.Fatal("holder did not seal with B")
+		}
+	})
+	t.Run("B lands between the holder's lookup and its write", func(t *testing.T) {
+		dir := isolate(t)
+		f := &fakeStore{}
+		useFake(f)
+		if _, err := Seal("restore", "ABCD2345", []byte("a")); err != nil {
+			t.Fatal(err)
+		}
+		putsBefore := f.puts
+		keyB, _ := NewKey()
+		f.mu.Lock()
+		f.key = nil                                                  // the entry is gone...
+		f.onPutNew = func() { f.key = append([]byte(nil), keyB...) } // ...and B appears just as the holder writes
+		f.mu.Unlock()
+		due(dir)
+		blob, err := Seal("restore", "ABCD2345", []byte("c"))
+		f.mu.Lock()
+		stillB := string(f.key) == string(keyB)
+		puts := f.puts
+		f.mu.Unlock()
+		if !stillB || puts != putsBefore {
+			t.Fatalf("create-only put wrote stale A over B (puts %d → %d)", putsBefore, puts)
+		}
+		// The holder either stops saving until atrest.json catches up, or
+		// adopts B; it never seals anything more with stale A.
+		if err == nil {
+			var got [idLen]byte
+			copy(got[:], blob[len(magic)+2:])
+			if got != keyID(keyB) {
+				t.Fatal("holder sealed with stale A after B landed")
+			}
+		} else if !errors.Is(err, ErrCurrentKeyMissing) {
+			t.Fatalf("holder seal: %v", err)
+		}
+	})
+}
+
+// A test binary pointed at a (stand-in) real home creates nothing: no key,
+// no lock file, not even the directory, on any write path.
+func TestRefusesRealHomeCreatesNoDirectory(t *testing.T) {
+	fake := t.TempDir()
+	t.Setenv("HOME", fake)
+	t.Setenv("USERPROFILE", fake)
+	old := realHome
+	realHome = func() string { return fake }
+	t.Cleanup(func() { realHome = old })
+	ResetCacheForTest()
+	_, _ = Seal("restore", "X", []byte("x"))
+	_, _ = Lock(filepath.Join(fake, ".reminal"), "a.lock", 0)
+	_ = Quarantine(filepath.Join(fake, ".reminal", "restore"), "x", "r")
+	RotateForTest()
+	if _, err := os.Stat(filepath.Join(fake, ".reminal")); err == nil {
+		t.Fatal("~/.reminal was created under the real home")
+	}
+}
+
+// RestoreKey must never write over a different key the store already holds.
+func TestReview_RestoreKeyOverwritesForeignEntry(t *testing.T) {
+	isolate(t)
+	f := &fakeStore{}
+	useFake(f)
+	if _, err := Seal("restore", "ABCD2345", []byte("x")); err != nil {
+		t.Fatal(err)
+	}
+	mine := CurrentKeyHex()
+	foreign, _ := NewKey()
+	f.mu.Lock()
+	f.key = append([]byte(nil), foreign...) // the store now holds X
+	f.mu.Unlock()
+	resetCache()
+	if err := RestoreKey(mine); err == nil {
+		t.Fatal("RestoreKey wrote over a foreign key")
+	}
+	f.mu.Lock()
+	still := string(f.key) == string(foreign)
+	f.mu.Unlock()
+	if !still {
+		t.Fatal("foreign entry replaced")
 	}
 }

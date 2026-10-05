@@ -290,6 +290,7 @@ opens as another's (`internal/atrest`).
 | `~/.reminal/restore/<id>.conv` | The coding agent's conversation ID (not sealed; not a credential) | Same as the record |
 | `~/.reminal/active-<id>.json` | A running session's ID, name, folder and viewer counts, with the PIN sealed | While the session runs; left behind by a crash until the next `reminal list` |
 | `~/.reminal/scrollback-<id>.json` | Terminal history handed from one process to the next during a hot restart or upgrade | Seconds: read once and deleted by the new process. Sealed under a one-time key passed to that process directly, never written to disk; any copy a crash leaves behind is removed at the next start |
+| `~/.reminal/notes.json` | Window notes (titles, bodies, window titles, owning program), in the clear | Until the note is cleared or its window closes. Not sealed on purpose: a note holds no credential, and the badge must come back at login before any keystore answers |
 | `~/.reminal/restore/quarantine/` | Saved sessions that could not be opened (their key was gone, or the file was damaged), with a note saying why | 7 days, then removed; `reminal doctor` mentions them |
 
 Where the key lives:
@@ -306,6 +307,19 @@ pointed somewhere other than the user's real home never touches the OS keystore 
 all, not even to read, so a test can never reach the person's own keychain.
 `REMINAL_KEYSTORE=file` keeps a new key out of the OS keystore; a key already kept
 there is still used.
+
+The key `atrest.json` names is the one every running session and the daemon
+save with. If its store loses it (the key file deleted, a keychain entry removed)
+while they run, that is damage, not a new key: nothing sealed under it is treated
+as gone, saving pauses rather than minting a replacement, any process that still
+holds the key in memory writes it back at its next save (every fifteen seconds for
+a session; not instantly), and only if nothing has replaced it meanwhile, and
+`reminal doctor` says so plainly (`reminal doctor --repair-key` asks a running session for the key and
+puts it back). Only a key `atrest.json` does not name counts as gone. The keystore is the authority
+over `atrest.json`: if the store holds a different key under reminal's name (a login
+keychain restored from an older backup, say), that key becomes current and is never
+written over, and everything sealed under the previous key is quarantined, not lost
+for seven days, and opens again if the previous key is put back.
 
 Every keystore call has a 3-second limit; one that does not answer in time is
 treated as locked. A locked keystore never stops a session from starting and never

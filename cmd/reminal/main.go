@@ -189,6 +189,13 @@ func main() {
 			}
 			return
 		case "doctor":
+			if len(os.Args) > 2 && os.Args[2] == "--repair-key" {
+				if err := client.RepairAtRestKey(); err != nil {
+					fmt.Fprintf(os.Stderr, "error: %v\n", err)
+					os.Exit(1)
+				}
+				return
+			}
 			if err := client.Doctor(version); err != nil {
 				os.Exit(1)
 			}

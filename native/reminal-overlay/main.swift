@@ -1129,7 +1129,17 @@ final class Overlay {
             return
         }
         missingSince = 0
-        if ownerPID == 0 { ownerPID = info.ownerPID }
+        if ownerPID == 0 {
+            ownerPID = info.ownerPID
+            emit(["event": "attached", "window": Int(windowID), "pid": info.ownerPID, "title": info.title])
+        } else if info.ownerPID != 0 && info.ownerPID != ownerPID {
+            // The id now belongs to another program: a different window.
+            emit(["event": "closed", "window": Int(windowID)])
+            comments.removeAll()
+            wantsFast = false
+            onClosed?(windowID)
+            return
+        }
         // A minimised or hidden window is NOT closed: keep the list, just hide.
         if !info.onscreen {
             // Minimised, app hidden, or another Space: fade out and, crucially,
@@ -1447,19 +1457,20 @@ func handle(_ line: String) {
         // A stored badge coming back after a restart names the owner it had.
         // The id now belonging to another program is another window: refuse,
         // so its notes are dropped rather than stuck on a stranger's window.
-        if let want = obj["pid"] as? Int, want != 0, let have = info?.ownerPID, have != 0, have != want {
+        let want = obj["pid"] as? Int ?? 0
+        if want != 0, let have = info?.ownerPID, have != 0, have != want {
             emitLine(["event": "closed", "window": w])
             return
-        }
-        if info == nil {
-            // Not in the window list right now. Attach anyway: the panel's
-            // own rule decides, after closedAfter, whether it is gone.
         }
         let corner = (obj["corner"] as? String).flatMap(Corner.init(rawValue:)) ?? .tr
         let placement = (obj["placement"] as? String).flatMap(Placement.init(rawValue:)) ?? .float
         let o = mgr.attach(wid, corner: corner, placement: placement)
+        // The owner the daemon remembers is kept even when the window is not
+        // listed right now: if the id comes back under another program, that
+        // is another window and reposition says closed.
+        if want != 0 { o.ownerPID = want }
         if let i = info {
-            o.ownerPID = i.ownerPID
+            if o.ownerPID == 0 { o.ownerPID = i.ownerPID }
             emitLine(["event": "attached", "window": w, "pid": i.ownerPID, "title": i.title])
         }
         return
@@ -1574,11 +1585,27 @@ if args.count >= 2, args[1] == "demo" {
     }
 }
 
-// stdin drives every badge; EOF is not fatal, so a tty run stays up.
+// stdin drives every badge. Started by the daemon (REMINAL_OVERLAY_PARENT),
+// the process ends with it: on stdin EOF, and when that pid is gone, so an
+// upgrade or a crash never leaves an orphan badge no daemon can reach. A tty
+// run (demos) stays up past EOF.
+let parentPID = Int32(ProcessInfo.processInfo.environment["REMINAL_OVERLAY_PARENT"] ?? "") ?? 0
 DispatchQueue.global(qos: .utility).async {
     while let line = readLine(strippingNewline: true) {
         DispatchQueue.main.async { handle(line) }
     }
+    if parentPID != 0 {
+        DispatchQueue.main.async { OverlayManager.shared.closeAll(); NSApp.terminate(nil) }
+    }
+}
+if parentPID != 0 {
+    let t = Timer(timeInterval: 2, repeats: true) { _ in
+        if kill(parentPID, 0) != 0 && errno == ESRCH {
+            OverlayManager.shared.closeAll()
+            NSApp.terminate(nil)
+        }
+    }
+    RunLoop.main.add(t, forMode: .common)
 }
 
 app.run()

@@ -27,8 +27,8 @@ package main
 // here is a thin client. The in-process path is kept only as a fallback for a
 // machine with no daemon running.
 //
-// Notes are still ephemeral either way: they live exactly as long as their
-// window, so there is nothing to persist and the CGWindowID is a fine key.
+// The daemon keeps the notes on disk, so they outlive it; a note lives until
+// its window really closes or someone clears it.
 
 import (
 	"bufio"

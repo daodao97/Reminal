@@ -10,6 +10,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -178,8 +179,32 @@ func watchBinaryAndExit(stop <-chan struct{}) {
 				// ourselves before exiting.
 				respawnDaemonAfterUpgrade(exe)
 				clearDaemonPID()
+				runDaemonExitHooks()
 				os.Exit(0)
 			}
 		}
+	}
+}
+
+// Exit hooks: work that must happen before the daemon's os.Exit on an
+// upgrade — asking the badge helper to quit, so the next daemon's helper is
+// the only one on screen.
+var (
+	exitHooksMu sync.Mutex
+	exitHooks   []func()
+)
+
+func onDaemonExit(f func()) {
+	exitHooksMu.Lock()
+	exitHooks = append(exitHooks, f)
+	exitHooksMu.Unlock()
+}
+
+func runDaemonExitHooks() {
+	exitHooksMu.Lock()
+	hooks := append([]func(){}, exitHooks...)
+	exitHooksMu.Unlock()
+	for _, f := range hooks {
+		f()
 	}
 }

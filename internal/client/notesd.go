@@ -39,6 +39,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reminal/internal/atomicfile"
+	"reminal/internal/atrest"
 	"strconv"
 	"strings"
 	"sync"
@@ -111,11 +112,25 @@ type notesDaemon struct {
 	replies  []map[string]any
 	replySeq uint64
 	path     string // the store on disk; "" keeps it in memory (tests)
+	// saveMu serialises snapshot-and-write: two saves racing could land on
+	// disk in reverse order and leave the file behind memory.
+	saveMu sync.Mutex
+	// spawnMu serialises helper spawns, so a respawn and an add never start
+	// two helpers for one daemon.
+	spawnMu sync.Mutex
 	// helperStarts counts helper spawns: a second one is a respawn, whose
 	// badges must be replayed.
 	helperStarts int
 	quitting     bool
+	// closedAt marks a window the helper reported closed. Its notes are kept,
+	// hidden, for closedGrace, in case the verdict was a lock screen or a
+	// Space switch the helper could not tell from a close; then they go.
+	closedAt map[uint32]time.Time
 }
+
+// closedGrace is how long a closed window's notes are kept before they are
+// dropped for good.
+const closedGrace = 60 * time.Second
 
 // windowOwner is how a stored window is recognised again after a restart:
 // CGWindowIDs are reused across logins, so an id alone is not enough.
@@ -126,9 +141,10 @@ type windowOwner struct {
 
 // notesFile is the on-disk shape.
 type notesFile struct {
-	V      int                     `json:"v"`
-	Notes  map[string][]windowNote `json:"notes"`
-	Owners map[string]windowOwner  `json:"owners,omitempty"`
+	V        int                     `json:"v"`
+	Notes    map[string][]windowNote `json:"notes"`
+	Owners   map[string]windowOwner  `json:"owners,omitempty"`
+	ClosedAt map[string]time.Time    `json:"closed_at,omitempty"`
 }
 
 // notesStorePath is ~/.reminal/notes.json.
@@ -140,8 +156,9 @@ func notesStorePath() (string, error) {
 	return filepath.Join(dir, "notes.json"), nil
 }
 
-// load reads the store from disk. A missing or unreadable file is an empty
-// store; nothing is ever lost by failing to read.
+// load reads the store from disk. A missing file is an empty store; an
+// unreadable one is set aside (notes.json.corrupt-<time>) rather than written
+// over, so nothing is lost by failing to read.
 func (d *notesDaemon) load() {
 	if d.path == "" {
 		return
@@ -152,6 +169,7 @@ func (d *notesDaemon) load() {
 	}
 	var f notesFile
 	if json.Unmarshal(b, &f) != nil {
+		_ = os.Rename(d.path, d.path+".corrupt-"+time.Now().UTC().Format("20060102T150405Z"))
 		return
 	}
 	d.mu.Lock()
@@ -161,6 +179,12 @@ func (d *notesDaemon) load() {
 		if _, err := fmt.Sscanf(k, "%d", &win); err != nil || len(list) == 0 {
 			continue
 		}
+		if t, closed := f.ClosedAt[k]; closed {
+			if time.Since(t) > closedGrace {
+				continue // closed for good before the restart
+			}
+			d.closedAt[win] = t
+		}
 		d.notes[win] = list
 		if o, ok := f.Owners[k]; ok {
 			d.owners[win] = o
@@ -168,18 +192,27 @@ func (d *notesDaemon) load() {
 	}
 }
 
-// save writes the store. Called under no lock; takes a snapshot itself.
+// save writes the store: snapshot and write under one lock, so two saves
+// can never land on disk out of order.
 func (d *notesDaemon) save() {
 	if d.path == "" {
 		return
 	}
+	if err := atrest.CheckWritable(); err != nil {
+		return // a test binary with the real HOME writes nothing here
+	}
+	d.saveMu.Lock()
+	defer d.saveMu.Unlock()
 	d.mu.Lock()
-	f := notesFile{V: 1, Notes: map[string][]windowNote{}, Owners: map[string]windowOwner{}}
+	f := notesFile{V: 1, Notes: map[string][]windowNote{}, Owners: map[string]windowOwner{}, ClosedAt: map[string]time.Time{}}
 	for win, list := range d.notes {
 		k := fmt.Sprintf("%d", win)
 		f.Notes[k] = append([]windowNote(nil), list...)
 		if o, ok := d.owners[win]; ok {
 			f.Owners[k] = o
+		}
+		if t, ok := d.closedAt[win]; ok {
+			f.ClosedAt[k] = t
 		}
 	}
 	d.mu.Unlock()
@@ -191,6 +224,23 @@ func (d *notesDaemon) save() {
 		return
 	}
 	_ = atomicfile.Write(d.path, b, 0o600)
+}
+
+// sweepClosed drops the notes of windows closed longer than closedGrace ago.
+// Returns whether anything changed.
+func (d *notesDaemon) sweepClosed() bool {
+	d.mu.Lock()
+	changed := false
+	for win, t := range d.closedAt {
+		if time.Since(t) > closedGrace {
+			delete(d.closedAt, win)
+			delete(d.notes, win)
+			delete(d.owners, win)
+			changed = true
+		}
+	}
+	d.mu.Unlock()
+	return changed
 }
 
 // NotesCount is how many notes the store on disk holds, and where, for doctor.
@@ -226,6 +276,7 @@ func newNotesDaemon() *notesDaemon {
 		notes:    map[uint32][]windowNote{},
 		owners:   map[uint32]windowOwner{},
 		attached: map[uint32]bool{},
+		closedAt: map[uint32]time.Time{},
 	}
 }
 
@@ -242,6 +293,22 @@ func ServeNotes(stop <-chan struct{}) {
 	d.load()
 	d.publish()
 	d.replayBadges()
+	onDaemonExit(d.shutdown) // an upgrade's os.Exit must not orphan the helper
+	go func() {
+		t := time.NewTicker(10 * time.Second)
+		defer t.Stop()
+		for {
+			select {
+			case <-stop:
+				return
+			case <-t.C:
+				if d.sweepClosed() {
+					d.save()
+					d.publish()
+				}
+			}
+		}
+	}()
 	serveNotesOn(d, stop)
 }
 
@@ -258,6 +325,9 @@ func (d *notesDaemon) replayBadges() {
 	}
 	var items []item
 	for win, list := range d.notes {
+		if _, closed := d.closedAt[win]; closed {
+			continue
+		}
 		items = append(items, item{win, d.owners[win], append([]windowNote(nil), list...)})
 	}
 	d.mu.Unlock()
@@ -266,9 +336,8 @@ func (d *notesDaemon) replayBadges() {
 			return // no helper here (Linux, Windows, a broken install): the store still serves viewers
 		}
 		for _, n := range it.notes {
-			if n.Folded {
-				continue // beyond what the badge shows; still in the store and on viewers
-			}
+			// Folded ones too: the badge folds them again (idempotent), which
+			// is what brings its "+N" count back.
 			_ = d.send(it.win, map[string]any{
 				"cmd": "upsert", "id": n.ID, "status": n.Status,
 				"title": n.Title, "body": n.Body, "author": n.Author,
@@ -372,10 +441,11 @@ func (d *notesDaemon) snapshot() map[string][]windowNote {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	out := make(map[string][]windowNote, len(d.notes))
-	for w, list := range d.notes {
-		if len(list) > 0 {
-			out[strconv.FormatUint(uint64(w), 10)] = append([]windowNote(nil), list...)
+	for win, list := range d.notes {
+		if _, closed := d.closedAt[win]; closed {
+			continue // kept for a grace period, but gone as far as anyone can see
 		}
+		out[fmt.Sprintf("%d", win)] = append([]windowNote(nil), list...)
 	}
 	return out
 }
@@ -389,6 +459,7 @@ func (d *notesDaemon) add(win uint32, n windowNote) (string, error) {
 		d.mu.Unlock()
 		return "", fmt.Errorf("too many badged windows (%d)", maxNoteWindows)
 	}
+	delete(d.closedAt, win) // a note arriving means the window is alive again
 	list := d.notes[win]
 	updated := false
 	for i := range list {
@@ -485,6 +556,7 @@ func (d *notesDaemon) detachBadge(win uint32) {
 // phone now moves the dot on screen — the direction that could never work while
 // each publisher held its own copy.
 func (d *notesDaemon) applyAct(win uint32, id, action string) {
+	defer d.save()
 	switch action {
 	case "dismiss":
 		d.remove(win, id)
@@ -580,8 +652,10 @@ func overlayBinPath() (string, error) {
 }
 
 func (d *notesDaemon) ensureHelper() (*overlayProc, error) {
+	d.spawnMu.Lock()
+	defer d.spawnMu.Unlock()
 	d.mu.Lock()
-	if d.helper != nil && d.helper.cmd.ProcessState == nil {
+	if d.helper != nil { // watchHelper clears it the moment the process ends
 		h := d.helper
 		d.mu.Unlock()
 		return h, nil
@@ -593,8 +667,11 @@ func (d *notesDaemon) ensureHelper() (*overlayProc, error) {
 		return nil, err
 	}
 	// No argv: the helper's default mode is a stdin-driven multiplexer. It shows
-	// nothing until a window is attached and a note arrives.
+	// nothing until a window is attached and a note arrives. Told who its
+	// daemon is, it exits when that daemon goes (stdin EOF, or the pid gone),
+	// so an upgrade never leaves an orphan badge the new daemon cannot reach.
 	cmd := exec.Command(bin)
+	cmd.Env = append(os.Environ(), "REMINAL_OVERLAY_PARENT="+strconv.Itoa(os.Getpid()))
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return nil, err
@@ -738,12 +815,15 @@ func (d *notesDaemon) readBadgeEvents(r io.ReadCloser) {
 				d.save()
 			case "closed":
 				// A window that really closes (gone from the window list for
-				// seconds, by the helper's rule) takes its notes with it — the
-				// badge is gone and nothing could act on them any more.
+				// seconds, by the helper's rule) takes its notes with it. They
+				// are hidden at once and kept for closedGrace, in case the
+				// verdict was a lock screen or a user switch the helper could
+				// not tell from a close; a note that arrives again revives them.
 				d.mu.Lock()
 				delete(d.attached, win)
-				delete(d.notes, win)
-				delete(d.owners, win)
+				if _, has := d.notes[win]; has {
+					d.closedAt[win] = time.Now()
+				}
 				d.mu.Unlock()
 				d.save()
 				d.publish()

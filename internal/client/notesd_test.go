@@ -8,11 +8,13 @@ package client
 // called the store directly would have passed against the broken design too.
 
 import (
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -333,5 +335,97 @@ func TestNotesWithoutStoreStayInMemory(t *testing.T) {
 	}
 	if len(d.snapshot()["1"]) != 1 {
 		t.Fatal("note lost")
+	}
+}
+
+// Reviewer's case: many clients adding at once; the file must never end up
+// behind memory (two saves landing in reverse order).
+func TestNotesConcurrentSavesNeverLagMemory(t *testing.T) {
+	dir, err := os.MkdirTemp("", "rn")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	t.Setenv("REMINAL_OVERLAY_BIN", filepath.Join(dir, "does-not-exist"))
+	for iter := 0; iter < 20; iter++ {
+		d := newNotesDaemon()
+		d.path = filepath.Join(dir, fmt.Sprintf("notes-%d.json", iter))
+		var wg sync.WaitGroup
+		for i := 0; i < 48; i++ {
+			wg.Add(1)
+			go func(i int) {
+				defer wg.Done()
+				_, _ = d.add(uint32(1+i%4), windowNote{ID: fmt.Sprintf("n%d", i), Status: "info", Title: "t"})
+			}(i)
+		}
+		wg.Wait()
+		inMem := 0
+		for _, l := range d.snapshot() {
+			inMem += len(l)
+		}
+		d2 := newNotesDaemon()
+		d2.path = d.path
+		d2.load()
+		onDisk := 0
+		for _, l := range d2.snapshot() {
+			onDisk += len(l)
+		}
+		if onDisk != inMem {
+			t.Fatalf("iteration %d: %d in memory, %d on disk", iter, inMem, onDisk)
+		}
+	}
+}
+
+// A closed window's notes are hidden at once, kept for the grace period, and
+// revived by a new note; after the grace they are gone, across a restart too.
+func TestNotesClosedGrace(t *testing.T) {
+	dir, _ := os.MkdirTemp("", "rn")
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	t.Setenv("REMINAL_OVERLAY_BIN", filepath.Join(dir, "does-not-exist"))
+	d := newNotesDaemon()
+	d.path = filepath.Join(dir, "notes.json")
+	_, _ = d.add(5, windowNote{ID: "a", Status: "info", Title: "t"})
+	d.readBadgeEvents(io.NopCloser(strings.NewReader(`{"event":"closed","window":5}` + "\n")))
+	if len(d.snapshot()) != 0 {
+		t.Fatal("closed window still visible")
+	}
+	if _, kept := d.notes[5]; !kept {
+		t.Fatal("notes dropped at once instead of kept for the grace period")
+	}
+	_, _ = d.add(5, windowNote{ID: "b", Status: "info", Title: "back"})
+	if len(d.snapshot()["5"]) != 2 {
+		t.Fatalf("revived window should show both notes: %+v", d.snapshot())
+	}
+	d.readBadgeEvents(io.NopCloser(strings.NewReader(`{"event":"closed","window":5}` + "\n")))
+	d.mu.Lock()
+	d.closedAt[5] = time.Now().Add(-2 * closedGrace)
+	d.mu.Unlock()
+	d.save()
+	d2 := newNotesDaemon()
+	d2.path = d.path
+	d2.load()
+	if _, kept := d2.notes[5]; kept {
+		t.Fatal("notes of a window closed past the grace came back after a restart")
+	}
+	if !d.sweepClosed() || len(d.notes) != 0 {
+		t.Fatal("sweep did not drop the closed window")
+	}
+}
+
+// A damaged store is set aside, never written over.
+func TestNotesCorruptStoreSetAside(t *testing.T) {
+	dir, _ := os.MkdirTemp("", "rn")
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	p := filepath.Join(dir, "notes.json")
+	_ = os.WriteFile(p, []byte("{not json"), 0o600)
+	d := newNotesDaemon()
+	d.path = p
+	d.load()
+	m, _ := filepath.Glob(p + ".corrupt-*")
+	if len(m) != 1 {
+		t.Fatalf("corrupt store not set aside: %v", m)
+	}
+	if _, err := os.Stat(p); err == nil {
+		t.Fatal("corrupt file still in place")
 	}
 }

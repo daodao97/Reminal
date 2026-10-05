@@ -89,9 +89,14 @@ func (a *Agent) saveRestore() {
 			r.Fg, r.FgArgs, r.Conv = prev.Fg, prev.FgArgs, prev.Conv
 		}
 	}
-	if session.WriteRestore(r) != nil {
+	if err := session.WriteRestore(r); err != nil {
+		if errors.Is(err, atrest.ErrCurrentKeyMissing) && !a.saveStalled {
+			a.saveStalled = true
+			agentNotify("  reminal: this session is not being saved — the key its saved details are protected with is missing; run `reminal doctor --repair-key`\n")
+		}
 		return // the keystore will not give the key up yet: try next tick
 	}
+	a.saveStalled = false
 	if seq := a.buf.LatestSeq(); seq != a.restoreSeq {
 		if p, err := session.RestoreScrollbackPath(a.sessionID); err == nil {
 			id := a.sessionID

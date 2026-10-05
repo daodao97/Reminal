@@ -84,6 +84,9 @@ func OpenScrollback(id string, b []byte) ([]byte, error) {
 }
 
 func writeFileAtomic(p string, data []byte) error {
+	if err := atrest.CheckWritable(); err != nil {
+		return err // a test binary with the real HOME writes nothing here
+	}
 	if err := os.MkdirAll(filepath.Dir(p), 0o700); err != nil {
 		return err
 	}
@@ -99,6 +102,9 @@ func lockSession(id string) (func(), error) {
 	dir, err := restoreDir()
 	if err != nil {
 		return nil, err
+	}
+	if err := atrest.CheckWritable(); err != nil {
+		return nil, err // a test binary with the real HOME: not even the directory
 	}
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, err
