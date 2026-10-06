@@ -53,7 +53,10 @@ done
 
 # The hero terminal prints a version, so it has to be the real one. Hardcoding
 # it meant the site advertised v3.0.3 while people were installing v3.0.6.
-VERSION="$(git -C .. describe --tags --abbrev=0 2>/dev/null | sed 's/^v//')"
+# The newest release tag (vX.Y.Z) by version, not the nearest tag: a checkout
+# can carry other tags, and the nearest release in its history can be an
+# older one.
+VERSION="$(git -C .. tag --list 'v[0-9]*' --sort=-v:refname 2>/dev/null | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -1 | sed 's/^v//')"
 if [ -n "$VERSION" ]; then
   printf '%s' "$VERSION" > "$OUT/version.txt"
   echo "  version  $VERSION"
