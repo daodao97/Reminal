@@ -1416,13 +1416,27 @@ func (a *Agent) noteInput(data []byte) {
 }
 
 // markInput stamps when a person last typed, for the record; throttled to
-// disk like markActivity.
+// disk like markActivity — except the first input after a pause, written at
+// once: whatever reads the record (a list of who is at which session) hears
+// that someone came back now, not at the next flush.
 func (a *Agent) markInput() {
+	now := time.Now()
 	a.metaMu.Lock()
-	a.lastInput = time.Now()
+	back := now.Sub(a.lastInput) >= inputFlushAfter
+	a.lastInput = now
 	a.metaMu.Unlock()
 	a.metaDirty.Store(true)
+	if back {
+		select {
+		case a.metaKick <- struct{}{}:
+		default:
+		}
+	}
 }
+
+// inputFlushAfter is the pause after which input is written to the record at
+// once (markInput).
+const inputFlushAfter = 2 * time.Second
 
 // feedTitle drives a tiny state machine over PTY output to capture the latest
 // terminal title the shell sets via OSC 0 (icon+title) or OSC 2 (title) —
