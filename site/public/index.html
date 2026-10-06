@@ -1886,9 +1886,10 @@ if (FEATURES.liveTerminal) {
   const term = document.getElementById("term");
   const replay = document.getElementById("replay");
   const SESSION = "7F3A2C9E", PIN = "418902", HOST = "https://live.reminal.app";
-  // Written by build.sh from the latest git tag. The literal below is only a
-  // fallback for a stale or failed fetch, never the source of truth.
-  let VERSION = "3.0.6";
+  // Written by build.sh from the newest release tag. There is deliberately no
+  // fallback number (a literal only ever goes stale): if the fetch fails, the
+  // banner leaves the version out rather than print an old one.
+  let VERSION = "";
   fetch("/assets/version.txt").then(r => r.ok ? r.text() : null)
     .then(v => { if (v && /^\d+\.\d+\.\d+$/.test(v.trim())) VERSION = v.trim(); })
     .catch(() => {});
@@ -1899,7 +1900,7 @@ if (FEATURES.liveTerminal) {
     { type: "reminal", speed: 62 },
     { wait: 380 },
     { line: "" },
-    { line: () => `  reminal — remote terminal · v${VERSION} · <span class="g">[HOST]</span> ${SESSION}` },
+    { line: () => `  reminal — remote terminal · ${VERSION ? `v${VERSION} · ` : ""}<span class="g">[HOST]</span> ${SESSION}` },
     { line: "" },
     { line: `  Session:  <span class="b">${SESSION}</span>` },
     { line: `  PIN:      <span class="b">${PIN}</span>` },
