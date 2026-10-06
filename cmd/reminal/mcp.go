@@ -60,33 +60,23 @@ const (
 )
 
 // mcpInstructions is handed to the client on initialize and is what the model
-// actually reads. It matters as much as the schemas: the difference between a
-// badge used well and a badge that becomes noise is almost entirely here.
-const mcpInstructions = `reminal is two things for an agent: notes on a window, and a view of every reminal this device owns.
+// actually reads before it has loaded any tool. Keep it an index: what each
+// part is for and the few rules that must be known before a tool is picked.
+// The detail lives in each tool's description, read when the tool is loaded.
+// It must stay within 2048 characters — Claude Code keeps only that much of a
+// server's instructions and of each tool description, and everything past it
+// never reaches the model (mcpTextBudget, TestMCPTextFitsBudget). Some
+// harnesses show less: Qwen only the first ~157 characters of a tool's
+// description until the model searches for it, so each description opens
+// with what the tool is for; pi and Antigravity do not show the instructions
+// at all, so nothing a tool needs to be used safely may live only here.
+const mcpInstructions = `reminal is a view of every terminal session ("reminal") this device owns, and notes you can pin onto a window.
 
-Sessions — every machine this device owns (this box and any you have owner-connected to):
-  1. list_sessions to see machines and their live terminals: id, name, path (cwd), title, viewers, idle time.
-     Laptops also report battery: percent, state, and minutes_to_empty OR minutes_to_full (check which — they mean opposite things). No battery field = desktop or server. A stale battery with as_of is the last reading before the machine went dark, not its charge now. Check it before starting long work somewhere.
-  2. search_sessions with a regex to find which session mentioned something. It matches name/path/title/id on every machine, and live terminal scrollback on this machine (and on remotes that have been upgraded).
-  3. read_transcript to pull one session's current scrollback as plain text (ANSI stripped; long buffers return the newest tail).
-  4. send_keys to type into a session. Owned sessions need only the id; any other reminal needs session id + PIN (or a join URL). Set enter=true to press Return after the text.
-     ALWAYS confirm the text was accepted: read_transcript afterwards and check it was submitted, not left sitting in the input box waiting for a Return. A busy agent or a slow redraw can swallow the Return. If the text is still in the input box, press Return with send_keys keys="" enter=true, then read again. Never report a message as sent until you have seen it land.
-If the user just arrived from another reminal, list or search, then read that transcript before asking them to recap. To run a command in a reminal, send_keys then read_transcript.
+Sessions: list_sessions finds the machines and their live sessions (a laptop reports its battery — look before starting long work there). search_sessions finds which session mentioned something. read_transcript reads one; send_keys types into one — then read_transcript to check the text was submitted, not left in the input box. If the user just arrived from another reminal, find and read that transcript before asking them to recap.
 
-Problems with reminal itself — a tool that errors or misleads, a transcript that is wrong, keys that did not land, a note that did not show — go to report_issue. It records the report for the person running reminal (a file on this machine) and sends nothing anywhere. Do NOT file such problems through your harness's own feedback or bug-report tools: those reach the harness's maker, who cannot fix reminal, and never reach the person who can.
+Notes: a small badge ON a window, for something about that window — not for conversation. list_windows, then add_note; status attention only when you are blocked on the user. read_replies tells you when they hand it back.
 
-Notes — a small floating badge ON a window, not text buried in a terminal they may not be looking at. Use when what you want to say is ABOUT a particular window. Do not use notes for ordinary conversation.
-
-Workflow:
-  1. list_windows to find the window your note belongs to.
-  2. add_note with a status:
-       attention — you are BLOCKED and need the user to act. Red, and the only status that pulses. Use sparingly; this interrupts.
-       working   — you are mid-task on this. Ambient progress, no action wanted.
-       info      — worth seeing, no action needed.
-       done      — finished, nothing owed.
-  3. If you posted 'attention', call read_replies later. A 'handback' reply means the user pressed Done and it is your turn again — pick the work back up.
-
-Notes are ephemeral: they live only as long as the window, and you will see a 'closed' reply when it goes away. Keep titles to a few words — the badge is a glance surface, and the body carries detail. Only three notes are visible before the list scrolls, so remove notes you no longer need instead of letting them pile up.`
+Problems with reminal itself — a tool that errors or misleads, keys that did not land, a note that did not show — go to report_issue, not your harness's own feedback tool: that reaches the harness's maker, never the person who can fix reminal.`
 
 // ---------------------------------------------------------------- overlay children
 
@@ -575,7 +565,9 @@ func mcpToolList() []map[string]any {
 				"(or a join URL). Newlines become Enter. Set enter=true to press Return. " +
 				"Does not return command output — follow with read_transcript if you own the session. " +
 				"Always confirm with read_transcript that the text was accepted and is not still sitting in " +
-				"the input box waiting for a Return; if it is, send keys=\"\" with enter=true, and check again.",
+				"the input box waiting for a Return — a busy agent or a slow redraw can swallow it; if it is, send " +
+				"keys=\"\" with enter=true, and check again. Never report text as sent until you have seen it land. " +
+				"To run a command in a session: send_keys, then read_transcript.",
 			"inputSchema": obj(map[string]any{
 				"session": str("Session id, or a join URL like https://live.reminal.app/?s=ID#p=PIN."),
 				"keys":    str("Characters to type. Use \\n for Enter. Ctrl-C is the U+0003 character."),
@@ -597,7 +589,14 @@ func mcpToolList() []map[string]any {
 		},
 		{
 			"name": "add_note",
-			"description": "Attach a note to a window, shown as a small floating badge on that window. " +
+			"description": "Attach a note to a window, shown as a small floating badge on that window — for something " +
+				"ABOUT that window, not ordinary conversation. Get window_id from list_windows first. " +
+				"Status: attention = you are BLOCKED and need the user to act (red, the only one that pulses — it " +
+				"interrupts, so use it sparingly, then call read_replies later); working = you are mid-task on it; " +
+				"info = worth seeing, no action needed; done = finished, nothing owed. " +
+				"Keep the title to a few words — the badge is a glance surface, the body carries detail. Only three " +
+				"notes show before the list scrolls, so remove ones you no longer need. Notes live only as long as " +
+				"the window; read_replies says 'closed' when it goes. " +
 				"Reusing an existing note_id updates that note in place — use that to move a note from " +
 				"'working' to 'done' rather than adding a second one. " +
 				"When the note refers to something on the screen, be precise about where it is — the page " +
@@ -635,7 +634,7 @@ func mcpToolList() []map[string]any {
 		{
 			"name": "read_replies",
 			"description": "Read what the user did with your notes since the last call. 'handback' means they " +
-				"pressed Done and it is your turn again; 'dismiss' means they cleared it; 'closed' means the " +
+				"pressed Done and it is your turn again — pick the work back up; 'dismiss' means they cleared it; 'closed' means the " +
 				"window went away and its list is gone. Replies are returned once, then forgotten.",
 			"inputSchema": obj(map[string]any{
 				"window_id": map[string]any{"type": "integer", "description": "Optional: only this window's replies."},
