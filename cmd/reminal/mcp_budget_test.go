@@ -12,16 +12,25 @@ import (
 
 // Text past mcpTextBudget is cut off by Claude Code before the model sees it,
 // silently: the server's instructions lost their last 60% that way, rules
-// and all. Everything an agent is meant to read has to fit. Codex has a limit
-// of its own: a tool whose input schema is over 5000 bytes (compact JSON)
-// loses every parameter description.
-const mcpSchemaBudget = 4500 // Codex's 5000, with room
+// and all. Codex has a limit of its own: a tool whose input schema is over
+// 5000 bytes (compact JSON) loses every parameter description.
+const (
+	mcpTextBudget   = 2048
+	mcpSchemaBudget = 4500 // Codex's 5000, with room
+)
 
 func TestMCPTextFitsBudget(t *testing.T) {
 	if n := utf8.RuneCountInString(mcpInstructions); n > mcpTextBudget {
 		t.Errorf("mcpInstructions is %d characters; only the first %d reach the model", n, mcpTextBudget)
 	}
-	for _, tool := range mcpToolList() {
+	checkToolsFitBudget(t, mcpToolList())
+}
+
+// checkToolsFitBudget holds every tool description, parameter description
+// and input schema to what a model is actually shown.
+func checkToolsFitBudget(t *testing.T, tools []map[string]any) {
+	t.Helper()
+	for _, tool := range tools {
 		name, _ := tool["name"].(string)
 		desc, _ := tool["description"].(string)
 		if n := utf8.RuneCountInString(desc); n > mcpTextBudget {
@@ -45,7 +54,7 @@ func TestMCPTextFitsBudget(t *testing.T) {
 // The rules that left the instructions for a tool's own description must
 // still be somewhere the model reads.
 func TestMCPRulesHaveAHome(t *testing.T) {
-	desc := map[string]string{}
+	desc := map[string]string{"instructions": mcpInstructions}
 	for _, tool := range mcpToolList() {
 		name, _ := tool["name"].(string)
 		desc[name], _ = tool["description"].(string)
@@ -60,11 +69,7 @@ func TestMCPRulesHaveAHome(t *testing.T) {
 		{"read_replies", "pick the work back up"},
 		{"list_sessions", "minutes_to_empty OR minutes_to_full"},
 	} {
-		in := desc[c.where]
-		if c.where == "instructions" {
-			in = mcpInstructions
-		}
-		if !strings.Contains(in, c.text) {
+		if !strings.Contains(desc[c.where], c.text) {
 			t.Errorf("%s no longer says %q", c.where, c.text)
 		}
 	}

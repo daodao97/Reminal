@@ -63,15 +63,13 @@ const (
 // actually reads before it has loaded any tool. Keep it an index: what each
 // part is for and the few rules that must be known before a tool is picked.
 // The detail lives in each tool's description, read when the tool is loaded.
-// It must stay within mcpTextBudget — Claude Code keeps only the first 2048
-// characters of a server's instructions and of each tool description, and
-// everything past that never reaches the model (TestMCPTextFitsBudget). Some
+// It must stay within 2048 characters — Claude Code keeps only that much of a
+// server's instructions and of each tool description, and everything past it
+// never reaches the model (mcpTextBudget, TestMCPTextFitsBudget). Some
 // harnesses show less: Qwen only the first ~157 characters of a tool's
 // description until the model searches for it, so each description opens
 // with what the tool is for; pi and Antigravity do not show the instructions
 // at all, so nothing a tool needs to be used safely may live only here.
-const mcpTextBudget = 2048
-
 const mcpInstructions = `reminal is a view of every terminal session ("reminal") this device owns, and notes you can pin onto a window.
 
 Sessions: list_sessions finds the machines and their live sessions (a laptop reports its battery — look before starting long work there). search_sessions finds which session mentioned something. read_transcript reads one; send_keys types into one — then read_transcript to check the text was submitted, not left in the input box. If the user just arrived from another reminal, find and read that transcript before asking them to recap.
