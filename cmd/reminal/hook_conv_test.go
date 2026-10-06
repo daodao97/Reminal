@@ -10,6 +10,7 @@ func TestConvFromPayload(t *testing.T) {
 	cases := map[string]string{
 		`{"session_id":"3f2c9a10-7d4e-4b8a-9c11-0e5d6f7a8b9c","hook_event_name":"Stop"}`: "3f2c9a10-7d4e-4b8a-9c11-0e5d6f7a8b9c",
 		`{"conversation_id":"chat_0123456789"}`:                                          "chat_0123456789",
+		`{"conversationId":"agy_conversation_0042"}`:                                     "agy_conversation_0042",
 		`{"session_id":"x; rm -rf ~"}`:                                                   "",
 		`{"session_id":"$(curl evil)"}`:                                                  "",
 		`{"session_id":"short"}`:                                                         "",
