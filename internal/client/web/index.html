@@ -4470,6 +4470,12 @@
         })) : undefined);
       },
     });
+    // Links a program in the terminal names itself (OSC 8): web addresses
+    // only, opened apart from this page — a javascript: one would run as it.
+    term.options.linkHandler = {
+      allowNonHttpProtocols: false,
+      activate: (ev, uri) => { if (/^https?:\/\//i.test(uri)) window.open(uri, '_blank', 'noopener,noreferrer'); },
+    };
     term.open(document.getElementById('terminal'));
     window.__term = term; // debug/test handle (harmless; used by automated viewer tests)
     // Chrome Android pans the layout to keep xterm's hidden textarea in
@@ -7132,6 +7138,9 @@
         const r = await queryDirectory(base64ToU8(b64URLToStd(b64)), { open: id });
         if (r.open_error) throw new Error(r.open_error);
         if (!r.open_url) throw new Error('this host is too old to open ports from here');
+        // A web address only: the host names it, and a javascript: one opened
+        // in a tab this page made would run as this page.
+        if (!/^https?:\/\//i.test(r.open_url)) throw new Error('the host gave an address that is not a web page');
         // The PIN rides the fragment, which never leaves the browser: the gate
         // fills it in, submits, and drops it from history. A --public port has
         // no gate and simply ignores the fragment.
