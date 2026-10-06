@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"reminal/internal/atomicfile"
@@ -137,10 +138,55 @@ func loadOrCreateKey(path string) (ed25519.PrivateKey, error) {
 		return nil, err
 	}
 	enc := base64.StdEncoding.EncodeToString(priv)
-	if err := atomicWrite(path, []byte(enc+"\n"), 0o600); err != nil {
+	won, err := createKeyFile(path, []byte(enc+"\n"))
+	if err != nil {
 		return nil, err
 	}
+	if !won {
+		// Another process minted it first (keyMintMu is this process's
+		// alone): its key is the machine's, not the one made here.
+		return loadOrCreateKey(path)
+	}
 	return priv, nil
+}
+
+// createKeyFile puts a newly minted key at path only if no key is there yet,
+// and says whether it did. Two processes minting at once — a session's
+// machine channel starting as something else on the machine asks for the
+// key — each held the key it made while the file kept only the last one
+// written: one of them then signed as an identity the machine no longer had,
+// and a device that had pinned the other refused the machine as changed. The
+// key is written whole to a temporary file and linked into place, so the
+// path never holds part of a key and the first to link wins. Where links are
+// not to be had, it is written as before.
+func createKeyFile(path string, data []byte) (bool, error) {
+	f, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".new-*")
+	if err != nil {
+		return false, err
+	}
+	tmp := f.Name()
+	defer os.Remove(tmp)
+	_, err = f.Write(data)
+	if err == nil {
+		err = f.Chmod(0o600)
+	}
+	if err == nil {
+		err = f.Sync()
+	}
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	if err != nil {
+		return false, err
+	}
+	switch err := os.Link(tmp, path); {
+	case err == nil:
+		return true, nil
+	case errors.Is(err, fs.ErrExist):
+		return false, nil
+	default:
+		return true, atomicWrite(path, data, 0o600)
+	}
 }
 
 func machineKeyPath() (string, error) {

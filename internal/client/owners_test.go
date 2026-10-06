@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"unicode/utf8"
 )
@@ -454,5 +455,57 @@ func TestRevokeAndRenameByFullOwnerID(t *testing.T) {
 	dev, _ := loadOrCreateDeviceKey()
 	if ok, _ := IsOwner(dev.Public().(ed25519.PublicKey)); ok {
 		t.Fatal("still an owner after revoke by full id")
+	}
+}
+
+// Another process that mints the machine key first wins: a later mint finds
+// its key in place, does not replace it, and hands back that one — so every
+// process on the machine signs as the one identity its devices pinned.
+func TestMintedKeyNeverReplacesAnother(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "machine_ed25519")
+	won, err := createKeyFile(path, []byte("first\n"))
+	if err != nil || !won {
+		t.Fatalf("first mint: won %v, %v", won, err)
+	}
+	won, err = createKeyFile(path, []byte("second\n"))
+	if err != nil || won {
+		t.Fatalf("second mint: won %v, %v", won, err)
+	}
+	if b, _ := os.ReadFile(path); string(b) != "first\n" {
+		t.Fatalf("the key file holds %q", b)
+	}
+	if left, _ := filepath.Glob(path + ".new-*"); len(left) != 0 {
+		t.Fatalf("temporary files left: %v", left)
+	}
+	if left, _ := filepath.Glob(filepath.Join(filepath.Dir(path), ".machine_ed25519.new-*")); len(left) != 0 {
+		t.Fatalf("temporary files left: %v", left)
+	}
+
+	// Many minting at once, as separate processes would (no lock shared):
+	// one wins, and the file holds exactly what it wrote.
+	path = filepath.Join(t.TempDir(), "machine_ed25519")
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	winners := []string{}
+	for i := range 16 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			data := strings.Repeat(string(rune('a'+i)), 64) + "\n"
+			won, err := createKeyFile(path, []byte(data))
+			if err != nil {
+				t.Error(err)
+			}
+			if won {
+				mu.Lock()
+				winners = append(winners, data)
+				mu.Unlock()
+			}
+		}()
+	}
+	wg.Wait()
+	b, _ := os.ReadFile(path)
+	if len(winners) != 1 || string(b) != winners[0] {
+		t.Fatalf("%d winners; the file holds %q", len(winners), b)
 	}
 }
