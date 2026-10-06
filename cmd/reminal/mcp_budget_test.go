@@ -4,6 +4,7 @@
 package main
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -11,7 +12,11 @@ import (
 
 // Text past mcpTextBudget is cut off by Claude Code before the model sees it,
 // silently: the server's instructions lost their last 60% that way, rules
-// and all. Everything an agent is meant to read has to fit.
+// and all. Everything an agent is meant to read has to fit. Codex has a limit
+// of its own: a tool whose input schema is over 5000 bytes (compact JSON)
+// loses every parameter description.
+const mcpSchemaBudget = 4500 // Codex's 5000, with room
+
 func TestMCPTextFitsBudget(t *testing.T) {
 	if n := utf8.RuneCountInString(mcpInstructions); n > mcpTextBudget {
 		t.Errorf("mcpInstructions is %d characters; only the first %d reach the model", n, mcpTextBudget)
@@ -23,6 +28,9 @@ func TestMCPTextFitsBudget(t *testing.T) {
 			t.Errorf("%s: description is %d characters; only the first %d reach the model", name, n, mcpTextBudget)
 		}
 		schema, _ := tool["inputSchema"].(map[string]any)
+		if b, _ := json.Marshal(schema); len(b) > mcpSchemaBudget {
+			t.Errorf("%s: input schema is %d bytes; over %d Codex drops its parameter descriptions", name, len(b), mcpSchemaBudget)
+		}
 		props, _ := schema["properties"].(map[string]any)
 		for p, v := range props {
 			m, _ := v.(map[string]any)

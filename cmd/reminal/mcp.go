@@ -65,7 +65,11 @@ const (
 // The detail lives in each tool's description, read when the tool is loaded.
 // It must stay within mcpTextBudget — Claude Code keeps only the first 2048
 // characters of a server's instructions and of each tool description, and
-// everything past that never reaches the model (TestMCPTextFitsBudget).
+// everything past that never reaches the model (TestMCPTextFitsBudget). Some
+// harnesses show less: Qwen only the first ~157 characters of a tool's
+// description until the model searches for it, so each description opens
+// with what the tool is for; pi and Antigravity do not show the instructions
+// at all, so nothing a tool needs to be used safely may live only here.
 const mcpTextBudget = 2048
 
 const mcpInstructions = `reminal is a view of every terminal session ("reminal") this device owns, and notes you can pin onto a window.
