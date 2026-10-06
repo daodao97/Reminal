@@ -538,6 +538,9 @@ func (a *Agent) handleWindowInput(encData string) {
 // input channel (onRTCInput) so both roads inject identically — the only
 // difference is that P2P skips the relay hop and the decrypt.
 func (a *Agent) applyInputPayload(plaintext []byte) {
+	// A click or a key in a window is a person at work, as typing in the
+	// terminal is: the session's record says so (session.Active.LastInput).
+	a.markInput()
 	if runtime.GOOS == "darwin" {
 		// Inject in the daemon (sh.reminal) so one grant covers Accessibility +
 		// Automation for every session, terminal or "+". Runs on the serialized

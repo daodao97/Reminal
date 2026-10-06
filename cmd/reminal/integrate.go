@@ -102,6 +102,9 @@ const (
 type hookEvent struct {
 	Event string // the agent's own event name, e.g. "Notification"
 	State string // our state it maps to: "working" | "input" | "done"
+	// Matcher narrows a tool event to the tools named (shapeMatcher only);
+	// empty, the entry carries no matcher at all.
+	Matcher string
 }
 
 // hookSpec is how to install reminal's attention hooks into one agent's config.
@@ -212,7 +215,7 @@ func applyHooks(spec *hookSpec, home, exe string, remove bool) error {
 			kept = append(kept, item)
 		}
 		if !remove {
-			kept = append(kept, hookEntry(spec.shape, exe, ev.State))
+			kept = append(kept, hookEntry(spec.shape, exe, ev))
 		}
 		if len(kept) == 0 {
 			delete(node, ev.Event)
@@ -304,16 +307,20 @@ func ourHookEntry(m map[string]any) bool {
 
 // hookEntry builds one config entry in the agent's expected shape, tagged with
 // hookMarker so we can find and remove exactly our own on a re-run or --remove.
-func hookEntry(shape hookShape, exe, state string) map[string]any {
-	cmd := hookCommand(exe, state)
+func hookEntry(shape hookShape, exe string, ev hookEvent) map[string]any {
+	cmd := hookCommand(exe, ev.State)
 	switch shape {
 	case shapeFlat:
-		return map[string]any{"command": cmd, hookMarker: state}
+		return map[string]any{"command": cmd, hookMarker: ev.State}
 	default: // shapeMatcher
-		return map[string]any{
+		e := map[string]any{
 			"hooks":    []any{map[string]any{"type": "command", "command": cmd}},
-			hookMarker: state,
+			hookMarker: ev.State,
 		}
+		if ev.Matcher != "" {
+			e["matcher"] = ev.Matcher
+		}
+		return e
 	}
 }
 
@@ -336,10 +343,10 @@ func agentTargets() []agentTarget {
 			hooks: &hookSpec{
 				file: ".claude/settings.json", key: []string{"hooks"}, shape: shapeMatcher,
 				events: []hookEvent{
-					{"UserPromptSubmit", "working"}, // a turn begins
-					{"PermissionRequest", "input"},  // blocked on your approval — the precise event
-					{"Notification", "notify"},      // idle (or, on older builds, permission) — split by payload
-					{"Stop", "done"},                // turn finished
+					{Event: "UserPromptSubmit", State: "working"}, // a turn begins
+					{Event: "PermissionRequest", State: "input"},  // blocked on your approval — the precise event
+					{Event: "Notification", State: "notify"},      // idle (or, on older builds, permission) — split by payload
+					{Event: "Stop", State: "done"},                // turn finished
 				},
 			},
 		},
@@ -362,8 +369,8 @@ func agentTargets() []agentTarget {
 			hooks: &hookSpec{
 				file: ".gemini/config/hooks.json", key: []string{mcpServerName}, shape: shapeFlat, cleanTop: true,
 				events: []hookEvent{
-					{"PreInvocation", "working"}, // a turn begins
-					{"Stop", "done"},             // turn finished
+					{Event: "PreInvocation", State: "working"}, // a turn begins
+					{Event: "Stop", State: "done"},             // turn finished
 				},
 			},
 		},
@@ -388,9 +395,9 @@ func agentTargets() []agentTarget {
 			hooks: &hookSpec{
 				file: ".gemini/settings.json", key: []string{"hooks"}, shape: shapeMatcher,
 				events: []hookEvent{
-					{"BeforeAgent", "working"},
-					{"Notification", "input"}, // observability-only; fires on tool-permission
-					{"AfterAgent", "done"},
+					{Event: "BeforeAgent", State: "working"},
+					{Event: "Notification", State: "input"}, // observability-only; fires on tool-permission
+					{Event: "AfterAgent", State: "done"},
 				},
 			},
 		},
@@ -401,9 +408,9 @@ func agentTargets() []agentTarget {
 			hooks: &hookSpec{
 				file: ".qwen/settings.json", key: []string{"hooks"}, shape: shapeMatcher,
 				events: []hookEvent{
-					{"UserPromptSubmit", "working"},
-					{"Notification", "notify"}, // idle_prompt + permission_prompt — split by payload
-					{"Stop", "done"},
+					{Event: "UserPromptSubmit", State: "working"},
+					{Event: "Notification", State: "notify"}, // idle_prompt + permission_prompt — split by payload
+					{Event: "Stop", State: "done"},
 				},
 			},
 		},

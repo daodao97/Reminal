@@ -123,13 +123,16 @@ type Agent struct {
 	restoring bool
 	// restoreAgentSeen: since this restore, the agent has been seen running
 	// again — so a prompt now means it was quit, not that it is still coming
-	// back. Touched only by saveRestore, on the restore loop's goroutine.
+	// back. Touched only by saveRestore, under restoreMu.
 	restoreAgentSeen bool
 	restoreRun       string
 	restoreNote      string
 	restorePlan      func() (run, note string)
 	restoreSeq       uint64
 	stopSignal       atomic.Bool
+	// restoreMu makes saveRestore one at a time, so two saves can never
+	// interleave their reads and writes of the restore state.
+	restoreMu sync.Mutex
 
 	// screen is a headless terminal emulator fed the same plaintext output
 	// that goes to viewers. On a fresh attach we serialize its current state
@@ -1413,13 +1416,27 @@ func (a *Agent) noteInput(data []byte) {
 }
 
 // markInput stamps when a person last typed, for the record; throttled to
-// disk like markActivity.
+// disk like markActivity — except the first input after a pause, written at
+// once: whatever reads the record (a list of who is at which session) hears
+// that someone came back now, not at the next flush.
 func (a *Agent) markInput() {
+	now := time.Now()
 	a.metaMu.Lock()
-	a.lastInput = time.Now()
+	back := now.Sub(a.lastInput) >= inputFlushAfter
+	a.lastInput = now
 	a.metaMu.Unlock()
 	a.metaDirty.Store(true)
+	if back {
+		select {
+		case a.metaKick <- struct{}{}:
+		default:
+		}
+	}
 }
+
+// inputFlushAfter is the pause after which input is written to the record at
+// once (markInput).
+const inputFlushAfter = 2 * time.Second
 
 // feedTitle drives a tiny state machine over PTY output to capture the latest
 // terminal title the shell sets via OSC 0 (icon+title) or OSC 2 (title) —

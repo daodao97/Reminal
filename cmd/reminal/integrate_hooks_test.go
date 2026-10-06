@@ -169,3 +169,41 @@ func TestAntigravityHooksUnderOurName(t *testing.T) {
 		t.Errorf("after --remove: %s", b)
 	}
 }
+
+// An entry is written with a matcher only when its event names one: every
+// event in the table writes none today, exactly as before the table carried
+// matchers, and one that names tools gets them — and is still replaced, not
+// added again, on a re-run.
+func TestHookEntryMatcher(t *testing.T) {
+	exe := "/usr/local/bin/reminal"
+	for _, tg := range agentTargets() {
+		if tg.hooks == nil {
+			continue
+		}
+		for _, ev := range tg.hooks.events {
+			if _, has := hookEntry(tg.hooks.shape, exe, ev)["matcher"]; has {
+				t.Errorf("%s %s: entry carries a matcher", tg.Name, ev.Event)
+			}
+		}
+	}
+
+	home := t.TempDir()
+	spec := &hookSpec{file: "s.json", key: []string{"hooks"}, shape: shapeMatcher,
+		events: []hookEvent{{Event: "PostToolUse", State: "working", Matcher: "Bash|Edit"}}}
+	for i := 0; i < 2; i++ {
+		if err := applyHooks(spec, home, exe, false); err != nil {
+			t.Fatal(err)
+		}
+	}
+	b, _ := os.ReadFile(filepath.Join(home, spec.file))
+	var root struct {
+		Hooks map[string][]map[string]any `json:"hooks"`
+	}
+	if err := json.Unmarshal(b, &root); err != nil {
+		t.Fatal(err)
+	}
+	list := root.Hooks["PostToolUse"]
+	if len(list) != 1 || list[0]["matcher"] != "Bash|Edit" {
+		t.Errorf("want one entry with its matcher, got %s", b)
+	}
+}
