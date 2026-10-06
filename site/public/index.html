@@ -630,7 +630,7 @@ header figcaption{max-width:720px}
       </div>
       <div class="deck" id="deck">
         <div class="catcher" id="catcher">
-          <div class="bar"><span class="dots"><i></i><i></i><i></i></span><span class="url">live.reminal.app/?s=7f3a2c9e</span><span class="live">live</span></div>
+          <div class="bar"><span class="dots"><i></i><i></i><i></i></span><span class="url">live.reminal.app/?s=7F3A2C9E</span><span class="live">live</span></div>
         </div>
 
         <!-- Already on the remote desktop, so the arrivals join a populated
@@ -743,7 +743,7 @@ header figcaption{max-width:720px}
           <!-- 01 drive the apps -->
           <div class="ly" data-ly="0" role="img" aria-label="A browser showing a Mac's TextEdit window: a cursor types into it, launches Figma from the Apps menu and opens the whole desktop, a phone showing the same window drives it by touch, and the Figma window pops out of the tab into its own window">
             <div class="sx-br d-br">
-              <div class="sx-bar"><span class="dots"><i></i><i></i><i></i></span><span class="sx-url">live.reminal.app/?s=7f3a2c9e</span><span class="sx-chip d-apps">Apps</span><span class="sx-chip d-host">Host</span></div>
+              <div class="sx-bar"><span class="dots"><i></i><i></i><i></i></span><span class="sx-url">live.reminal.app/?s=7F3A2C9E</span><span class="sx-chip d-apps">Apps</span><span class="sx-chip d-host">Host</span></div>
             </div>
             <div class="d-desk">
               <div class="d-menubar"><b></b><i></i><i></i><i></i><span>Tue 14:22</span></div>
@@ -793,7 +793,7 @@ header figcaption{max-width:720px}
               <div class="sx-bar"><span class="dots"><i></i><i></i><i></i></span><span class="sx-url">zsh &middot; studio-mac</span></div>
               <div class="t-out">
                 <p class="t-l"><span class="g">~</span> reminal</p>
-                <p class="t-l">Session: <b>7f3a2c9e</b></p>
+                <p class="t-l">Session: <b>7F3A2C9E</b></p>
                 <p class="t-l">PIN:     <b>418902</b></p>
                 <p class="t-l d">Scan to join from your phone:</p>
                 <div class="t-l t-qr"><img src="/qr.svg" alt="" width="96" height="96"></div>
@@ -861,11 +861,11 @@ header figcaption{max-width:720px}
           <!-- 06 restart -->
           <div class="ly" data-ly="5" role="img" aria-label="A machine running three sessions, Claude Code in the middle of a refactor, restarts; when it is back, each session reappears at the same link, and Claude's terminal shows what was on screen, the line reminal restored this session after its machine restarted, the command that resumes its conversation, and Claude carrying on">
             <div class="m-card r-card"><p class="m-h"><b>studio-mac</b><span class="r-st">online</span></p>
-              <p class="m-s"><i class="on"></i>claude<em>7f3a2c9e</em></p>
-              <p class="m-s"><i class="on"></i>codex<em>b81d0e44</em></p>
-              <p class="m-s"><i class="on"></i>npm run dev<em>c40f9a17</em></p></div>
+              <p class="m-s"><i class="on"></i>claude<em>7F3A2C9E</em></p>
+              <p class="m-s"><i class="on"></i>codex<em>B8KD4E6H</em></p>
+              <p class="m-s"><i class="on"></i>npm run dev<em>C4XF9A7R</em></p></div>
             <div class="sx-win r-term">
-              <div class="sx-bar"><span class="dots"><i></i><i></i><i></i></span><span class="sx-url">live.reminal.app/?s=7f3a2c9e</span></div>
+              <div class="sx-bar"><span class="dots"><i></i><i></i><i></i></span><span class="sx-url">live.reminal.app/?s=7F3A2C9E</span></div>
               <pre class="r-out"></pre>
               <div class="r-dark"><span>studio-mac is restarting</span></div>
             </div>
@@ -1002,8 +1002,8 @@ header figcaption{max-width:720px}
       </div></div>
       <div class="step"><div class="step-in">
         <p class="body reveal" style="margin-top:14px">
-    <strong>Your agents come back too, on the same conversation.</strong> Claude Code, Codex,
-    Gemini, Qwen, Cursor, OpenCode and pi pick up where they left off, with the options they were
+    <strong>Your agents come back too, picking up their conversation.</strong> Claude Code, Codex,
+    Cursor, Qwen, Gemini, OpenCode and pi carry on where they left off, with the options they were
     started with. A session you ended yourself stays ended.
   </p>
       </div></div>
@@ -1818,7 +1818,7 @@ if (FEATURES.story) Storyline(document.getElementById("story"), ({ $, $$ }) => {
   // its restore banner, and the resume command typed at the new prompt.
   const R = { card: $(".r-card"), st: $(".r-st"), rows: $$(".r-card .m-s"), dots: $$(".r-card .m-s i"), out: $(".r-out"), dark: $(".r-dark"), same: $(".r-same") };
   const R_BEFORE = [["", "> refactor the token refresh to retry once"], ["g", "● Editing auth/refresh.ts"], ["d", "  retry once on a 401, then sign out"], ["g", "● Running the auth tests"]];
-  const R_AFTER = [["b", "── reminal restored this session after its machine restarted ──"], ["", "~/app $ claude --resume 3f9c2a7e"], ["g", "● Resuming: the auth tests were next"], ["g", "● Running the auth tests"], ["g", "✓ 14 passed"]];
+  const R_AFTER = [["b", "── reminal restored this session after its machine restarted ──"], ["", "~/app $ claude --resume 3f9c2a7e-41b0-4c8e-9d2a-6b1f0e5c7a93"], ["g", "● Resuming: the auth tests were next"], ["g", "● Running the auth tests"], ["g", "✓ 14 passed"]];
   const rLines = (lines, n) => lines.slice(0, Math.ceil(n)).map(([c, x], i) =>
     `<span class="${c}">${(i === Math.ceil(n) - 1 && n % 1 ? x.slice(0, Math.round(x.length * (n % 1))) : x).replace(/</g, "&lt;")}</span>`).join("\n");
   let rLast = "";
@@ -1828,7 +1828,10 @@ if (FEATURES.story) Storyline(document.getElementById("story"), ({ $, $$ }) => {
     R.st.textContent = t < .2 ? "online" : off ? "restarting" : "online · back";
     R.st.style.color = off ? "#e3b341" : "";
     R.rows.forEach((r, i) => { const back = span(t, .4 + i * .03, .44 + i * .03); r.style.opacity = String(t < .22 ? 1 : off ? .25 : .25 + .75 * back); });
-    R.dots.forEach(d => d.classList.toggle("on", !off));
+    // Only coding agents are resumed: the dev server's session comes back as
+    // a shell in its folder, not running.
+    R.dots.forEach((d, i) => d.classList.toggle("on", !off && !(i === 2 && t >= .4)));
+    R.rows[2].childNodes[1].nodeValue = t >= .4 ? "~/app" : "npm run dev";
     css(R.dark, { opacity: String(down * (1 - up)) });
     const before = rLines(R_BEFORE, Math.min(R_BEFORE.length, span(t, 0, .18) * R_BEFORE.length + .001));
     const after = t >= .46 ? rLines(R_AFTER, span(t, .46, .92) * R_AFTER.length) : "";
@@ -1882,7 +1885,7 @@ if (FEATURES.story) Storyline(document.getElementById("story"), ({ $, $$ }) => {
 if (FEATURES.liveTerminal) {
   const term = document.getElementById("term");
   const replay = document.getElementById("replay");
-  const SESSION = "7f3a2c9e", PIN = "418902", HOST = "https://live.reminal.app";
+  const SESSION = "7F3A2C9E", PIN = "418902", HOST = "https://live.reminal.app";
   // Written by build.sh from the latest git tag. The literal below is only a
   // fallback for a stale or failed fetch, never the source of truth.
   let VERSION = "3.0.6";
