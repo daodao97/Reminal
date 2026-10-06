@@ -62,6 +62,8 @@ func (a *Agent) saveRestore() {
 	if a == nil || a.term == nil || a.paused.Load() || a.sessionID == "" {
 		return
 	}
+	a.restoreMu.Lock()
+	defer a.restoreMu.Unlock()
 	a.metaMu.Lock()
 	name, cwd := a.name, a.cwd
 	a.metaMu.Unlock()

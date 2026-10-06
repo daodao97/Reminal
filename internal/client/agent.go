@@ -123,13 +123,16 @@ type Agent struct {
 	restoring bool
 	// restoreAgentSeen: since this restore, the agent has been seen running
 	// again — so a prompt now means it was quit, not that it is still coming
-	// back. Touched only by saveRestore, on the restore loop's goroutine.
+	// back. Touched only by saveRestore, under restoreMu.
 	restoreAgentSeen bool
 	restoreRun       string
 	restoreNote      string
 	restorePlan      func() (run, note string)
 	restoreSeq       uint64
 	stopSignal       atomic.Bool
+	// restoreMu makes saveRestore one at a time, so two saves can never
+	// interleave their reads and writes of the restore state.
+	restoreMu sync.Mutex
 
 	// screen is a headless terminal emulator fed the same plaintext output
 	// that goes to viewers. On a fresh attach we serialize its current state
